@@ -1,0 +1,31 @@
+{
+  "name": "mealkhata",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A private meal and shared-bill tracker for three roommates.",
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "dev": "concurrently --kill-others-on-fail --names frontend,backend --prefix-colors cyan,green \"npm run dev --workspace frontend\" \"npm run dev --workspace backend\"",
+    "build": "npm run build --workspace frontend",
+    "start": "npm run start --workspace backend",
+    "lint": "eslint frontend/src frontend/test frontend/vite.config.js backend/src backend/scripts backend/test eslint.config.js",
+    "test": "npm run test --workspaces --if-present",
+    "hash-password": "npm run hash-password --workspace backend",
+    "verify-production-build": "npm run verify-production-build --workspace backend"
+  },
+  "engines": {
+    "node": ">=24.19.0 <25"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "concurrently": "^10.0.5",
+    "eslint": "^10.10.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.6",
+    "globals": "^17.12.0"
+  }
+}
