@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { ROLES } from '../src/auth/permissions.js';
-import { validateEnvironment, env } from '../src/config/env.js';
+import { normalizeAppOrigin, validateEnvironment, env } from '../src/config/env.js';
 import { authorizeLogicalDate } from '../src/middleware/dateAuthorization.js';
 import { canEditDate, getLogicalDateInTimeZone, isValidLogicalDate } from '../src/utils/date.js';
 
@@ -82,6 +82,17 @@ describe('role date permissions', () => {
 });
 
 describe('environment validation', () => {
+  test('normalizes whitespace and one conventional trailing slash from APP_ORIGIN', () => {
+    assert.equal(
+      normalizeAppOrigin('  https://meal-khata.onrender.com/  '),
+      'https://meal-khata.onrender.com',
+    );
+    assert.equal(
+      normalizeAppOrigin('https://meal-khata.onrender.com/path/'),
+      'https://meal-khata.onrender.com/path',
+    );
+  });
+
   test('requires a sufficiently long JWT secret and distinct configured principals', () => {
     assert.throws(
       () => validateEnvironment({ ...env, authJwtSecret: 'too-short' }),

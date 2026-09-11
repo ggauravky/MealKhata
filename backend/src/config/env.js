@@ -3,6 +3,11 @@ import bcrypt from 'bcryptjs';
 
 const parsedPort = Number.parseInt(process.env.PORT ?? '5000', 10);
 
+export function normalizeAppOrigin(value) {
+  const trimmed = value?.trim() ?? '';
+  return trimmed.endsWith('/') ? trimmed.slice(0, -1) : trimmed;
+}
+
 export const env = Object.freeze({
   nodeEnv: process.env.NODE_ENV ?? 'development',
   port: Number.isNaN(parsedPort) ? 5000 : parsedPort,
@@ -13,7 +18,7 @@ export const env = Object.freeze({
   superAdminEmail: process.env.SUPERADMIN_EMAIL?.trim().toLowerCase() ?? '',
   superAdminPasswordHash: process.env.SUPERADMIN_PASSWORD_HASH?.trim() ?? '',
   authJwtSecret: process.env.AUTH_JWT_SECRET?.trim() ?? '',
-  appOrigin: process.env.APP_ORIGIN?.trim() ?? '',
+  appOrigin: normalizeAppOrigin(process.env.APP_ORIGIN),
 });
 
 const bcryptHashPattern = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
@@ -105,7 +110,7 @@ export function validateEnvironment(config = env) {
   }
 
   if (!isValidOrigin(config.appOrigin, config.nodeEnv === 'production')) {
-    throw new Error('APP_ORIGIN must be an exact HTTP origin, using HTTPS in production');
+    throw new Error('APP_ORIGIN must use HTTPS in production and be an exact origin with no path, query, or fragment');
   }
 
   if (!isValidTimeZone(config.appTimezone)) {
