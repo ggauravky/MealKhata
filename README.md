@@ -116,7 +116,7 @@ Use `NODE_ENV=production`, `APP_TIMEZONE=Asia/Kolkata`, and set `APP_ORIGIN` to 
 
 MealKhata deploys as one Node Web Service using [render.yaml](./render.yaml):
 
-- build: `npm ci && npm run build`
+- build: `npm ci --include=dev && npm run build`
 - start: `npm start`
 - health check: `/api/ready`
 
