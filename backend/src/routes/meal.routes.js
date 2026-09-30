@@ -8,6 +8,7 @@ import { authorizeMemberResource } from '../middleware/memberAuthorization.js';
 import { canEditDate, getLogicalDateInTimeZone, isValidLogicalDate } from '../utils/date.js';
 import { MEAL_STATUSES, MEAL_TYPES } from '../meals/meal.constants.js';
 import { mealService } from '../meals/meal.service.js';
+import { settlementService } from '../settlement/settlement.service.js';
 import { broadcastMealUpdated } from '../socket.js';
 
 function reject(res, message) {
@@ -91,6 +92,7 @@ function withPermissions(data, req, now, timezone) {
 
 export function createMealRouter({
   service = mealService,
+  settlements = settlementService,
   broadcast = broadcastMealUpdated,
   now = () => new Date(),
   timezone = env.appTimezone,
@@ -123,13 +125,22 @@ export function createMealRouter({
     validateMealChange,
     authorizeLogicalDate({ source: 'params', now, timeZone: timezone }),
     authorizeMemberResource({ source: 'mealChange', field: 'memberId' }),
-    async (req, res) => {
-      const result = await service.changeStatus({
-        date: req.logicalDate,
-        ...req.mealChange,
-        actorRole: req.auth.role,
-        actorMemberId: req.auth.role === ROLES.MEMBER ? req.auth.memberId : null,
-      });
+    async (req, res, next) => {
+      try {
+        const month = req.params.date.slice(0, 7);
+        if (settlements && (await settlements.isMonthClosed(month))) {
+          return res.status(409).json({
+            success: false,
+            message: 'This month is closed. Reopen the month before changing meals.',
+          });
+        }
+
+        const result = await service.changeStatus({
+          date: req.logicalDate,
+          ...req.mealChange,
+          actorRole: req.auth.role,
+          actorMemberId: req.auth.role === ROLES.MEMBER ? req.auth.memberId : null,
+        });
 
       if (result.changed) {
         broadcast({
@@ -142,11 +153,14 @@ export function createMealRouter({
         });
       }
 
-      return res.json({
-        success: true,
-        changed: result.changed,
-        data: withPermissions(result.data, req, now(), timezone),
-      });
+        return res.json({
+          success: true,
+          changed: result.changed,
+          data: withPermissions(result.data, req, now(), timezone),
+        });
+      } catch (error) {
+        next(error);
+      }
     },
   );
 

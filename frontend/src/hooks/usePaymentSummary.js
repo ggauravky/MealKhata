@@ -27,9 +27,13 @@ export function usePaymentSummary(month) {
     const handleMeal = (event) => event?.date?.slice(0, 7) === month && refresh();
     const handleRate = (event) => event?.month === month && refresh();
     const handleReconnect = () => refresh();
+    const handleSettlement = (event) => {
+      if (event?.month === month) refresh();
+    };
     socket.on('payment:updated', handlePayment);
     socket.on('meal:updated', handleMeal);
     socket.on('billing:rate-updated', handleRate);
+    socket.on('settlement:updated', handleSettlement);
     socket.io.on('reconnect', handleReconnect);
     window.addEventListener('mk:online-reconnected', handleReconnect);
     window.addEventListener('online', handleReconnect);
@@ -37,6 +41,7 @@ export function usePaymentSummary(month) {
       socket.off('payment:updated', handlePayment);
       socket.off('meal:updated', handleMeal);
       socket.off('billing:rate-updated', handleRate);
+      socket.off('settlement:updated', handleSettlement);
       socket.io.off('reconnect', handleReconnect);
       window.removeEventListener('mk:online-reconnected', handleReconnect);
       window.removeEventListener('online', handleReconnect);

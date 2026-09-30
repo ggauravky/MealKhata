@@ -66,3 +66,12 @@ export function broadcastReminderSettingsUpdated(payload) {
   activeSocketServer.emit('settings:reminders-updated', payload);
   return true;
 }
+
+export function broadcastSettlementUpdated(payload) {
+  if (!activeSocketServer) {
+    return false;
+  }
+
+  activeSocketServer.emit('settlement:updated', payload);
+  return true;
+}

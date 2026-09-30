@@ -200,32 +200,82 @@ Super Admin Reminder Settings (09:00 / 20:00 Asia/Kolkata)
 7. **Automatic Expired Subscription Cleanup**: Push provider responses of `410 Gone` or `404 Not Found` automatically deactivate the subscription record without manual admin intervention.
 8. **Account Switch Safety**: When another account logs into a previously subscribed device, the device status returns a neutral state indicating it belongs to another account without revealing the prior user's identity. Explicit re-registration safely reassigns the endpoint to the active member.
 
-### Generating VAPID Keys
+### Web Push Configuration (Optional)
 
-To generate a fresh pair of VAPID keys for your development or production environment:
+Web Push is strictly **OPTIONAL**. MealKhata itself does **NOT** require VAPID keys to run, start, log in, track meals, calculate bills, manage payments, close months, or export statements. In-app reminders and local browser notifications continue working normally without VAPID keys.
+
+- **All absent**: Background Web Push is disabled; MealKhata runs normally.
+- **All present**: Background Web Push is enabled.
+- **Partially configured**: Throws a configuration error to prevent deployment misconfigurations.
+
+To generate VAPID keys if you wish to enable background push reminders:
 
 ```bash
 npm run generate-vapid-keys
 ```
 
-This outputs a public key, private key, and subject. Add these to your environment configuration. **Never commit private VAPID keys or expose them in client-side code.**
-
-### Required Environment Variables
-
-Add the following to `backend/.env` (and Render Web Service environment settings):
+Add these to `backend/.env` (and Render Web Service environment settings):
 
 ```bash
+# Optional: only required for background Web Push reminders
 VAPID_PUBLIC_KEY=your-vapid-public-key
 VAPID_PRIVATE_KEY=your-vapid-private-key
-VAPID_SUBJECT=mailto:admin@example.com
+VAPID_SUBJECT=mailto:you@example.com
 ```
 
 ### Scheduled Reminder Runner & Deployment
 
-Background reminders require a scheduled trigger independent of the web process. In-process `setInterval` is strictly prohibited in production because web services restart, sleep when idle, or scale across instances.
+Background reminders require a scheduled trigger independent of the web process. In-process `setInterval` is strictly avoided in production.
 
 - **Command**: `npm run send-push-reminders`
 - **Recommended Schedule**: Every 5 minutes (`*/5 * * * *`)
 - **Timezone**: Evaluated dynamically using `APP_TIMEZONE` (`Asia/Kolkata`) against database settings.
 
-In [render.yaml](./render.yaml), a native Render Cron Job (`type: cron`) is configured alongside the web service with schedule `"*/5 * * * *"` and start command `npm run send-push-reminders`. If manual Render Cron setup is preferred, create a Cron Job pointing to the repository with schedule `*/5 * * * *` and command `npm run send-push-reminders`.
+Deployment ergonomics:
+- **Core MealKhata**: Deploy using [render.yaml](./render.yaml), which provisions the core Web Service only without requiring VAPID or background cron jobs.
+- **Optional Push Cron**: If background push is configured, provision the cron runner using [render.push.yaml](./render.push.yaml) with schedule `"*/5 * * * *"`.
+
+---
+
+## Monthly Settlement & Month Closing (Phase 10)
+
+MealKhata provides an authoritative accounting closure layer that freezes past months into immutable, auditable financial snapshots.
+
+### 1. Live vs. Closed Accounting
+- **Open Months**: Meal counts, rates, bills, and balances are calculated dynamically from `MealDay`, `MonthlyMealRate`, and the `Payment` ledger.
+- **Closed Months**: Super Admin explicitly closes a completed past month once all members are fully settled. The resulting **Settlement Snapshot** is permanently frozen and immutable. All reports, displays, and exports for closed months consume this frozen snapshot.
+
+### 2. Close Eligibility Rules
+A month can be closed only when:
+1. The month is a completed **past calendar month** in Asia/Kolkata (current and future months cannot be closed).
+2. Meal rates are configured for that month.
+3. Every member is **exactly settled**:
+   $$\text{billAmountPaise} = \text{paidAmountPaise} \implies \text{remaining} = 0 \text{ and } \text{overpaid} = 0$$
+4. Overpayments are blocked: any overpayment must be corrected via payment void before closing. Members with genuine zero bill and zero paid are considered settled.
+5. Only **Super Admin** has permission to close or reopen a month.
+
+### 3. Closed-Month Mutation Locks
+Once a month is closed, the backend rejects all mutations affecting that month with `409 Conflict`:
+- Meal edits (`PATCH /api/meals/:date` for dates in the closed month)
+- Meal rate updates (`PUT /api/billing/rates/:month`)
+- Payment preparation (`POST /api/payments/prepare`)
+- Payment recordings (`POST /api/payments`)
+- Payment voids (`POST /api/payments/:paymentId/void`)
+
+Operations for current and future months continue normally.
+
+### 4. Reopening & Historical Versioning
+If a historical error is discovered:
+1. Super Admin reopens the month via `POST /api/settlements/:month/reopen`, providing a required audit reason (e.g. *"Incorrect night meal entry on 18 Sep"*).
+2. The existing settlement record is preserved in history with status `reopened`.
+3. Meals, rates, and payments are unlocked for corrections.
+4. Once exact settlement is reached again, Super Admin re-closes the month.
+5. A new settlement sequence is generated (e.g. Settlement #2 Active), preserving Settlement #1 in the audit history.
+
+### 5. Downloadable Statement Exports
+Authenticated household users (Members, Admins, Super Admin) can download official settlement statements for any closed month:
+- **PDF Statement** (`GET /api/settlements/:month/statement.pdf`): Professional, server-rendered A4 document formatted with approved rates, person-wise meal counts, bills, payments, room totals, and a financial confirmation notice.
+- **CSV Export** (`GET /api/settlements/:month/statement.csv`): RFC-compliant comma-separated values with integer paise precision and properly escaped fields.
+
+Statement downloads are served with `Cache-Control: no-store` under `/api/`, bypassing PWA service-worker caching to ensure privacy and security.
+

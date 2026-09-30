@@ -11,7 +11,11 @@ function isDuplicateKeyError(error) {
   return error?.code === 11000;
 }
 
-export function createMealService({ repository = mealRepository, timezone = env.appTimezone } = {}) {
+export function createMealService({
+  repository = mealRepository,
+  settlements = null,
+  timezone = env.appTimezone,
+} = {}) {
   return Object.freeze({
     async getDay(date) {
       try {
@@ -32,6 +36,10 @@ export function createMealService({ repository = mealRepository, timezone = env.
     },
 
     async changeStatus({ date, mealType, memberId, status, actorRole, actorMemberId = null, changedAt = new Date() }) {
+      if (settlements && (await settlements.isMonthClosed(date.slice(0, 7)))) {
+        throw new HttpError(409, 'This month is closed. Reopen the month before changing meals.');
+      }
+
       const path = getMealPath(mealType, memberId);
 
       if (!path) {

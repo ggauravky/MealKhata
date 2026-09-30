@@ -6,3 +6,10 @@ export const MEMBERS = Object.freeze([
 
 export const MEMBER_IDS = Object.freeze(MEMBERS.map(({ id }) => id));
 
+export const MEMBER_NAMES = Object.freeze(
+  MEMBERS.reduce((acc, member) => {
+    acc[member.id] = member.name;
+    return acc;
+  }, {})
+);
+

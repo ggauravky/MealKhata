@@ -44,6 +44,7 @@ export function ReminderProvider({ children }) {
 
   // Web Push state
   const pushSupported = useMemo(() => isPushSupported(), []);
+  const [pushServerAvailable, setPushServerAvailable] = useState(true);
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushPreferences, setPushPreferences] = useState({ morning: true, night: true });
   const [belongsToAnotherAccount, setBelongsToAnotherAccount] = useState(false);
@@ -61,6 +62,26 @@ export function ReminderProvider({ children }) {
     const timer = window.setInterval(() => setClock(new Date()), 30_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  // Check if push is configured on server
+  useEffect(() => {
+    let cancelled = false;
+    async function checkServerPush() {
+      if (!pushSupported) return;
+      try {
+        const key = await fetchVapidPublicKey();
+        if (!cancelled && !key) {
+          setPushServerAvailable(false);
+        }
+      } catch {
+        // Leave as default
+      }
+    }
+    checkServerPush();
+    return () => {
+      cancelled = true;
+    };
+  }, [pushSupported]);
 
   // Sync push registration status with server when authenticated member changes
   useEffect(() => {
@@ -85,6 +106,11 @@ export function ReminderProvider({ children }) {
 
         const status = await fetchPushStatus(sub.endpoint);
         if (!cancelled) {
+          if (status?.enabled === false) {
+            setPushServerAvailable(false);
+            setPushEnabled(false);
+            return;
+          }
           if (status.registered) {
             setPushEnabled(true);
             setBelongsToAnotherAccount(false);
@@ -247,6 +273,7 @@ export function ReminderProvider({ children }) {
       activeReminder,
       permission,
       pushSupported,
+      pushServerAvailable,
       pushEnabled,
       pushPreferences,
       belongsToAnotherAccount,
@@ -266,6 +293,7 @@ export function ReminderProvider({ children }) {
       activeReminder,
       permission,
       pushSupported,
+      pushServerAvailable,
       pushEnabled,
       pushPreferences,
       belongsToAnotherAccount,

@@ -8,6 +8,7 @@ import { ErrorState } from '../components/ui/ErrorState.jsx';
 import { LoadingState } from '../components/ui/LoadingState.jsx';
 import { useCalendarMonth } from '../hooks/useCalendarMonth.js';
 import { useServerToday } from '../hooks/useServerToday.js';
+import { useSettlement } from '../hooks/useSettlement.js';
 import { formatLogicalDate } from '../lib/logicalDate.js';
 import { addLogicalMonths, formatLogicalMonth, getMondayFirstOffset } from '../lib/logicalMonth.js';
 
@@ -19,6 +20,8 @@ export function CalendarPage() {
   const [selectedDate, setSelectedDate] = useState('');
   const month = selectedMonth || serverToday.date.slice(0, 7);
   const calendar = useCalendarMonth(month);
+  const settlement = useSettlement(month);
+  const isMonthClosed = settlement.isClosed;
   const fallbackDate = calendar.data?.today.startsWith(month)
     ? calendar.data.today
     : calendar.data?.days[0]?.date;
@@ -123,8 +126,12 @@ export function CalendarPage() {
               <p>Selected date</p>
               <h2 id="selected-day-title">{formatLogicalDate(activeDay.date, { weekday: 'long', day: 'numeric', month: 'long' })}</h2>
             </div>
-            {activeDay.permissions.canEdit && (
-              <Link className="button button--quiet" to={`/admin?date=${activeDay.date}`}>Manage meals</Link>
+            {isMonthClosed ? (
+              <span className="settlement-status settlement-status--closed">Month closed</span>
+            ) : (
+              activeDay.permissions.canEdit && (
+                <Link className="button button--quiet" to={`/admin?date=${activeDay.date}`}>Manage meals</Link>
+              )
             )}
           </div>
           {!activeDay.saved && <p className="default-note">Using default schedule</p>}

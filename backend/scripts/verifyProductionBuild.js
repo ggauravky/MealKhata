@@ -13,7 +13,8 @@ const TEST_VAPID_PUBLIC = 'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QT9bP0T1gE-A4V
 const TEST_VAPID_PRIVATE = 'production-test-vapid-private-key-material-do-not-expose-32b';
 const TEST_VAPID_SUBJECT = 'mailto:admin@mealkhata.production';
 
-Object.assign(process.env, {
+// Common baseline production env
+const baseEnv = {
   NODE_ENV: 'production',
   PORT: '5000',
   MONGODB_URI: 'mongodb://127.0.0.1:27017/production-routing-test',
@@ -24,6 +25,11 @@ Object.assign(process.env, {
   SUPERADMIN_PASSWORD_HASH: await bcrypt.hash(testPassword, 12),
   AUTH_JWT_SECRET: 'routing-test-only-secret-material-with-more-than-forty-eight-bytes',
   APP_ORIGIN: 'https://meal-khata.example',
+};
+
+console.info('--- Running Production Verification: MODE B (VAPID Configured) ---');
+Object.assign(process.env, {
+  ...baseEnv,
   VAPID_PUBLIC_KEY: TEST_VAPID_PUBLIC,
   VAPID_PRIVATE_KEY: TEST_VAPID_PRIVATE,
   VAPID_SUBJECT: TEST_VAPID_SUBJECT,
@@ -64,26 +70,38 @@ await request(app)
   .set('Origin', 'https://foreign.example')
   .expect(403);
 
-// Phase 9: Push endpoints boundary and VAPID checks
+// Push endpoint with VAPID configured
 const pushPublicKeyRes = await request(app).get('/api/push/public-key').expect(200);
 assert.equal(pushPublicKeyRes.body.success, true);
+assert.equal(pushPublicKeyRes.body.enabled, true);
 assert.equal(pushPublicKeyRes.body.publicKey, TEST_VAPID_PUBLIC);
 assert.ok(!JSON.stringify(pushPublicKeyRes.body).includes(TEST_VAPID_PRIVATE), 'private key must never be exposed');
 
-// Push registration must reject unauthenticated requests
+// Push registration authorization checks
 await request(app)
   .post('/api/push/subscriptions')
   .set('Origin', process.env.APP_ORIGIN)
   .send({ subscription: { endpoint: 'https://push.example' } })
   .expect(401);
 
-// Push registration must reject Admin requests (members only)
 await request(app)
   .post('/api/push/subscriptions')
   .set('Origin', process.env.APP_ORIGIN)
   .set('Cookie', cookie)
   .send({ subscription: { endpoint: 'https://push.example' } })
   .expect(403);
+
+// Phase 10: Settlement endpoint validation & authentication verification
+// Malformed settlement month check
+await request(app).get('/api/settlements/invalid-month').expect(400);
+
+// Unauthenticated/unauthorized calls to superadmin close/reopen return 403
+await request(app).post('/api/settlements/2026-09/close').expect(403);
+await request(app).post('/api/settlements/2026-09/reopen').expect(403);
+
+// Statement downloads require authenticated session (returns 401 for viewer)
+await request(app).get('/api/settlements/2026-09/statement.pdf').expect(401);
+await request(app).get('/api/settlements/2026-09/statement.csv').expect(401);
 
 const html = await fs.readFile(frontendIndex, 'utf8');
 const assetPath = html.match(/\/assets\/[^"]+\.js/)?.[0];
@@ -106,4 +124,27 @@ assert.ok(sw.text.includes("self.addEventListener('notificationclick'"), 'servic
 const icon = await request(app).get('/icons/icon-192.png').expect(200);
 assert.match(icon.headers['content-type'], /image\/png/);
 
-console.info('Production routing, security, PWA assets, and Web Push verification passed.');
+console.info('MODE B verification passed.');
+
+// MODE A: No VAPID Variables
+console.info('--- Running Production Verification: MODE A (No VAPID Configured) ---');
+const { createPushRouter } = await import('../src/routes/push.routes.js');
+const unconfiguredPushRouter = createPushRouter({ isConfigured: false, publicKey: null });
+const appModeA = createApp({ push: unconfiguredPushRouter });
+
+const modeAPushRes = await request(appModeA).get('/api/push/public-key').expect(200);
+assert.equal(modeAPushRes.body.success, true);
+assert.equal(modeAPushRes.body.enabled, false);
+assert.equal(modeAPushRes.body.publicKey, null);
+
+// Core features in MODE A continue normally
+const modeALogin = await request(appModeA)
+  .post('/api/auth/login')
+  .set('Origin', process.env.APP_ORIGIN)
+  .send({ email: process.env.ADMIN_EMAIL, password: testPassword });
+assert.equal(modeALogin.status, 200);
+
+await request(appModeA).get('/api/settlements/invalid-month').expect(400);
+
+console.info('MODE A verification passed.');
+console.info('All production build checks, security boundaries, statements, and dual-mode push verification passed.');

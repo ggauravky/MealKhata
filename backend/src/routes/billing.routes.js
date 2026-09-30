@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { monthlyRateService } from '../billing/monthlyRate.service.js';
 import { isValidPricePaise } from '../billing/monthlyRate.constants.js';
 import { requireSuperAdmin } from '../middleware/authorize.js';
+import { settlementService } from '../settlement/settlement.service.js';
 import { broadcastBillingRateUpdated } from '../socket.js';
 import { isValidLogicalMonth } from '../utils/month.js';
 
@@ -41,6 +42,7 @@ function validateRateInput(req, res, next) {
 
 export function createBillingRouter({
   service = monthlyRateService,
+  settlements = settlementService,
   broadcast = broadcastBillingRateUpdated,
 } = {}) {
   const router = Router();
@@ -54,12 +56,20 @@ export function createBillingRouter({
     requireSuperAdmin,
     validateMonth,
     validateRateInput,
-    async (req, res) => {
-      const result = await service.updateRate({
-        month: req.params.month,
-        ...req.rateInput,
-        actorRole: req.auth.role,
-      });
+    async (req, res, next) => {
+      try {
+        if (settlements && (await settlements.isMonthClosed(req.params.month))) {
+          return res.status(409).json({
+            success: false,
+            message: 'This month is closed. Reopen the month before changing rates.',
+          });
+        }
+
+        const result = await service.updateRate({
+          month: req.params.month,
+          ...req.rateInput,
+          actorRole: req.auth.role,
+        });
 
       if (result.changed) {
         broadcast({
@@ -71,7 +81,10 @@ export function createBillingRouter({
         });
       }
 
-      res.json({ success: true, changed: result.changed, data: result.data });
+        res.json({ success: true, changed: result.changed, data: result.data });
+      } catch (error) {
+        next(error);
+      }
     },
   );
 

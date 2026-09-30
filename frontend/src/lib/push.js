@@ -49,8 +49,15 @@ export async function unsubscribeDeviceFromPush() {
 }
 
 export async function fetchVapidPublicKey() {
-  const response = await api.get('/api/push/public-key');
-  return response.data?.publicKey || null;
+  try {
+    const response = await api.get('/api/push/public-key');
+    if (response.enabled === false || response.data?.enabled === false) {
+      return null;
+    }
+    return response.publicKey || response.data?.publicKey || null;
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchPushStatus(endpoint) {

@@ -2,10 +2,12 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
 import { PageHeader } from '../components/common/PageHeader.jsx';
 import { ReportSummary } from '../components/reports/ReportSummary.jsx';
+import { SettlementPanel } from '../components/reports/SettlementPanel.jsx';
 import { ErrorState } from '../components/ui/ErrorState.jsx';
 import { LoadingState } from '../components/ui/LoadingState.jsx';
 import { useAuth } from '../hooks/useAuth.js';
 import { useMonthlyReport } from '../hooks/useMonthlyReport.js';
+import { useSettlement } from '../hooks/useSettlement.js';
 import { useServerToday } from '../hooks/useServerToday.js';
 import { api } from '../lib/api.js';
 import { formatLogicalDate } from '../lib/logicalDate.js';
@@ -27,6 +29,7 @@ export function ReportsPage() {
   const [rateMessage, setRateMessage] = useState('');
   const month = selectedMonth || serverToday.date.slice(0, 7);
   const report = useMonthlyReport(month);
+  const settlement = useSettlement(month);
 
   const moveMonth = (amount) => {
     if (month) {
@@ -116,25 +119,72 @@ export function ReportsPage() {
               </div>
             </div>
 
-            {auth.role === 'superadmin' && (
-              <form className="rate-form" key={`${month}-${data.rates.revision}`} onSubmit={handleRateSubmit}>
-                <label>
-                  <span>Morning meal price (₹)</span>
-                  <input name="morningPrice" inputMode="decimal" defaultValue={paiseToRupeeInput(data.rates.morningPricePaise)} placeholder="50" required />
-                </label>
-                <label>
-                  <span>Night meal price (₹)</span>
-                  <input name="nightPrice" inputMode="decimal" defaultValue={paiseToRupeeInput(data.rates.nightPricePaise)} placeholder="60" required />
-                </label>
-                <button className="button button--primary" type="submit" disabled={savingRates}>{savingRates ? 'Saving' : 'Save rates'}</button>
-              </form>
+            {settlement.isClosed ? (
+              <p className="card-note">This month is closed. Reopen the month before changing meal rates.</p>
+            ) : (
+              auth.role === 'superadmin' && (
+                <form className="rate-form" key={`${month}-${data.rates.revision}`} onSubmit={handleRateSubmit}>
+                  <label>
+                    <span>Morning meal price (₹)</span>
+                    <input name="morningPrice" inputMode="decimal" defaultValue={paiseToRupeeInput(data.rates.morningPricePaise)} placeholder="50" required />
+                  </label>
+                  <label>
+                    <span>Night meal price (₹)</span>
+                    <input name="nightPrice" inputMode="decimal" defaultValue={paiseToRupeeInput(data.rates.nightPricePaise)} placeholder="60" required />
+                  </label>
+                  <button className="button button--primary" type="submit" disabled={savingRates}>{savingRates ? 'Saving' : 'Save rates'}</button>
+                </form>
+              )
             )}
             {rateError && <ErrorState compact title="Rates not saved" message={rateError} />}
             <p className="save-feedback" role="status" aria-live="polite">{rateMessage}</p>
           </section>
 
           {data.periodType === 'past' && (
-            <ReportSummary title={`${monthLabel} total`} description="Completed calendar month" summary={data.toDate} />
+            <SettlementPanel
+              month={month}
+              settlement={settlement}
+              role={auth.role}
+              onCloseMonth={async () => {
+                await settlement.closeMonth();
+                report.refresh();
+              }}
+              onReopenMonth={async (reason) => {
+                await settlement.reopenMonth(reason);
+                report.refresh();
+              }}
+            />
+          )}
+
+          {data.periodType === 'past' && (
+            <ReportSummary
+              title={`${monthLabel} total`}
+              description={settlement.isClosed ? 'Frozen accounting statement' : 'Completed calendar month'}
+              summary={
+                settlement.isClosed && settlement.status?.activeSettlement
+                  ? {
+                      members: Object.fromEntries(
+                        Object.entries(settlement.status.activeSettlement.snapshot.members).map(([id, m]) => [
+                          id,
+                          {
+                            morningCount: m.morningCount,
+                            nightCount: m.nightCount,
+                            totalMeals: m.totalPlates,
+                            amountPaise: m.billAmountPaise,
+                          },
+                        ]),
+                      ),
+                      room: {
+                        morningCount: settlement.status.activeSettlement.snapshot.room.morningCount,
+                        nightCount: settlement.status.activeSettlement.snapshot.room.nightCount,
+                        totalMeals: settlement.status.activeSettlement.snapshot.room.totalPlates,
+                        amountPaise: settlement.status.activeSettlement.snapshot.room.billAmountPaise,
+                      },
+                    }
+                  : data.toDate
+              }
+              isClosed={settlement.isClosed}
+            />
           )}
           {data.periodType === 'current' && (
             <>

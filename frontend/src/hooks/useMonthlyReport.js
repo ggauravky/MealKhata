@@ -43,14 +43,21 @@ export function useMonthlyReport(month) {
         refresh();
       }
     };
+    const handleSettlementUpdate = (event) => {
+      if (event?.month === month) {
+        refresh();
+      }
+    };
     const handleReconnect = () => refresh();
 
     socket.on('meal:updated', handleMealUpdate);
     socket.on('billing:rate-updated', handleRateUpdate);
+    socket.on('settlement:updated', handleSettlementUpdate);
     socket.io.on('reconnect', handleReconnect);
     return () => {
       socket.off('meal:updated', handleMealUpdate);
       socket.off('billing:rate-updated', handleRateUpdate);
+      socket.off('settlement:updated', handleSettlementUpdate);
       socket.io.off('reconnect', handleReconnect);
     };
   }, [month, refresh]);

@@ -28,6 +28,18 @@ export function BrowserReminderControl() {
     );
   }
 
+  // Deployment without VAPID configuration
+  if (reminders.pushServerAvailable === false) {
+    return (
+      <section className="browser-reminder-control" aria-labelledby="browser-reminders-title">
+        <div className="browser-reminder-control__info">
+          <strong id="browser-reminders-title">Background reminders on this device</strong>
+          <span>Background push reminders are not configured on this deployment. In-app reminders still work normally.</span>
+        </div>
+      </section>
+    );
+  }
+
   const renderFeedbackMessage = () => {
     if (!isOnline) {
       return 'Connect to the internet to change background reminder settings.';

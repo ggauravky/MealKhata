@@ -12,6 +12,7 @@ import { usePaymentHistory } from '../hooks/usePaymentHistory.js';
 import { usePaymentSummary } from '../hooks/usePaymentSummary.js';
 import { usePwa } from '../hooks/usePwa.js';
 import { useServerToday } from '../hooks/useServerToday.js';
+import { useSettlement } from '../hooks/useSettlement.js';
 import { ROOMMATES } from '../lib/constants.js';
 import { addLogicalMonths, formatLogicalMonth } from '../lib/logicalMonth.js';
 import { formatPaise } from '../lib/money.js';
@@ -25,7 +26,7 @@ function formatPaymentTime(value) {
   }).format(new Date(value));
 }
 
-function MemberPaymentCard({ roommate, member, periodType, role, currentMemberId, isOnline = true, onPay }) {
+function MemberPaymentCard({ roommate, member, periodType, role, currentMemberId, isOnline = true, isClosed = false, onPay }) {
   const canPay = canInitiatePayment({ role, member, currentMemberId });
   const billLabel = member.billAmountPaise === null ? PAYMENT_STATUS_LABELS[member.status] : formatPaise(member.billAmountPaise);
 
@@ -46,16 +47,27 @@ function MemberPaymentCard({ roommate, member, periodType, role, currentMemberId
       )}
       {canPay && (
         <button
-          className="button button--primary button--full"
+          className={`button ${isClosed ? 'button--secondary' : 'button--primary'} button--full`}
           type="button"
-          disabled={!isOnline}
-          title={!isOnline ? 'Payments are unavailable while offline' : undefined}
-          onClick={() => isOnline && onPay({ ...roommate, ...member })}
+          disabled={!isOnline || isClosed}
+          title={
+            isClosed
+              ? 'Reopen this month before making financial changes.'
+              : !isOnline
+                ? 'Payments are unavailable while offline'
+                : undefined
+          }
+          onClick={() => isOnline && !isClosed && onPay({ ...roommate, ...member })}
         >
-          {isOnline ? `Pay ${formatPaise(member.remainingAmountPaise)}` : 'Offline — Payment unavailable'}
+          {isClosed
+            ? 'Month closed'
+            : isOnline
+              ? `Pay ${formatPaise(member.remainingAmountPaise)}`
+              : 'Offline — Payment unavailable'}
         </button>
       )}
-      {member.status === 'rates_missing' && <p className="card-note">Payment unavailable until this month&apos;s meal rates are configured.</p>}
+      {isClosed && <p className="card-note">This month is closed. Reopen this month before making financial changes.</p>}
+      {!isClosed && member.status === 'rates_missing' && <p className="card-note">Payment unavailable until this month&apos;s meal rates are configured.</p>}
       {periodType === 'future' && <p className="card-note">Projected bill: {formatPaise(member.projectedBillAmountPaise)}</p>}
     </article>
   );
@@ -72,6 +84,8 @@ export function PaymentsPage() {
   const month = selectedMonth || serverToday.date.slice(0, 7);
   const summary = usePaymentSummary(month);
   const history = usePaymentHistory(month);
+  const settlement = useSettlement(month);
+  const isClosed = settlement.isClosed;
   const data = summary.data;
 
   const refreshPayments = () => { summary.refresh(); history.refresh(); };
@@ -122,6 +136,13 @@ export function PaymentsPage() {
             </div>
           </section>
 
+          {isClosed && (
+            <div className="panel settlement-banner" role="status">
+              <strong>{formatLogicalMonth(month)} is closed.</strong>
+              <p>All meal records, bills, and payments are frozen. Reopen this month before making financial changes.</p>
+            </div>
+          )}
+
           <section className="payment-member-grid" aria-label={`Member payment status for ${formatLogicalMonth(month)}`}>
             {ROOMMATES.map((roommate) => (
               <MemberPaymentCard
@@ -132,6 +153,7 @@ export function PaymentsPage() {
                 role={auth.role}
                 currentMemberId={auth.memberId}
                 isOnline={isOnline}
+                isClosed={isClosed}
                 onPay={setPayingMember}
               />
             ))}
@@ -168,9 +190,15 @@ export function PaymentsPage() {
                       <button
                         className="text-button text-button--danger"
                         type="button"
-                        disabled={!isOnline}
-                        title={!isOnline ? 'Voiding payments is unavailable while offline' : undefined}
-                        onClick={() => isOnline && setVoidingPayment(payment)}
+                        disabled={!isOnline || isClosed}
+                        title={
+                          isClosed
+                            ? 'This month is closed. Reopen the month before voiding payments.'
+                            : !isOnline
+                              ? 'Voiding payments is unavailable while offline'
+                              : undefined
+                        }
+                        onClick={() => isOnline && !isClosed && setVoidingPayment(payment)}
                       >
                         Void payment
                       </button>

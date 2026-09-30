@@ -12,9 +12,11 @@ import { useAuth } from '../hooks/useAuth.js';
 import { useMealDay } from '../hooks/useMealDay.js';
 import { useMealHistory } from '../hooks/useMealHistory.js';
 import { usePwa } from '../hooks/usePwa.js';
+import { useSettlement } from '../hooks/useSettlement.js';
 import { api } from '../lib/api.js';
 import { getRoleLabel } from '../lib/constants.js';
 import { addLogicalDays, formatIndiaTime, formatLogicalDate, isValidLogicalDate } from '../lib/logicalDate.js';
+import { formatLogicalMonth } from '../lib/logicalMonth.js';
 
 export function AdminPage() {
   const auth = useAuth();
@@ -29,6 +31,9 @@ export function AdminPage() {
   const [saveError, setSaveError] = useState('');
   const mealDay = useMealDay(requestedDate);
   const displayedDate = mealDay.data?.date ?? '';
+  const month = displayedDate ? displayedDate.slice(0, 7) : '';
+  const settlement = useSettlement(month);
+  const isMonthClosed = settlement.isClosed;
   const history = useMealHistory(displayedDate);
 
   const moveDate = (amount) => {
@@ -38,6 +43,11 @@ export function AdminPage() {
   };
 
   const handleMealChange = async (mealType, memberId, status) => {
+    if (isMonthClosed) {
+      setSaveError('This month is closed. Reopen the month before editing meals.');
+      return;
+    }
+
     if (!isOnline) {
       setSaveError("You're offline. Meal changes cannot be saved until you reconnect.");
       return;
@@ -113,12 +123,19 @@ export function AdminPage() {
           {saveError && <ErrorState compact title="Change not saved" message={saveError} />}
           <p className="save-feedback" role="status" aria-live="polite">{saveMessage}</p>
 
+          {isMonthClosed && (
+            <div className="panel settlement-banner" role="status">
+              <strong>{formatLogicalMonth(month)} is closed.</strong>
+              <p>Reopen the month before editing historical meals.</p>
+            </div>
+          )}
+
           <section className="meal-card-grid" aria-label={`Meal editor for ${displayedDate}`}>
             <MealCard
               mealType="morning"
               title="Morning"
               meals={mealDay.data.meals.morning}
-              editable={Boolean(mealDay.data.permissions.canEdit) && isOnline}
+              editable={Boolean(mealDay.data.permissions.canEdit) && isOnline && !isMonthClosed}
               editableMemberIds={mealDay.data.permissions?.editableMemberIds}
               pendingRow={pendingRow}
               onChange={handleMealChange}
@@ -127,7 +144,7 @@ export function AdminPage() {
               mealType="night"
               title="Night"
               meals={mealDay.data.meals.night}
-              editable={Boolean(mealDay.data.permissions.canEdit) && isOnline}
+              editable={Boolean(mealDay.data.permissions.canEdit) && isOnline && !isMonthClosed}
               editableMemberIds={mealDay.data.permissions?.editableMemberIds}
               pendingRow={pendingRow}
               onChange={handleMealChange}

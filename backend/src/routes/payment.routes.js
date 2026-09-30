@@ -13,6 +13,7 @@ import {
   paymentService,
 } from '../payments/payment.service.js';
 import { paymentSummaryService } from '../payments/paymentSummary.service.js';
+import { settlementService } from '../settlement/settlement.service.js';
 import { broadcastPaymentUpdated } from '../socket.js';
 import { isValidLogicalMonth } from '../utils/month.js';
 
@@ -64,6 +65,7 @@ function validatePrepareInput(req, res, next) {
 export function createPaymentRouter({
   service = paymentService,
   summaries = paymentSummaryService,
+  settlements = settlementService,
   broadcast = broadcastPaymentUpdated,
 } = {}) {
   const router = Router();
@@ -82,8 +84,20 @@ export function createPaymentRouter({
     requireAuthenticated,
     validatePrepareInput,
     authorizeMemberResource({ source: 'paymentInput', field: 'memberId' }),
-    async (req, res) => {
-      res.json({ success: true, data: await service.preparePayment(req.paymentInput) });
+    async (req, res, next) => {
+      try {
+        if (settlements && (await settlements.isMonthClosed(req.paymentInput.month))) {
+          return res.status(409).json({
+            success: false,
+            message: 'This month is closed. Reopen the month before making financial changes.',
+          });
+        }
+
+        const data = await service.preparePayment(req.paymentInput);
+        res.json({ success: true, data });
+      } catch (error) {
+        next(error);
+      }
     },
   );
 
@@ -92,40 +106,63 @@ export function createPaymentRouter({
     requireAuthenticated,
     validatePaymentInput({ requireIdempotency: true }),
     authorizeMemberResource({ source: 'paymentInput', field: 'memberId' }),
-    async (req, res) => {
-      const result = await service.recordPayment({
-        ...req.paymentInput,
-        actorRole: req.auth.role,
-        actorMemberId: req.auth.role === ROLES.MEMBER ? req.auth.memberId : null,
-      });
-      if (result.created) {
+    async (req, res, next) => {
+      try {
+        if (settlements && (await settlements.isMonthClosed(req.paymentInput.month))) {
+          return res.status(409).json({
+            success: false,
+            message: 'This month is closed. Reopen the month before recording payments.',
+          });
+        }
+
+        const result = await service.recordPayment({
+          ...req.paymentInput,
+          actorRole: req.auth.role,
+          actorMemberId: req.auth.role === ROLES.MEMBER ? req.auth.memberId : null,
+        });
+        if (result.created) {
+          broadcast({
+            month: result.data.month,
+            memberId: result.data.memberId,
+            paymentId: result.data.paymentId,
+            action: 'recorded',
+            updatedAt: result.data.recordedAt,
+          });
+        }
+        res.status(result.created ? 201 : 200).json({ success: true, created: result.created, data: result.data });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.post('/:paymentId/void', requireSuperAdmin, async (req, res, next) => {
+    try {
+      const reason = normalizeVoidReason(req.body?.reason);
+      if (!reason) return res.status(400).json({ success: false, message: 'A short reason is required to void a payment.' });
+
+      const payment = await service.getPayment(req.params.paymentId);
+      if (payment && settlements && (await settlements.isMonthClosed(payment.month))) {
+        return res.status(409).json({
+          success: false,
+          message: 'This month is closed. Reopen the month before voiding payments.',
+        });
+      }
+
+      const result = await service.voidPayment({ paymentId: req.params.paymentId, reason, actorRole: req.auth.role });
+      if (result.changed) {
         broadcast({
           month: result.data.month,
           memberId: result.data.memberId,
           paymentId: result.data.paymentId,
-          action: 'recorded',
-          updatedAt: result.data.recordedAt,
+          action: 'voided',
+          updatedAt: result.data.voidedAt,
         });
       }
-      res.status(result.created ? 201 : 200).json({ success: true, created: result.created, data: result.data });
-    },
-  );
-
-  router.post('/:paymentId/void', requireSuperAdmin, async (req, res) => {
-    const reason = normalizeVoidReason(req.body?.reason);
-    if (!reason) return res.status(400).json({ success: false, message: 'A short reason is required to void a payment.' });
-
-    const result = await service.voidPayment({ paymentId: req.params.paymentId, reason, actorRole: req.auth.role });
-    if (result.changed) {
-      broadcast({
-        month: result.data.month,
-        memberId: result.data.memberId,
-        paymentId: result.data.paymentId,
-        action: 'voided',
-        updatedAt: result.data.voidedAt,
-      });
+      res.json({ success: true, changed: result.changed, data: result.data });
+    } catch (error) {
+      next(error);
     }
-    res.json({ success: true, changed: result.changed, data: result.data });
   });
 
   return router;

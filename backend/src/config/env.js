@@ -21,7 +21,7 @@ export const env = Object.freeze({
   appOrigin: normalizeAppOrigin(process.env.APP_ORIGIN),
   vapidPublicKey: process.env.VAPID_PUBLIC_KEY?.trim() ?? '',
   vapidPrivateKey: process.env.VAPID_PRIVATE_KEY?.trim() ?? '',
-  vapidSubject: process.env.VAPID_SUBJECT?.trim() || 'mailto:admin@mealkhata.local',
+  vapidSubject: process.env.VAPID_SUBJECT?.trim() ?? '',
 });
 
 const bcryptHashPattern = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
@@ -120,7 +120,6 @@ export function validateEnvironment(config = env) {
     throw new Error('APP_TIMEZONE must be a valid IANA timezone');
   }
 
-
   if (config.appTimezone !== 'Asia/Kolkata') {
     throw new Error('APP_TIMEZONE must remain Asia/Kolkata');
   }
@@ -129,19 +128,32 @@ export function validateEnvironment(config = env) {
     throw new Error('MONGODB_URI must use the mongodb or mongodb+srv scheme');
   }
 
-  if (config.nodeEnv === 'production' || config.vapidPublicKey || config.vapidPrivateKey) {
-    validateVapidConfiguration(config, { required: config.nodeEnv === 'production' });
-  }
+  validateVapidConfiguration(config, { required: false });
 }
 
 export function validateVapidConfiguration(config = env, { required = false } = {}) {
-  const hasAny = Boolean(config.vapidPublicKey || config.vapidPrivateKey);
-  if (!required && !hasAny) {
+  const hasPublic = Boolean(config.vapidPublicKey);
+  const hasPrivate = Boolean(config.vapidPrivateKey);
+  const hasSubject = Boolean(config.vapidSubject);
+
+  const hasAny = hasPublic || hasPrivate || hasSubject;
+  const hasAll = hasPublic && hasPrivate && hasSubject;
+
+  if (!hasAny) {
+    if (required) {
+      throw new Error('Background push is not configured. VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, and VAPID_SUBJECT are required.');
+    }
     return false;
   }
 
-  if (!config.vapidPublicKey || !config.vapidPrivateKey) {
-    throw new Error('Both VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY must be configured for Web Push');
+  if (!hasAll) {
+    const missing = [];
+    if (!hasPublic) missing.push('VAPID_PUBLIC_KEY');
+    if (!hasPrivate) missing.push('VAPID_PRIVATE_KEY');
+    if (!hasSubject) missing.push('VAPID_SUBJECT');
+    throw new Error(
+      `Partial VAPID configuration detected. Missing: ${missing.join(', ')}. All three variables must be configured together or all omitted.`,
+    );
   }
 
   if (
@@ -152,7 +164,7 @@ export function validateVapidConfiguration(config = env, { required = false } = 
   }
 
   const subject = config.vapidSubject;
-  if (!subject || (!subject.startsWith('mailto:') && !subject.startsWith('https://'))) {
+  if (!subject.startsWith('mailto:') && !subject.startsWith('https://')) {
     throw new Error('VAPID_SUBJECT must be a mailto: URL or HTTPS URL');
   }
 
@@ -175,3 +187,4 @@ export function validatePushRunnerEnvironment(config = env) {
 export const isProduction = env.nodeEnv === 'production';
 export const isDevelopment = env.nodeEnv === 'development';
 export const isTest = env.nodeEnv === 'test';
+export const isPushConfigured = validateVapidConfiguration(env, { required: false });

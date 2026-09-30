@@ -106,6 +106,7 @@ export function createPaymentService({
   reports = reportService,
   summaries = paymentSummaryService,
   settings = paymentSettingsService,
+  settlements = null,
   now = () => new Date(),
   uuid = randomUUID,
 } = {}) {
@@ -120,9 +121,18 @@ export function createPaymentService({
       }
     },
 
+    async getPayment(paymentId) {
+      return repository.findByPaymentId(paymentId);
+    },
+
     async preparePayment({ month, memberId }) {
       assertMonth(month);
       assertMember(memberId);
+
+      if (settlements && (await settlements.isMonthClosed(month))) {
+        throw new HttpError(409, 'This month is closed. Reopen the month before making financial changes.');
+      }
+
       const [summary, receiver] = await Promise.all([summaries.getSummary(month), settings.getSettings()]);
       assertSettings(receiver);
       const member = summary.members[memberId];
@@ -151,6 +161,10 @@ export function createPaymentService({
       assertMonth(month);
       assertMember(memberId);
       assertAmount(amountPaise);
+
+      if (settlements && (await settlements.isMonthClosed(month))) {
+        throw new HttpError(409, 'This month is closed. Reopen the month before recording payments.');
+      }
 
       try {
         const existing = await repository.findByIdempotencyKey(idempotencyKey);
@@ -213,6 +227,11 @@ export function createPaymentService({
       try {
         const current = await repository.findByPaymentId(paymentId);
         if (!current) throw new HttpError(404, 'Payment not found.');
+
+        if (settlements && (await settlements.isMonthClosed(current.month))) {
+          throw new HttpError(409, 'This month is closed. Reopen the month before voiding payments.');
+        }
+
         if (current.status === 'voided') {
           return { changed: false, data: serializePayment(current, { includeReference: true }) };
         }
