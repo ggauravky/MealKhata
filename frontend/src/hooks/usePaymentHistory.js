@@ -27,9 +27,13 @@ export function usePaymentHistory(month) {
     const handleReconnect = () => refresh();
     socket.on('payment:updated', handlePayment);
     socket.io.on('reconnect', handleReconnect);
+    window.addEventListener('mk:online-reconnected', handleReconnect);
+    window.addEventListener('online', handleReconnect);
     return () => {
       socket.off('payment:updated', handlePayment);
       socket.io.off('reconnect', handleReconnect);
+      window.removeEventListener('mk:online-reconnected', handleReconnect);
+      window.removeEventListener('online', handleReconnect);
     };
   }, [month, refresh]);
 

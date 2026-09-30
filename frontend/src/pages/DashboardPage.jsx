@@ -9,12 +9,14 @@ import { ErrorState } from '../components/ui/ErrorState.jsx';
 import { LoadingState } from '../components/ui/LoadingState.jsx';
 import { useAuth } from '../hooks/useAuth.js';
 import { useMealDay } from '../hooks/useMealDay.js';
+import { usePwa } from '../hooks/usePwa.js';
 import { api } from '../lib/api.js';
 import { formatLogicalDate } from '../lib/logicalDate.js';
 
 export function DashboardPage() {
   const auth = useAuth();
   const mealDay = useMealDay('today');
+  const { isOnline } = usePwa();
   const [pendingRow, setPendingRow] = useState('');
   const [saveMessage, setSaveMessage] = useState('');
   const [saveError, setSaveError] = useState('');
@@ -30,6 +32,11 @@ export function DashboardPage() {
   }, [auth.role, auth.displayName]);
 
   const handleMealChange = async (mealType, memberId, status) => {
+    if (!isOnline) {
+      setSaveError("You're offline. Meal changes cannot be saved until you reconnect.");
+      return;
+    }
+
     const rowId = `${mealType}:${memberId}`;
     const currentStatus = mealDay.data?.meals?.[mealType]?.[memberId];
 
@@ -78,7 +85,11 @@ export function DashboardPage() {
       {mealDay.error && (
         <ErrorState
           title="Meals unavailable"
-          message={mealDay.error}
+          message={
+            !isOnline
+              ? "Meal data is unavailable while offline. Connect to the internet to load today's meals."
+              : mealDay.error
+          }
           actionLabel="Try again"
           onAction={mealDay.refresh}
         />
@@ -94,7 +105,7 @@ export function DashboardPage() {
               mealType="morning"
               title="Morning"
               meals={mealDay.data.meals.morning}
-              editable={Boolean(mealDay.data.permissions?.canEdit)}
+              editable={Boolean(mealDay.data.permissions?.canEdit) && isOnline}
               editableMemberIds={mealDay.data.permissions?.editableMemberIds}
               pendingRow={pendingRow}
               onChange={handleMealChange}
@@ -103,7 +114,7 @@ export function DashboardPage() {
               mealType="night"
               title="Night"
               meals={mealDay.data.meals.night}
-              editable={Boolean(mealDay.data.permissions?.canEdit)}
+              editable={Boolean(mealDay.data.permissions?.canEdit) && isOnline}
               editableMemberIds={mealDay.data.permissions?.editableMemberIds}
               pendingRow={pendingRow}
               onChange={handleMealChange}

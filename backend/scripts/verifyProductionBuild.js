@@ -64,4 +64,15 @@ const asset = await request(app).get(assetPath).expect(200);
 assert.match(asset.headers['cache-control'], /max-age=31536000/);
 assert.match(asset.headers['cache-control'], /immutable/);
 
-console.info('Production routing and security smoke passed.');
+const manifest = await request(app).get('/manifest.webmanifest').expect(200);
+assert.match(manifest.headers['content-type'], /manifest\+json/);
+
+const sw = await request(app).get('/sw.js').expect(200);
+assert.match(sw.headers['content-type'], /javascript/);
+assert.match(sw.headers['cache-control'], /no-cache/);
+assert.ok(!sw.text.includes('AUTH_JWT_SECRET'), 'service worker must not contain secrets');
+
+const icon = await request(app).get('/icons/icon-192.png').expect(200);
+assert.match(icon.headers['content-type'], /image\/png/);
+
+console.info('Production routing, security, and PWA assets smoke passed.');

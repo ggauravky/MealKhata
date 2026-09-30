@@ -10,6 +10,7 @@ import { LoadingState } from '../components/ui/LoadingState.jsx';
 import { useAuth } from '../hooks/useAuth.js';
 import { usePaymentHistory } from '../hooks/usePaymentHistory.js';
 import { usePaymentSummary } from '../hooks/usePaymentSummary.js';
+import { usePwa } from '../hooks/usePwa.js';
 import { useServerToday } from '../hooks/useServerToday.js';
 import { ROOMMATES } from '../lib/constants.js';
 import { addLogicalMonths, formatLogicalMonth } from '../lib/logicalMonth.js';
@@ -24,7 +25,7 @@ function formatPaymentTime(value) {
   }).format(new Date(value));
 }
 
-function MemberPaymentCard({ roommate, member, periodType, role, currentMemberId, onPay }) {
+function MemberPaymentCard({ roommate, member, periodType, role, currentMemberId, isOnline = true, onPay }) {
   const canPay = canInitiatePayment({ role, member, currentMemberId });
   const billLabel = member.billAmountPaise === null ? PAYMENT_STATUS_LABELS[member.status] : formatPaise(member.billAmountPaise);
 
@@ -43,7 +44,17 @@ function MemberPaymentCard({ roommate, member, periodType, role, currentMemberId
       {periodType === 'current' && Number.isSafeInteger(member.projectedBillAmountPaise) && (
         <p className="projection-note">Projected month total: {formatPaise(member.projectedBillAmountPaise)} · not currently due</p>
       )}
-      {canPay && <button className="button button--primary button--full" type="button" onClick={() => onPay({ ...roommate, ...member })}>Pay {formatPaise(member.remainingAmountPaise)}</button>}
+      {canPay && (
+        <button
+          className="button button--primary button--full"
+          type="button"
+          disabled={!isOnline}
+          title={!isOnline ? 'Payments are unavailable while offline' : undefined}
+          onClick={() => isOnline && onPay({ ...roommate, ...member })}
+        >
+          {isOnline ? `Pay ${formatPaise(member.remainingAmountPaise)}` : 'Offline — Payment unavailable'}
+        </button>
+      )}
       {member.status === 'rates_missing' && <p className="card-note">Payment unavailable until this month&apos;s meal rates are configured.</p>}
       {periodType === 'future' && <p className="card-note">Projected bill: {formatPaise(member.projectedBillAmountPaise)}</p>}
     </article>
@@ -53,6 +64,7 @@ function MemberPaymentCard({ roommate, member, periodType, role, currentMemberId
 export function PaymentsPage() {
   const auth = useAuth();
   const serverToday = useServerToday();
+  const { isOnline } = usePwa();
   const [selectedMonth, setSelectedMonth] = useState('');
   const [payingMember, setPayingMember] = useState(null);
   const [voidingPayment, setVoidingPayment] = useState(null);
@@ -119,6 +131,7 @@ export function PaymentsPage() {
                 periodType={data.periodType}
                 role={auth.role}
                 currentMemberId={auth.memberId}
+                isOnline={isOnline}
                 onPay={setPayingMember}
               />
             ))}
@@ -132,7 +145,7 @@ export function PaymentsPage() {
           <div><h2 id="payment-history-title">Payment History</h2><p>Recorded and voided entries remain visible.</p></div>
         </div>
         {history.loading ? <LoadingState compact label="Loading payment history" /> : history.error ? (
-          <ErrorState compact title="History unavailable" message={history.error} actionLabel="Try again" onAction={history.refresh} />
+          <ErrorState compact title="History unavailable" message={!isOnline ? 'Payment history is unavailable while offline.' : history.error} actionLabel="Try again" onAction={history.refresh} />
         ) : history.items.length === 0 ? (
           <EmptyState title="No payment history" message={`No payments have been recorded for ${formatLogicalMonth(month)}.`} />
         ) : (
@@ -151,7 +164,17 @@ export function PaymentsPage() {
                   </div>
                   <div className="payment-history-list__amount">
                     <strong>{formatPaise(payment.amountPaise)}</strong>
-                    {auth.role === 'superadmin' && payment.status === 'recorded' && <button className="text-button text-button--danger" type="button" onClick={() => setVoidingPayment(payment)}>Void payment</button>}
+                    {auth.role === 'superadmin' && payment.status === 'recorded' && (
+                      <button
+                        className="text-button text-button--danger"
+                        type="button"
+                        disabled={!isOnline}
+                        title={!isOnline ? 'Voiding payments is unavailable while offline' : undefined}
+                        onClick={() => isOnline && setVoidingPayment(payment)}
+                      >
+                        Void payment
+                      </button>
+                    )}
                   </div>
                 </li>
               );

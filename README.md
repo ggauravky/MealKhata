@@ -156,10 +156,3 @@ MealKhata deploys as one Node Web Service using [render.yaml](./render.yaml):
 Configure a secured MongoDB Atlas user and an Atlas network-access rule that permits the Render service. Deploy only after local production startup and real MongoDB persistence have been verified.
 
 On Render's free Web Service plan, cold starts and spin-down can temporarily interrupt availability and live Socket.IO connections. Realtime resumes while the service is running, and reconnecting clients refetch authoritative state.
-
-## Structure
-
-```text
-frontend/   React application and production build
-backend/    Express API, MongoDB, and Socket.IO server
-```

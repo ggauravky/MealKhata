@@ -11,12 +11,14 @@ import { LoadingState } from '../components/ui/LoadingState.jsx';
 import { useAuth } from '../hooks/useAuth.js';
 import { useMealDay } from '../hooks/useMealDay.js';
 import { useMealHistory } from '../hooks/useMealHistory.js';
+import { usePwa } from '../hooks/usePwa.js';
 import { api } from '../lib/api.js';
 import { getRoleLabel } from '../lib/constants.js';
 import { addLogicalDays, formatIndiaTime, formatLogicalDate, isValidLogicalDate } from '../lib/logicalDate.js';
 
 export function AdminPage() {
   const auth = useAuth();
+  const { isOnline } = usePwa();
   const [searchParams] = useSearchParams();
   const [requestedDate, setRequestedDate] = useState(() => {
     const date = searchParams.get('date');
@@ -36,6 +38,11 @@ export function AdminPage() {
   };
 
   const handleMealChange = async (mealType, memberId, status) => {
+    if (!isOnline) {
+      setSaveError("You're offline. Meal changes cannot be saved until you reconnect.");
+      return;
+    }
+
     const rowId = `${mealType}:${memberId}`;
     const currentStatus = mealDay.data?.meals?.[mealType]?.[memberId];
 
@@ -111,7 +118,7 @@ export function AdminPage() {
               mealType="morning"
               title="Morning"
               meals={mealDay.data.meals.morning}
-              editable={mealDay.data.permissions.canEdit}
+              editable={Boolean(mealDay.data.permissions.canEdit) && isOnline}
               editableMemberIds={mealDay.data.permissions?.editableMemberIds}
               pendingRow={pendingRow}
               onChange={handleMealChange}
@@ -120,7 +127,7 @@ export function AdminPage() {
               mealType="night"
               title="Night"
               meals={mealDay.data.meals.night}
-              editable={mealDay.data.permissions.canEdit}
+              editable={Boolean(mealDay.data.permissions.canEdit) && isOnline}
               editableMemberIds={mealDay.data.permissions?.editableMemberIds}
               pendingRow={pendingRow}
               onChange={handleMealChange}

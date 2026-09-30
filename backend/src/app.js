@@ -124,7 +124,18 @@ export function createApp({
       index: false,
       maxAge: '1y',
     }));
-    app.use(express.static(frontendDistPath, { index: false, maxAge: 0 }));
+    app.use(express.static(frontendDistPath, {
+      index: false,
+      maxAge: 0,
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('sw.js')) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+          res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+        } else if (filePath.endsWith('manifest.webmanifest')) {
+          res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+        }
+      },
+    }));
 
     app.use((req, res, next) => {
       const shouldServeApp =

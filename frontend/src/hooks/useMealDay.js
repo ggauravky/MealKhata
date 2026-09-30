@@ -64,12 +64,16 @@ export function useMealDay(date) {
     socket.on('connect', handleConnect);
     socket.on('disconnect', handleDisconnect);
     socket.io.on('reconnect', handleReconnect);
+    window.addEventListener('mk:online-reconnected', handleReconnect);
+    window.addEventListener('online', handleReconnect);
 
     return () => {
       socket.off('meal:updated', handleUpdate);
       socket.off('connect', handleConnect);
       socket.off('disconnect', handleDisconnect);
       socket.io.off('reconnect', handleReconnect);
+      window.removeEventListener('mk:online-reconnected', handleReconnect);
+      window.removeEventListener('online', handleReconnect);
     };
   }, [refresh]);
 

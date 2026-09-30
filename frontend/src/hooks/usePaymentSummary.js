@@ -31,11 +31,15 @@ export function usePaymentSummary(month) {
     socket.on('meal:updated', handleMeal);
     socket.on('billing:rate-updated', handleRate);
     socket.io.on('reconnect', handleReconnect);
+    window.addEventListener('mk:online-reconnected', handleReconnect);
+    window.addEventListener('online', handleReconnect);
     return () => {
       socket.off('payment:updated', handlePayment);
       socket.off('meal:updated', handleMeal);
       socket.off('billing:rate-updated', handleRate);
       socket.io.off('reconnect', handleReconnect);
+      window.removeEventListener('mk:online-reconnected', handleReconnect);
+      window.removeEventListener('online', handleReconnect);
     };
   }, [month, refresh]);
 

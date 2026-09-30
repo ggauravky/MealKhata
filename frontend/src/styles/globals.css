@@ -58,6 +58,7 @@ h3 {
   position: sticky;
   top: 0;
   z-index: 20;
+  padding-top: env(safe-area-inset-top);
   border-bottom: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   background: color-mix(in srgb, var(--background) 88%, transparent);
   backdrop-filter: blur(18px) saturate(130%);
@@ -2054,6 +2055,155 @@ h3 {
   .login-page__topbar .text-link {
     font-size: 13px;
   }
+/* PWA Components & Offline Safe UI */
+.offline-banner {
+  margin: 0 auto 16px;
+  width: min(100% - 32px, var(--content-width));
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--warning-soft);
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13.5px;
+  box-shadow: var(--shadow-sm);
+}
+
+.offline-banner__inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.offline-banner__icon {
+  flex-shrink: 0;
+  color: var(--warning);
+}
+
+.offline-banner__text {
+  line-height: 1.4;
+}
+
+.offline-banner__text strong {
+  color: var(--warning);
+}
+
+.update-banner {
+  position: sticky;
+  top: calc(var(--header-height) + 8px);
+  z-index: 25;
+  margin: 0 auto 16px;
+  width: min(100% - 32px, var(--content-width));
+  padding: 10px 16px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-md);
+}
+
+.update-banner__inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.update-banner__content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 550;
+}
+
+.update-banner__icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.update-banner__icon.is-spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.update-banner__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.update-banner__btn {
+  font-size: 13px;
+  padding: 6px 14px;
+}
+
+.update-banner__dismiss {
+  font-size: 13px;
+  padding: 6px 10px;
+  color: var(--text-secondary);
+}
+
+.install-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 13px;
+  border-radius: var(--radius-sm);
+  transition: all 180ms ease;
+}
+
+.ios-install-card {
+  margin: 0 auto 16px;
+  width: min(100% - 32px, var(--content-width));
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  background: var(--surface-accent);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  box-shadow: var(--shadow-sm);
+}
+
+.ios-install-card__content {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.ios-install-card__title strong {
+  color: var(--accent);
+}
+
+.ios-install-card__instructions {
+  color: var(--text-secondary);
+}
+
+.ios-install-card__instructions .inline-icon {
+  display: inline-block;
+  vertical-align: -2px;
+  margin: 0 2px;
+  color: var(--accent);
+}
+
+.ios-install-card__close {
+  padding: 4px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {
