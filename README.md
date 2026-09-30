@@ -156,3 +156,76 @@ MealKhata deploys as one Node Web Service using [render.yaml](./render.yaml):
 Configure a secured MongoDB Atlas user and an Atlas network-access rule that permits the Render service. Deploy only after local production startup and real MongoDB persistence have been verified.
 
 On Render's free Web Service plan, cold starts and spin-down can temporarily interrupt availability and live Socket.IO connections. Realtime resumes while the service is running, and reconnecting clients refetch authoritative state.
+
+## Phase 9: Background Web Push Reminders
+
+MealKhata includes background Web Push reminders allowing household members (`gaurav`, `nikhil`, `devansh`) to opt in to Morning and Night meal reminders per device. Notifications arrive even when MealKhata is closed, the PWA is minimized, or browser tabs are shut.
+
+### How It Works
+
+```
+Super Admin Reminder Settings (09:00 / 20:00 Asia/Kolkata)
+                        │
+                        ▼
+            Scheduled Reminder Runner
+                        │
+      ├──── Is reminder enabled globally?
+      ├──── Is it due within the dispatch window?
+      ├──── Is the member Taking? (Skips suppressed)
+      ├──── Does device have active PushSubscription?
+      ├──── Is period enabled in device preferences?
+      └──── Was it already sent today? (Atomic deduplication)
+                        │
+                        ▼
+               Web Push via VAPID
+                        │
+                        ▼
+             Service Worker push event
+                        │
+                        ▼
+            System Notification Alert
+                        │
+                        ▼
+        Click focuses or re-opens MealKhata
+```
+
+### Key Features & Design Rules
+
+1. **Member-Only Push Subscriptions**: Personal meal reminders belong exclusively to authenticated household member accounts. Viewer, Admin, and Super Admin roles cannot register personal member push devices. Push APIs strictly derive identity from `req.auth.memberId` on the server and ignore any client-supplied member IDs.
+2. **Meal-Aware Smart Dispatch**: At reminder time, the runner evaluates the member's authoritative effective meal schedule for today. If the member is `taking` (or untouched, which defaults to `taking`), the reminder is sent. If the member has explicitly set `skip`, the reminder is suppressed.
+3. **Per-Device Preferences**: Each device supports toggling Morning and Night reminders independently without altering the global household schedule managed by Super Admin.
+4. **Atomic Server Deduplication**: Keyed on `${logicalDate}:${mealType}:${subscriptionId}` via a unique index on `PushDelivery`. Running the runner repeatedly (e.g. every 5 minutes) produces exactly one notification per eligible device.
+5. **Privacy by Design**: Notification payloads contain only minimal text and same-origin deep links (`/?meal=morning` or `/?meal=night`). Never any JWT tokens, passwords, bills, UPI IDs, or financial data.
+6. **No Direct Mutation from Push**: Notifications only offer safe navigation back into MealKhata. No direct state mutations occur in the background from notification actions.
+7. **Automatic Expired Subscription Cleanup**: Push provider responses of `410 Gone` or `404 Not Found` automatically deactivate the subscription record without manual admin intervention.
+8. **Account Switch Safety**: When another account logs into a previously subscribed device, the device status returns a neutral state indicating it belongs to another account without revealing the prior user's identity. Explicit re-registration safely reassigns the endpoint to the active member.
+
+### Generating VAPID Keys
+
+To generate a fresh pair of VAPID keys for your development or production environment:
+
+```bash
+npm run generate-vapid-keys
+```
+
+This outputs a public key, private key, and subject. Add these to your environment configuration. **Never commit private VAPID keys or expose them in client-side code.**
+
+### Required Environment Variables
+
+Add the following to `backend/.env` (and Render Web Service environment settings):
+
+```bash
+VAPID_PUBLIC_KEY=your-vapid-public-key
+VAPID_PRIVATE_KEY=your-vapid-private-key
+VAPID_SUBJECT=mailto:admin@example.com
+```
+
+### Scheduled Reminder Runner & Deployment
+
+Background reminders require a scheduled trigger independent of the web process. In-process `setInterval` is strictly prohibited in production because web services restart, sleep when idle, or scale across instances.
+
+- **Command**: `npm run send-push-reminders`
+- **Recommended Schedule**: Every 5 minutes (`*/5 * * * *`)
+- **Timezone**: Evaluated dynamically using `APP_TIMEZONE` (`Asia/Kolkata`) against database settings.
+
+In [render.yaml](./render.yaml), a native Render Cron Job (`type: cron`) is configured alongside the web service with schedule `"*/5 * * * *"` and start command `npm run send-push-reminders`. If manual Render Cron setup is preferred, create a Cron Job pointing to the repository with schedule `*/5 * * * *` and command `npm run send-push-reminders`.

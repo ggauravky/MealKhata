@@ -566,6 +566,47 @@ h3 {
   grid-column: 1 / -1;
 }
 
+.browser-reminder-control__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.browser-reminder-control__toggles {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.button--toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  padding: 5px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.button--toggle:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.button--toggle.is-active {
+  background: color-mix(in srgb, var(--accent) 15%, var(--surface));
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
 .date-navigator {
   display: flex;
   align-items: center;
@@ -1942,6 +1983,18 @@ h3 {
   }
 
   .browser-reminder-control .button {
+    width: 100%;
+  }
+
+  .browser-reminder-control__actions {
+    width: 100%;
+    display: grid;
+    gap: 8px;
+  }
+
+  .browser-reminder-control__toggles {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
     width: 100%;
   }
 

@@ -20,6 +20,7 @@ import { reportRouter } from './routes/report.routes.js';
 import { paymentRouter } from './routes/payment.routes.js';
 import { paymentSettingsRouter } from './routes/paymentSettings.routes.js';
 import { reminderSettingsRouter } from './routes/reminderSettings.routes.js';
+import { pushRouter } from './routes/push.routes.js';
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const frontendDistPath = path.resolve(currentDirectory, '../../frontend/dist');
@@ -65,6 +66,7 @@ export function createApp({
   payments = paymentRouter,
   paymentSettings = paymentSettingsRouter,
   reminderSettings = reminderSettingsRouter,
+  push = pushRouter,
   health = healthRouter,
 } = {}) {
   const app = express();
@@ -116,6 +118,7 @@ export function createApp({
   app.use('/api/payments', payments);
   app.use('/api/payment-settings', paymentSettings);
   app.use('/api/settings/reminders', reminderSettings);
+  app.use('/api/push', push);
   app.use('/api', apiNotFound);
 
   if (isProduction) {

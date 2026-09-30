@@ -25,3 +25,30 @@ services:
         generateValue: true
       - key: APP_ORIGIN
         sync: false
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        sync: false
+
+  - type: cron
+    name: meal-khata-reminder-runner
+    runtime: node
+    branch: main
+    schedule: "*/5 * * * *"
+    buildCommand: npm ci --include=dev
+    startCommand: npm run send-push-reminders
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: APP_TIMEZONE
+        value: Asia/Kolkata
+      - key: MONGODB_URI
+        sync: false
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        sync: false

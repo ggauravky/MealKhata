@@ -23,3 +23,22 @@ export function authorizeMemberResource({ source = 'body', field = 'memberId' } 
     return next();
   };
 }
+
+export function requireMember(req, res, next) {
+  if (!req.auth?.authenticated) {
+    return res.status(401).json({
+      success: false,
+      message: 'Authentication required.',
+    });
+  }
+
+  if (req.auth.role !== ROLES.MEMBER || !req.auth.memberId) {
+    return res.status(403).json({
+      success: false,
+      message: 'Personal member access required. Only household members can manage push reminders.',
+    });
+  }
+
+  return next();
+}
+

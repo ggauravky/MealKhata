@@ -19,6 +19,9 @@ export const env = Object.freeze({
   superAdminPasswordHash: process.env.SUPERADMIN_PASSWORD_HASH?.trim() ?? '',
   authJwtSecret: process.env.AUTH_JWT_SECRET?.trim() ?? '',
   appOrigin: normalizeAppOrigin(process.env.APP_ORIGIN),
+  vapidPublicKey: process.env.VAPID_PUBLIC_KEY?.trim() ?? '',
+  vapidPrivateKey: process.env.VAPID_PRIVATE_KEY?.trim() ?? '',
+  vapidSubject: process.env.VAPID_SUBJECT?.trim() || 'mailto:admin@mealkhata.local',
 });
 
 const bcryptHashPattern = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
@@ -125,6 +128,48 @@ export function validateEnvironment(config = env) {
   if (!mongoUriPattern.test(config.mongoUri)) {
     throw new Error('MONGODB_URI must use the mongodb or mongodb+srv scheme');
   }
+
+  if (config.nodeEnv === 'production' || config.vapidPublicKey || config.vapidPrivateKey) {
+    validateVapidConfiguration(config, { required: config.nodeEnv === 'production' });
+  }
+}
+
+export function validateVapidConfiguration(config = env, { required = false } = {}) {
+  const hasAny = Boolean(config.vapidPublicKey || config.vapidPrivateKey);
+  if (!required && !hasAny) {
+    return false;
+  }
+
+  if (!config.vapidPublicKey || !config.vapidPrivateKey) {
+    throw new Error('Both VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY must be configured for Web Push');
+  }
+
+  if (
+    Buffer.byteLength(config.vapidPublicKey, 'utf8') < 16 ||
+    Buffer.byteLength(config.vapidPrivateKey, 'utf8') < 16
+  ) {
+    throw new Error('VAPID keys must be valid non-empty base64url encoded strings');
+  }
+
+  const subject = config.vapidSubject;
+  if (!subject || (!subject.startsWith('mailto:') && !subject.startsWith('https://'))) {
+    throw new Error('VAPID_SUBJECT must be a mailto: URL or HTTPS URL');
+  }
+
+  return true;
+}
+
+export function validatePushRunnerEnvironment(config = env) {
+  if (!config.mongoUri) {
+    throw new Error('Missing required environment variable: MONGODB_URI');
+  }
+  if (!mongoUriPattern.test(config.mongoUri)) {
+    throw new Error('MONGODB_URI must use the mongodb or mongodb+srv scheme');
+  }
+  if (!isValidTimeZone(config.appTimezone) || config.appTimezone !== 'Asia/Kolkata') {
+    throw new Error('APP_TIMEZONE must remain Asia/Kolkata');
+  }
+  validateVapidConfiguration(config, { required: true });
 }
 
 export const isProduction = env.nodeEnv === 'production';

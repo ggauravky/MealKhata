@@ -22,3 +22,7 @@ process.env.SUPERADMIN_EMAIL = TEST_CREDENTIALS.superadmin.email;
 process.env.SUPERADMIN_PASSWORD_HASH = await bcrypt.hash(TEST_CREDENTIALS.superadmin.password, 12);
 process.env.AUTH_JWT_SECRET = 'test-only-jwt-secret-with-at-least-forty-eight-characters';
 process.env.APP_ORIGIN = 'http://localhost:5173';
+process.env.VAPID_PUBLIC_KEY = 'BJbDuUOYPV_SKaCeyfH2dlWPLf8kcIHnrTa9o0nysfvVsF4gZ0C1WCGNzkZV0mS_uD--NF2LcpVudwBtaVL5C-k';
+process.env.VAPID_PRIVATE_KEY = 'IHQOSikGfyUGgWEhb7GEhykuSmcMz5I_W_k0nCZjgpk';
+process.env.VAPID_SUBJECT = 'mailto:admin@mealkhata.local';
+

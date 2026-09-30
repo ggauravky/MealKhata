@@ -16,6 +16,8 @@
     "test": "npm run test --workspaces --if-present",
     "hash-password": "npm run hash-password --workspace backend",
     "seed-members": "npm run seed-members --workspace backend",
+    "generate-vapid-keys": "npm run generate-vapid-keys --workspace backend",
+    "send-push-reminders": "npm run send-push-reminders --workspace backend",
     "verify-production-build": "npm run verify-production-build --workspace backend"
   },
   "engines": {

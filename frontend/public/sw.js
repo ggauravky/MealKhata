@@ -116,3 +116,82 @@ self.addEventListener('fetch', (event) => {
     );
   }
 });
+
+// 7. Web Push Notification Event (Phase 9)
+self.addEventListener('push', (event) => {
+  let payload = {};
+
+  try {
+    if (event.data) {
+      payload = event.data.json();
+    }
+  } catch {
+    payload = {
+      title: 'Meal reminder',
+      body: event.data ? event.data.text() : 'Check your meal status in MealKhata.',
+    };
+  }
+
+  const isMorning = payload.mealType === 'morning';
+  const defaultTitle = isMorning ? 'Morning meal reminder' : 'Night meal reminder';
+  const defaultBody = isMorning
+    ? 'Your Morning meal is currently Taking. Open MealKhata if you need to change it.'
+    : 'Your Night meal is currently Taking. Open MealKhata if you need to change it.';
+
+  const title = payload.title || defaultTitle;
+  const rawUrl = payload.url || (payload.mealType ? `/?meal=${payload.mealType}` : '/');
+
+  // Sanitize notification URL to ensure same-origin only
+  let safeUrl = '/';
+  if (typeof rawUrl === 'string' && !rawUrl.startsWith('//') && !rawUrl.startsWith('javascript:')) {
+    try {
+      const parsed = new URL(rawUrl, self.location.origin);
+      if (parsed.origin === self.location.origin) {
+        safeUrl = parsed.pathname + parsed.search + parsed.hash;
+      }
+    } catch {
+      safeUrl = '/';
+    }
+  }
+
+  const options = {
+    body: payload.body || defaultBody,
+    icon: '/icons/icon-192.png',
+    badge: '/icons/favicon-32.png',
+    tag: payload.tag || (payload.date && payload.mealType ? `mealkhata:${payload.date}:${payload.mealType}` : 'mealkhata-reminder'),
+    renotify: true,
+    data: {
+      url: safeUrl,
+      mealType: payload.mealType || null,
+      date: payload.date || null,
+      ...(payload.data || {}),
+    },
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+// 8. Notification Click Event (Phase 9)
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+
+  const targetUrl = event.notification.data?.url || '/';
+
+  event.waitUntil(
+    self.clients
+      .matchAll({ type: 'window', includeUncontrolled: true })
+      .then((windowClients) => {
+        // If a window is already open, focus it
+        for (const client of windowClients) {
+          if (client.url && 'focus' in client) {
+            return client.focus();
+          }
+        }
+
+        // Otherwise open a new window to the target URL
+        if (self.clients.openWindow) {
+          return self.clients.openWindow(targetUrl);
+        }
+      }),
+  );
+});
