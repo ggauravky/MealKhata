@@ -8,12 +8,18 @@ export const PAYMENT_STATUS_LABELS = Object.freeze({
   overpaid: 'Overpaid',
 });
 
-export function canInitiatePayment({ role, member }) {
-  return ['admin', 'superadmin'].includes(role) &&
+export function canInitiatePayment({ role, member, currentMemberId }) {
+  const isAllowedRole =
+    ['admin', 'superadmin'].includes(role) ||
+    (role === 'member' && Boolean(currentMemberId) && currentMemberId === member?.id);
+
+  return (
+    isAllowedRole &&
     Boolean(member) &&
     ['pending', 'partial'].includes(member.status) &&
     Number.isSafeInteger(member.remainingAmountPaise) &&
-    member.remainingAmountPaise > 0;
+    member.remainingAmountPaise > 0
+  );
 }
 
 export function createIdempotencyKey(cryptoSource = globalThis.crypto) {

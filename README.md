@@ -57,7 +57,40 @@ npm run build
 npm start
 ```
 
-The Admin credential is intentionally shared by Gaurav, Nikhil, and Devansh. Future audit records can identify the actor as Admin, but cannot prove which roommate personally performed an action.
+## Roles & Identity (Phase 7)
+
+MealKhata supports four distinct roles:
+1. **Viewer**: Public view-only access to household dashboard, calendar, reports, and payments. Cannot edit meals or payments.
+2. **Member**: Individual household accounts for Gaurav (`gaurav`), Nikhil (`nikhil`), and Devansh (`devansh`).
+   - Log in with individual email and password.
+   - Directly edit **their own** Morning and Night meals for today from the home dashboard.
+   - Initiate and record **their own** payments from the Payments page.
+   - Cannot edit other members' meals or payments (enforced with 403 on backend).
+   - Cannot edit past or future meal dates.
+   - Cannot access the `/admin` panel or modify rates/settings.
+3. **Admin**: Household management interface for editing today's meals for any roommate and managing payments. Cannot edit past/future dates or administrative settings.
+4. **Super Admin**: Full administrative authority, including past/future meal date edits, monthly billing rates, payment receiver settings, reminder schedules, and payment voids.
+
+### Identity-Aware Audit History
+All meal updates and payment confirmations capture the authenticated actor's identity:
+- For Member actions: `actorRole: "member"` and `actorMemberId` (e.g. `"gaurav"`).
+- For Admin actions: `actorRole: "admin"` and `actorMemberId: null`.
+- For Super Admin actions: `actorRole: "superadmin"` and `actorMemberId: null`.
+- *Backward compatibility note:* Legacy records created before Phase 7 identify only the previous `admin` role with no `actorMemberId` and remain valid.
+
+All authorization is server-authoritative; client requests cannot declare or tamper with actor identity.
+
+### Member Account Bootstrap / Seeding
+Member accounts are stored in MongoDB and initialized using an idempotent bootstrap script. Set placeholder environment variables in `backend/.env` for each member:
+- `MEMBER_GAURAV_EMAIL` and `MEMBER_GAURAV_PASSWORD_HASH`
+- `MEMBER_NIKHIL_EMAIL` and `MEMBER_NIKHIL_PASSWORD_HASH`
+- `MEMBER_DEVANSH_EMAIL` and `MEMBER_DEVANSH_PASSWORD_HASH`
+
+Then run:
+```bash
+npm run seed-members
+```
+Password hashes must be generated with bcrypt cost 12 using `npm run hash-password`. Seeding is safe to run multiple times. Once seeded in MongoDB, member authentication does not depend on the seeding environment variables.
 
 ## Daily meal API
 

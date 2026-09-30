@@ -147,7 +147,7 @@ export function createPaymentService({
       };
     },
 
-    async recordPayment({ month, memberId, amountPaise, idempotencyKey, upiReference, actorRole }) {
+    async recordPayment({ month, memberId, amountPaise, idempotencyKey, upiReference, actorRole, actorMemberId = null }) {
       assertMonth(month);
       assertMember(memberId);
       assertAmount(amountPaise);
@@ -184,6 +184,7 @@ export function createPaymentService({
           },
           recordedAt,
           recordedByRole: actorRole,
+          recordedByMemberId: actorMemberId ?? null,
           idempotencyKey,
           status: 'recorded',
           voidedAt: null,

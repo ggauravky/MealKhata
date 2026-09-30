@@ -24,6 +24,7 @@ const changeSchema = new mongoose.Schema(
   {
     changedAt: { type: Date, required: true },
     actorRole: { type: String, enum: AUTHENTICATED_ROLES, required: true },
+    actorMemberId: { type: String, enum: [...MEMBER_IDS, null], required: false, default: null },
     mealType: { type: String, enum: MEAL_TYPES, required: true },
     memberId: { type: String, enum: MEMBER_IDS, required: true },
     from: { type: String, enum: MEAL_STATUSES, required: true },

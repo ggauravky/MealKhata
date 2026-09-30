@@ -1,20 +1,33 @@
+import { MEMBERS } from '../config/members.js';
+
 export const ROLES = Object.freeze({
   VIEWER: 'viewer',
+  MEMBER: 'member',
   ADMIN: 'admin',
   SUPERADMIN: 'superadmin',
 });
 
-export const AUTHENTICATED_ROLES = Object.freeze([ROLES.ADMIN, ROLES.SUPERADMIN]);
+export const AUTHENTICATED_ROLES = Object.freeze([
+  ROLES.MEMBER,
+  ROLES.ADMIN,
+  ROLES.SUPERADMIN,
+]);
 
 const ROLE_LEVELS = Object.freeze({
   [ROLES.VIEWER]: 0,
-  [ROLES.ADMIN]: 1,
-  [ROLES.SUPERADMIN]: 2,
+  [ROLES.MEMBER]: 1,
+  [ROLES.ADMIN]: 2,
+  [ROLES.SUPERADMIN]: 3,
 });
 
 const ROLE_CAPABILITIES = Object.freeze({
   [ROLES.VIEWER]: Object.freeze({
     canEditToday: false,
+    canEditPast: false,
+    canEditFuture: false,
+  }),
+  [ROLES.MEMBER]: Object.freeze({
+    canEditToday: true,
     canEditPast: false,
     canEditFuture: false,
   }),
@@ -43,7 +56,10 @@ export function getRoleCapabilities(role) {
   return { ...(ROLE_CAPABILITIES[role] ?? ROLE_CAPABILITIES[ROLES.VIEWER]) };
 }
 
-export function getPrincipalForRole(role) {
+export function getPrincipalForRole(role, memberId = null) {
+  if (role === ROLES.MEMBER) {
+    return memberId ? `member:${memberId}` : null;
+  }
   return PRINCIPALS[role] ?? null;
 }
 
@@ -55,14 +71,20 @@ export function createViewerAuth() {
   return {
     authenticated: false,
     role: ROLES.VIEWER,
+    memberId: null,
     principal: null,
   };
 }
 
-export function createAuthenticatedSession(role) {
+export function createAuthenticatedSession(role, { memberId = null } = {}) {
+  const member = memberId ? MEMBERS.find((item) => item.id === memberId) : null;
+
   return {
     authenticated: true,
     role,
+    ...(role === ROLES.MEMBER && memberId
+      ? { memberId, displayName: member?.name ?? memberId }
+      : {}),
     capabilities: getRoleCapabilities(role),
   };
 }
@@ -73,3 +95,4 @@ export function createViewerSession() {
     role: ROLES.VIEWER,
   };
 }
+

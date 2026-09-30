@@ -9,6 +9,7 @@
     "start": "node src/server.js",
     "test": "node --test --import ./test/setup-env.js test/*.test.js",
     "hash-password": "node scripts/hashPassword.js",
+    "seed-members": "node scripts/seedMemberAccounts.js",
     "verify-production-build": "node scripts/verifyProductionBuild.js"
   },
   "dependencies": {

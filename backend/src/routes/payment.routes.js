@@ -1,7 +1,8 @@
 import { Router } from 'express';
-import { isAuthenticatedRole } from '../auth/permissions.js';
+import { ROLES, isAuthenticatedRole } from '../auth/permissions.js';
 import { MEMBER_IDS } from '../config/members.js';
-import { requireAdminOrAbove, requireSuperAdmin } from '../middleware/authorize.js';
+import { requireAuthenticated, requireSuperAdmin } from '../middleware/authorize.js';
+import { authorizeMemberResource } from '../middleware/memberAuthorization.js';
 import {
   isValidPaymentAmount,
   isValidUuid,
@@ -76,23 +77,39 @@ export function createPaymentRouter({
     res.json({ success: true, data: await service.getHistory(req.params.month, { includeReference }) });
   });
 
-  router.post('/prepare', requireAdminOrAbove, validatePrepareInput, async (req, res) => {
-    res.json({ success: true, data: await service.preparePayment(req.paymentInput) });
-  });
+  router.post(
+    '/prepare',
+    requireAuthenticated,
+    validatePrepareInput,
+    authorizeMemberResource({ source: 'paymentInput', field: 'memberId' }),
+    async (req, res) => {
+      res.json({ success: true, data: await service.preparePayment(req.paymentInput) });
+    },
+  );
 
-  router.post('/', requireAdminOrAbove, validatePaymentInput({ requireIdempotency: true }), async (req, res) => {
-    const result = await service.recordPayment({ ...req.paymentInput, actorRole: req.auth.role });
-    if (result.created) {
-      broadcast({
-        month: result.data.month,
-        memberId: result.data.memberId,
-        paymentId: result.data.paymentId,
-        action: 'recorded',
-        updatedAt: result.data.recordedAt,
+  router.post(
+    '/',
+    requireAuthenticated,
+    validatePaymentInput({ requireIdempotency: true }),
+    authorizeMemberResource({ source: 'paymentInput', field: 'memberId' }),
+    async (req, res) => {
+      const result = await service.recordPayment({
+        ...req.paymentInput,
+        actorRole: req.auth.role,
+        actorMemberId: req.auth.role === ROLES.MEMBER ? req.auth.memberId : null,
       });
-    }
-    res.status(result.created ? 201 : 200).json({ success: true, created: result.created, data: result.data });
-  });
+      if (result.created) {
+        broadcast({
+          month: result.data.month,
+          memberId: result.data.memberId,
+          paymentId: result.data.paymentId,
+          action: 'recorded',
+          updatedAt: result.data.recordedAt,
+        });
+      }
+      res.status(result.created ? 201 : 200).json({ success: true, created: result.created, data: result.data });
+    },
+  );
 
   router.post('/:paymentId/void', requireSuperAdmin, async (req, res) => {
     const reason = normalizeVoidReason(req.body?.reason);

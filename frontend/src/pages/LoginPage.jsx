@@ -19,16 +19,22 @@ export function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
-  const nextPath = getSafeNextPath(searchParams.get('next'));
-
   const handleSubmit = async (event) => {
     event.preventDefault();
     setSubmitting(true);
     setError('');
 
     try {
-      await auth.login({ email, password });
-      navigate(nextPath, { replace: true });
+      const session = await auth.login({ email, password });
+      const rawNext = searchParams.get('next');
+      let destination = '/';
+      if (session.role === 'admin' || session.role === 'superadmin') {
+        destination = getSafeNextPath(rawNext, '/admin');
+      } else {
+        const safeNext = getSafeNextPath(rawNext, '/');
+        destination = safeNext.startsWith('/admin') ? '/' : safeNext;
+      }
+      navigate(destination, { replace: true });
     } catch (requestError) {
       setError(
         requestError instanceof ApiError && requestError.status === 401
@@ -72,13 +78,19 @@ export function LoginPage() {
           <div className="signed-in-panel">
             <div className="login-panel__heading">
               <h1 id="login-title">You are already signed in</h1>
-              <p>Your current role is {getRoleLabel(auth.role)}.</p>
+              <p>Your current role is {auth.displayName ? `${auth.displayName} (${getRoleLabel(auth.role)})` : getRoleLabel(auth.role)}.</p>
             </div>
             {error && <ErrorState title="Could not sign out" message={error} />}
             <div className="login-panel__actions">
-              <Link className="button button--primary button--full" to="/admin">
-                Go to Admin
-              </Link>
+              {(auth.role === 'admin' || auth.role === 'superadmin') ? (
+                <Link className="button button--primary button--full" to="/admin">
+                  Go to Admin
+                </Link>
+              ) : (
+                <Link className="button button--primary button--full" to="/">
+                  Go to Today&apos;s Meals
+                </Link>
+              )}
               <button
                 className="button button--quiet button--full"
                 type="button"
@@ -92,8 +104,8 @@ export function LoginPage() {
         ) : (
           <>
             <div className="login-panel__heading">
-              <h1 id="login-title">Welcome back</h1>
-              <p>Use the shared Admin or separate Super Admin credentials.</p>
+              <h1 id="login-title">Sign in</h1>
+              <p>Sign in to your MealKhata account.</p>
             </div>
 
             <form className="login-form" onSubmit={handleSubmit}>

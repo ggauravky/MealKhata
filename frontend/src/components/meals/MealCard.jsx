@@ -7,7 +7,15 @@ const statusOptions = [
   { id: 'skip', label: 'Skip' },
 ];
 
-export function MealCard({ mealType, title, meals, editable = false, pendingRow, onChange }) {
+export function MealCard({
+  mealType,
+  title,
+  meals,
+  editable = false,
+  editableMemberIds = null,
+  pendingRow,
+  onChange,
+}) {
   const takingCount = getMealPlateCount(meals);
   const skippingCount = ROOMMATES.length - takingCount;
 
@@ -25,6 +33,9 @@ export function MealCard({ mealType, title, meals, editable = false, pendingRow,
           const currentStatus = meals[member.id];
           const rowId = `${mealType}:${member.id}`;
           const pending = pendingRow === rowId;
+          const isRowEditable = Boolean(
+            onChange && (editableMemberIds ? editableMemberIds.includes(member.id) : editable),
+          );
 
           return (
             <div className="meal-member-row" key={member.id}>
@@ -33,7 +44,7 @@ export function MealCard({ mealType, title, meals, editable = false, pendingRow,
                 <span>{member.name}</span>
               </div>
 
-              {editable ? (
+              {isRowEditable ? (
                 <div className="meal-segmented" aria-label={`${member.name} ${title} status`}>
                   {statusOptions.map((option) => (
                     <button

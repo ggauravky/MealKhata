@@ -13,48 +13,54 @@ import {
 import { loginLimiter } from '../middleware/rateLimiters.js';
 import { logger } from '../utils/logger.js';
 
-export const authRouter = Router();
+export function createAuthRouter({ service = { authenticateCredentials } } = {}) {
+  const router = Router();
 
-authRouter.post('/login', loginLimiter, async (req, res) => {
-  const credentials = validateLoginInput(req.body);
+  router.post('/login', loginLimiter, async (req, res) => {
+    const credentials = validateLoginInput(req.body);
 
-  try {
-    const auth = await authenticateCredentials(credentials);
-    const token = await createSessionToken(auth.role);
+    try {
+      const auth = await service.authenticateCredentials(credentials);
+      const token = await createSessionToken(auth.role, { memberId: auth.memberId });
 
-    res.cookie(SESSION_COOKIE_NAME, token, getSessionCookieOptions());
-    logger.info('Authentication succeeded', { role: auth.role });
+      res.cookie(SESSION_COOKIE_NAME, token, getSessionCookieOptions());
+      logger.info('Authentication succeeded', { role: auth.role, memberId: auth.memberId });
 
-    return res.json({
+      return res.json({
+        success: true,
+        session: createAuthenticatedSession(auth.role, { memberId: auth.memberId }),
+      });
+    } catch (error) {
+      if (error.statusCode === 401) {
+        logger.warn('Authentication failed');
+      }
+
+      throw error;
+    }
+  });
+
+  router.get('/session', (req, res) => {
+    const session = req.auth?.authenticated
+      ? createAuthenticatedSession(req.auth.role, { memberId: req.auth.memberId })
+      : createViewerSession();
+
+    res.json({
       success: true,
-      session: createAuthenticatedSession(auth.role),
+      session,
     });
-  } catch (error) {
-    if (error.statusCode === 401) {
-      logger.warn('Authentication failed');
+  });
+
+  router.post('/logout', (req, res) => {
+    res.clearCookie(SESSION_COOKIE_NAME, getClearSessionCookieOptions());
+
+    if (req.auth?.authenticated) {
+      logger.info('Session ended', { role: req.auth.role, memberId: req.auth.memberId });
     }
 
-    throw error;
-  }
-});
-
-authRouter.get('/session', (req, res) => {
-  const session = req.auth?.authenticated
-    ? createAuthenticatedSession(req.auth.role)
-    : createViewerSession();
-
-  res.json({
-    success: true,
-    session,
+    res.json({ success: true });
   });
-});
 
-authRouter.post('/logout', (req, res) => {
-  res.clearCookie(SESSION_COOKIE_NAME, getClearSessionCookieOptions());
+  return router;
+}
 
-  if (req.auth?.authenticated) {
-    logger.info('Session ended', { role: req.auth.role });
-  }
-
-  res.json({ success: true });
-});
+export const authRouter = createAuthRouter();

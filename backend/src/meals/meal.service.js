@@ -31,7 +31,7 @@ export function createMealService({ repository = mealRepository, timezone = env.
       }
     },
 
-    async changeStatus({ date, mealType, memberId, status, actorRole, changedAt = new Date() }) {
+    async changeStatus({ date, mealType, memberId, status, actorRole, actorMemberId = null, changedAt = new Date() }) {
       const path = getMealPath(mealType, memberId);
 
       if (!path) {
@@ -53,6 +53,7 @@ export function createMealService({ repository = mealRepository, timezone = env.
           const change = {
             changedAt,
             actorRole,
+            actorMemberId: actorMemberId ?? null,
             mealType,
             memberId,
             from: currentStatus,

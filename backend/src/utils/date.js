@@ -37,7 +37,7 @@ export function canEditDate({ role, targetDate, now = new Date(), timeZone = env
     return true;
   }
 
-  if (role !== ROLES.ADMIN) {
+  if (role !== ROLES.ADMIN && role !== ROLES.MEMBER) {
     return false;
   }
 

@@ -1,6 +1,7 @@
 import { SignJWT, jwtVerify } from 'jose';
 import { env, isProduction } from '../config/env.js';
-import { getPrincipalForRole, isAuthenticatedRole } from './permissions.js';
+import { MEMBER_IDS } from '../config/members.js';
+import { ROLES, getPrincipalForRole, isAuthenticatedRole } from './permissions.js';
 
 export const SESSION_COOKIE_NAME = 'mk_session';
 export const SESSION_DURATION_SECONDS = 12 * 60 * 60;
@@ -29,14 +30,26 @@ export function getClearSessionCookieOptions({ production = isProduction } = {})
   return options;
 }
 
-export async function createSessionToken(role, { expiresIn = `${SESSION_DURATION_SECONDS}s` } = {}) {
-  const principal = getPrincipalForRole(role);
+export async function createSessionToken(
+  role,
+  { memberId = null, expiresIn = `${SESSION_DURATION_SECONDS}s` } = {},
+) {
+  if (role === ROLES.MEMBER && (!memberId || !MEMBER_IDS.includes(memberId))) {
+    throw new Error('A valid memberId is required to create a member session');
+  }
+
+  const principal = getPrincipalForRole(role, memberId);
 
   if (!principal) {
     throw new Error('Cannot create a session for an unsupported role');
   }
 
-  return new SignJWT({ role })
+  const payload = { role };
+  if (role === ROLES.MEMBER) {
+    payload.memberId = memberId;
+  }
+
+  return new SignJWT(payload)
     .setProtectedHeader({ alg: ALGORITHM, typ: 'JWT' })
     .setSubject(principal)
     .setIssuedAt()
@@ -57,6 +70,25 @@ export async function verifySessionToken(token) {
     throw new Error('Unsupported session role');
   }
 
+  if (payload.role === ROLES.MEMBER) {
+    const memberId = payload.memberId;
+    if (typeof memberId !== 'string' || !MEMBER_IDS.includes(memberId)) {
+      throw new Error('Session memberId is invalid');
+    }
+
+    const expectedPrincipal = getPrincipalForRole(ROLES.MEMBER, memberId);
+    if (payload.sub !== expectedPrincipal) {
+      throw new Error('Session principal does not match member');
+    }
+
+    return {
+      authenticated: true,
+      role: ROLES.MEMBER,
+      memberId,
+      principal: expectedPrincipal,
+    };
+  }
+
   const principal = getPrincipalForRole(payload.role);
 
   if (payload.sub !== principal) {
@@ -66,6 +98,8 @@ export async function verifySessionToken(token) {
   return {
     authenticated: true,
     role: payload.role,
+    memberId: null,
     principal,
   };
 }
+

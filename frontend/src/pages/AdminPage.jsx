@@ -112,6 +112,7 @@ export function AdminPage() {
               title="Morning"
               meals={mealDay.data.meals.morning}
               editable={mealDay.data.permissions.canEdit}
+              editableMemberIds={mealDay.data.permissions?.editableMemberIds}
               pendingRow={pendingRow}
               onChange={handleMealChange}
             />
@@ -120,6 +121,7 @@ export function AdminPage() {
               title="Night"
               meals={mealDay.data.meals.night}
               editable={mealDay.data.permissions.canEdit}
+              editableMemberIds={mealDay.data.permissions?.editableMemberIds}
               pendingRow={pendingRow}
               onChange={handleMealChange}
             />
@@ -145,11 +147,23 @@ export function AdminPage() {
           <ol className="history-list">
             {history.items.map((item, index) => {
               const memberName = item.memberId[0].toUpperCase() + item.memberId.slice(1);
+              let actionDescription;
+              if (item.actorRole === 'member' && item.actorMemberId) {
+                const actorName = item.actorMemberId[0].toUpperCase() + item.actorMemberId.slice(1);
+                if (item.actorMemberId === item.memberId) {
+                  actionDescription = `${actorName} changed their ${item.mealType === 'morning' ? 'Morning' : 'Night'} meal`;
+                } else {
+                  actionDescription = `${actorName} changed ${memberName}'s ${item.mealType === 'morning' ? 'Morning' : 'Night'} meal`;
+                }
+              } else {
+                actionDescription = `${getRoleLabel(item.actorRole)} changed ${memberName}'s ${item.mealType === 'morning' ? 'Morning' : 'Night'} meal`;
+              }
+
               return (
                 <li key={`${item.changedAt}-${item.revision ?? index}`}>
                   <time dateTime={item.changedAt}>{formatIndiaTime(item.changedAt)}</time>
                   <div>
-                    <strong>{getRoleLabel(item.actorRole)} changed {memberName}&apos;s {item.mealType === 'morning' ? 'Morning' : 'Night'} meal</strong>
+                    <strong>{actionDescription}</strong>
                     <span>{item.from === 'taking' ? 'Taking' : 'Skip'} <span aria-hidden="true">→</span> {item.to === 'taking' ? 'Taking' : 'Skip'}</span>
                   </div>
                 </li>

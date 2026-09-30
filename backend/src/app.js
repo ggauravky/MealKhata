@@ -57,6 +57,7 @@ export function createHelmetOptions({ production = isProduction } = {}) {
 }
 
 export function createApp({
+  auth = authRouter,
   meals = mealRouter,
   billing = billingRouter,
   calendar = calendarRouter,
@@ -107,7 +108,7 @@ export function createApp({
   app.use('/api', authenticateSession);
   app.use('/api', enforceTrustedOrigin);
   app.use('/api', health);
-  app.use('/api/auth', authRouter);
+  app.use('/api/auth', auth);
   app.use('/api/meals', meals);
   app.use('/api/billing', billing);
   app.use('/api/calendar', calendar);

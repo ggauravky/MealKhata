@@ -44,14 +44,20 @@ export function AuthActions({ mobile = false }) {
 
   return (
     <>
-      {!mobile && <span className="role-badge">{getRoleLabel(auth.role)}</span>}
-      <NavLink
-        className={mobile ? 'mobile-account-link' : 'icon-link'}
-        to="/admin"
-        aria-label="Open Admin"
-      >
-        <ShieldCheck size={19} strokeWidth={1.8} />
-      </NavLink>
+      {!mobile && (
+        <span className="role-badge">
+          {auth.role === 'member' && auth.displayName ? auth.displayName : getRoleLabel(auth.role)}
+        </span>
+      )}
+      {(auth.role === 'admin' || auth.role === 'superadmin') && (
+        <NavLink
+          className={mobile ? 'mobile-account-link' : 'icon-link'}
+          to="/admin"
+          aria-label="Open Admin"
+        >
+          <ShieldCheck size={19} strokeWidth={1.8} />
+        </NavLink>
+      )}
       <button
         className={mobile ? 'mobile-account-link' : 'button button--quiet button--compact'}
         type="button"

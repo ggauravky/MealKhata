@@ -24,8 +24,8 @@ function formatPaymentTime(value) {
   }).format(new Date(value));
 }
 
-function MemberPaymentCard({ roommate, member, periodType, role, onPay }) {
-  const canPay = canInitiatePayment({ role, member });
+function MemberPaymentCard({ roommate, member, periodType, role, currentMemberId, onPay }) {
+  const canPay = canInitiatePayment({ role, member, currentMemberId });
   const billLabel = member.billAmountPaise === null ? PAYMENT_STATUS_LABELS[member.status] : formatPaise(member.billAmountPaise);
 
   return (
@@ -111,7 +111,17 @@ export function PaymentsPage() {
           </section>
 
           <section className="payment-member-grid" aria-label={`Member payment status for ${formatLogicalMonth(month)}`}>
-            {ROOMMATES.map((roommate) => <MemberPaymentCard key={roommate.id} roommate={roommate} member={data.members[roommate.id]} periodType={data.periodType} role={auth.role} onPay={setPayingMember} />)}
+            {ROOMMATES.map((roommate) => (
+              <MemberPaymentCard
+                key={roommate.id}
+                roommate={roommate}
+                member={data.members[roommate.id]}
+                periodType={data.periodType}
+                role={auth.role}
+                currentMemberId={auth.memberId}
+                onPay={setPayingMember}
+              />
+            ))}
           </section>
         </>
       )}

@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { monthMealService } from '../calendar/monthMeal.service.js';
 import { env } from '../config/env.js';
+import { MEMBER_IDS } from '../config/members.js';
+import { ROLES } from '../auth/permissions.js';
 import { canEditDate, getLogicalDateInTimeZone } from '../utils/date.js';
 import { isValidLogicalMonth } from '../utils/month.js';
 
@@ -32,17 +34,31 @@ export function createCalendarRouter({
       data: {
         ...data,
         today,
-        days: data.days.map((day) => ({
-          ...day,
-          permissions: {
-            canEdit: canEditDate({
-              role: req.auth?.role,
-              targetDate: day.date,
-              now: currentTime,
-              timeZone: timezone,
-            }),
-          },
-        })),
+        days: data.days.map((day) => {
+          const isDateEditable = canEditDate({
+            role: req.auth?.role,
+            targetDate: day.date,
+            now: currentTime,
+            timeZone: timezone,
+          });
+
+          let editableMemberIds = [];
+          if (isDateEditable) {
+            if (req.auth?.role === ROLES.SUPERADMIN || req.auth?.role === ROLES.ADMIN) {
+              editableMemberIds = [...MEMBER_IDS];
+            } else if (req.auth?.role === ROLES.MEMBER && req.auth.memberId) {
+              editableMemberIds = [req.auth.memberId];
+            }
+          }
+
+          return {
+            ...day,
+            permissions: {
+              canEdit: isDateEditable && editableMemberIds.length > 0,
+              editableMemberIds,
+            },
+          };
+        }),
       },
     });
   });

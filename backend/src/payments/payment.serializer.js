@@ -18,6 +18,7 @@ export function serializePayment(document, { includeReference = false } = {}) {
   if (includeReference) {
     result.upiReference = document.upiReference ?? null;
     result.recordedByRole = document.recordedByRole;
+    result.recordedByMemberId = document.recordedByMemberId ?? null;
     result.voidedByRole = document.voidedByRole ?? null;
   }
 

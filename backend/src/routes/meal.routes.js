@@ -1,8 +1,10 @@
 import { Router } from 'express';
 import { MEMBER_IDS } from '../config/members.js';
 import { env } from '../config/env.js';
+import { ROLES } from '../auth/permissions.js';
 import { requireAdminOrAbove, requireAuthenticated } from '../middleware/authorize.js';
 import { authorizeLogicalDate } from '../middleware/dateAuthorization.js';
+import { authorizeMemberResource } from '../middleware/memberAuthorization.js';
 import { canEditDate, getLogicalDateInTimeZone, isValidLogicalDate } from '../utils/date.js';
 import { MEAL_STATUSES, MEAL_TYPES } from '../meals/meal.constants.js';
 import { mealService } from '../meals/meal.service.js';
@@ -62,15 +64,27 @@ function parseHistoryLimit(value) {
 }
 
 function withPermissions(data, req, now, timezone) {
+  const isDateEditable = canEditDate({
+    role: req.auth?.role,
+    targetDate: data.date,
+    now,
+    timeZone: timezone,
+  });
+
+  let editableMemberIds = [];
+  if (isDateEditable) {
+    if (req.auth?.role === ROLES.SUPERADMIN || req.auth?.role === ROLES.ADMIN) {
+      editableMemberIds = [...MEMBER_IDS];
+    } else if (req.auth?.role === ROLES.MEMBER && req.auth.memberId) {
+      editableMemberIds = [req.auth.memberId];
+    }
+  }
+
   return {
     ...data,
     permissions: {
-      canEdit: canEditDate({
-        role: req.auth?.role,
-        targetDate: data.date,
-        now,
-        timeZone: timezone,
-      }),
+      canEdit: isDateEditable && editableMemberIds.length > 0,
+      editableMemberIds,
     },
   };
 }
@@ -108,11 +122,13 @@ export function createMealRouter({
     validateDate,
     validateMealChange,
     authorizeLogicalDate({ source: 'params', now, timeZone: timezone }),
+    authorizeMemberResource({ source: 'mealChange', field: 'memberId' }),
     async (req, res) => {
       const result = await service.changeStatus({
         date: req.logicalDate,
         ...req.mealChange,
         actorRole: req.auth.role,
+        actorMemberId: req.auth.role === ROLES.MEMBER ? req.auth.memberId : null,
       });
 
       if (result.changed) {

@@ -5,6 +5,8 @@ import { AuthContext } from './authContext.js';
 const viewerSession = Object.freeze({
   authenticated: false,
   role: 'viewer',
+  memberId: null,
+  displayName: null,
   capabilities: Object.freeze({
     canEditToday: false,
     canEditPast: false,
@@ -13,13 +15,19 @@ const viewerSession = Object.freeze({
 });
 
 function normalizeSession(session) {
-  if (!session?.authenticated || !['admin', 'superadmin'].includes(session.role)) {
+  if (!session?.authenticated || !['member', 'admin', 'superadmin'].includes(session.role)) {
     return viewerSession;
   }
+
+  const isMember = session.role === 'member';
+  const memberId = isMember && typeof session.memberId === 'string' ? session.memberId : null;
+  const displayName = isMember && typeof session.displayName === 'string' ? session.displayName : null;
 
   return {
     authenticated: true,
     role: session.role,
+    memberId,
+    displayName,
     capabilities: {
       canEditToday: Boolean(session.capabilities?.canEditToday),
       canEditPast: Boolean(session.capabilities?.canEditPast),

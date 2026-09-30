@@ -21,6 +21,7 @@ export const NAV_ITEMS = [
 
 export const ROLE_LABELS = Object.freeze({
   viewer: 'Viewer',
+  member: 'Member',
   admin: 'Admin',
   superadmin: 'Super Admin',
 });

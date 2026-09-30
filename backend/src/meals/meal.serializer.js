@@ -33,6 +33,7 @@ export function serializeHistory(document, date, limit) {
     .map((change) => ({
       changedAt: serializeDate(change.changedAt),
       actorRole: change.actorRole,
+      actorMemberId: change.actorMemberId ?? null,
       mealType: change.mealType,
       memberId: change.memberId,
       from: change.from,
