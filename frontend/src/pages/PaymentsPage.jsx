@@ -1,5 +1,6 @@
 import { ChevronLeft, ChevronRight, CircleDollarSign, History, WalletCards } from 'lucide-react';
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/common/PageHeader.jsx';
 import { PaymentFlowDialog } from '../components/payments/PaymentFlowDialog.jsx';
 import { PaymentSettingsPanel } from '../components/payments/PaymentSettingsPanel.jsx';
@@ -8,13 +9,14 @@ import { EmptyState } from '../components/ui/EmptyState.jsx';
 import { ErrorState } from '../components/ui/ErrorState.jsx';
 import { LoadingState } from '../components/ui/LoadingState.jsx';
 import { useAuth } from '../hooks/useAuth.js';
+import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
 import { usePaymentHistory } from '../hooks/usePaymentHistory.js';
 import { usePaymentSummary } from '../hooks/usePaymentSummary.js';
 import { usePwa } from '../hooks/usePwa.js';
 import { useServerToday } from '../hooks/useServerToday.js';
 import { useSettlement } from '../hooks/useSettlement.js';
 import { ROOMMATES } from '../lib/constants.js';
-import { addLogicalMonths, formatLogicalMonth } from '../lib/logicalMonth.js';
+import { addLogicalMonths, formatLogicalMonth, isValidLogicalMonth } from '../lib/logicalMonth.js';
 import { formatPaise } from '../lib/money.js';
 import { canInitiatePayment, PAYMENT_STATUS_LABELS } from '../lib/paymentFlow.js';
 
@@ -74,14 +76,17 @@ function MemberPaymentCard({ roommate, member, periodType, role, currentMemberId
 }
 
 export function PaymentsPage() {
+  useDocumentTitle('Payments');
   const auth = useAuth();
   const serverToday = useServerToday();
   const { isOnline } = usePwa();
+  const [searchParams] = useSearchParams();
+  const queryMonth = searchParams.get('month');
   const [selectedMonth, setSelectedMonth] = useState('');
   const [payingMember, setPayingMember] = useState(null);
   const [voidingPayment, setVoidingPayment] = useState(null);
   const [message, setMessage] = useState('');
-  const month = selectedMonth || serverToday.date.slice(0, 7);
+  const month = selectedMonth || (isValidLogicalMonth(queryMonth) ? queryMonth : serverToday.date.slice(0, 7));
   const summary = usePaymentSummary(month);
   const history = usePaymentHistory(month);
   const settlement = useSettlement(month);

@@ -53,3 +53,29 @@ export function compareLogicalMonths(left, right) {
   return left === right ? 0 : left < right ? -1 : 1;
 }
 
+export function getPreviousLogicalMonth(value) {
+  const parts = parseLogicalMonth(value);
+
+  if (!parts) {
+    throw new TypeError('month must use the YYYY-MM format');
+  }
+
+  const year = parts.month === 1 ? parts.year - 1 : parts.year;
+  const month = parts.month === 1 ? 12 : parts.month - 1;
+  return `${year}-${String(month).padStart(2, '0')}`;
+}
+
+export function formatLogicalMonth(value) {
+  const parts = parseLogicalMonth(value);
+
+  if (!parts) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat('en-IN', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(new Date(Date.UTC(parts.year, parts.month - 1, 1, 12)));
+}
+

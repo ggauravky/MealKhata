@@ -48,3 +48,15 @@ export function getMondayFirstOffset(logicalDate) {
   return (weekday + 6) % 7;
 }
 
+export function getPreviousLogicalMonth(value) {
+  const parts = parseLogicalMonth(value);
+
+  if (!parts) {
+    throw new TypeError('month must use the YYYY-MM format');
+  }
+
+  const year = parts.month === 1 ? parts.year - 1 : parts.year;
+  const month = parts.month === 1 ? 12 : parts.month - 1;
+  return `${year}-${String(month).padStart(2, '0')}`;
+}
+

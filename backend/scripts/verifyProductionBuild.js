@@ -9,8 +9,8 @@ const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const frontendIndex = path.resolve(currentDirectory, '../../frontend/dist/index.html');
 const testPassword = 'production-routing-test-password';
 
-const TEST_VAPID_PUBLIC = 'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QT9bP0T1gE-A4V-o0lqPj0G0z8bU3rB5Q6P3K2Y1X0Z9W8V7U';
-const TEST_VAPID_PRIVATE = 'production-test-vapid-private-key-material-do-not-expose-32b';
+const TEST_VAPID_PUBLIC = 'BJbDuUOYPV_SKaCeyfH2dlWPLf8kcIHnrTa9o0nysfvVsF4gZ0C1WCGNzkZV0mS_uD--NF2LcpVudwBtaVL5C-k';
+const TEST_VAPID_PRIVATE = 'IHQOSikGfyUGgWEhb7GEhykuSmcMz5I_W_k0nCZjgpk';
 const TEST_VAPID_SUBJECT = 'mailto:admin@mealkhata.production';
 
 // Common baseline production env

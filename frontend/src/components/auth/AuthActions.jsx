@@ -45,9 +45,19 @@ export function AuthActions({ mobile = false }) {
   return (
     <>
       {!mobile && (
-        <span className="role-badge">
-          {auth.role === 'member' && auth.displayName ? auth.displayName : getRoleLabel(auth.role)}
-        </span>
+        <div className="account-identity-badge" title={`${auth.displayName || 'Member'} (${getRoleLabel(auth.role)})`}>
+          {auth.role === 'member' && auth.displayName ? (
+            <>
+              <span className={`avatar avatar--${auth.memberId} avatar--mini`} aria-hidden="true">
+                {auth.displayName.charAt(0)}
+              </span>
+              <span className="account-identity__name">{auth.displayName}</span>
+              <span className="account-identity__role">Member</span>
+            </>
+          ) : (
+            <span className="role-badge">{getRoleLabel(auth.role)}</span>
+          )}
+        </div>
       )}
       {(auth.role === 'admin' || auth.role === 'superadmin') && (
         <NavLink

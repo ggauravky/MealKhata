@@ -22,6 +22,7 @@ import { paymentSettingsRouter } from './routes/paymentSettings.routes.js';
 import { reminderSettingsRouter } from './routes/reminderSettings.routes.js';
 import { pushRouter } from './routes/push.routes.js';
 import { settlementRouter } from './routes/settlement.routes.js';
+import { dashboardRouter } from './routes/dashboard.routes.js';
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const frontendDistPath = path.resolve(currentDirectory, '../../frontend/dist');
@@ -69,6 +70,7 @@ export function createApp({
   reminderSettings = reminderSettingsRouter,
   push = pushRouter,
   settlements = settlementRouter,
+  dashboard = dashboardRouter,
   health = healthRouter,
 } = {}) {
   const app = express();
@@ -119,6 +121,7 @@ export function createApp({
   app.use('/api/reports', reports);
   app.use('/api/payments', payments);
   app.use('/api/settlements', settlements);
+  app.use('/api/dashboard', dashboard);
   app.use('/api/payment-settings', paymentSettings);
   app.use('/api/settings/reminders', reminderSettings);
   app.use('/api/push', push);

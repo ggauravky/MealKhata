@@ -1,24 +1,28 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/common/PageHeader.jsx';
 import { MealCard } from '../components/meals/MealCard.jsx';
 import { PlateSummary } from '../components/meals/PlateSummary.jsx';
 import { ErrorState } from '../components/ui/ErrorState.jsx';
 import { LoadingState } from '../components/ui/LoadingState.jsx';
 import { useCalendarMonth } from '../hooks/useCalendarMonth.js';
+import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
 import { useServerToday } from '../hooks/useServerToday.js';
 import { useSettlement } from '../hooks/useSettlement.js';
 import { formatLogicalDate } from '../lib/logicalDate.js';
-import { addLogicalMonths, formatLogicalMonth, getMondayFirstOffset } from '../lib/logicalMonth.js';
+import { addLogicalMonths, formatLogicalMonth, getMondayFirstOffset, isValidLogicalMonth } from '../lib/logicalMonth.js';
 
 const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 export function CalendarPage() {
+  useDocumentTitle('Calendar');
   const serverToday = useServerToday();
+  const [searchParams] = useSearchParams();
+  const queryMonth = searchParams.get('month');
   const [selectedMonth, setSelectedMonth] = useState('');
   const [selectedDate, setSelectedDate] = useState('');
-  const month = selectedMonth || serverToday.date.slice(0, 7);
+  const month = selectedMonth || (isValidLogicalMonth(queryMonth) ? queryMonth : serverToday.date.slice(0, 7));
   const calendar = useCalendarMonth(month);
   const settlement = useSettlement(month);
   const isMonthClosed = settlement.isClosed;

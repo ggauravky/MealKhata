@@ -278,4 +278,50 @@ Authenticated household users (Members, Admins, Super Admin) can download offici
 - **CSV Export** (`GET /api/settlements/:month/statement.csv`): RFC-compliant comma-separated values with integer paise precision and properly escaped fields.
 
 Statement downloads are served with `Cache-Control: no-store` under `/api/`, bypassing PWA service-worker caching to ensure privacy and security.
+
+---
+
+## Personalized Daily Dashboard & Role-Aware Experience (Phase 11)
+
+Phase 11 transforms MealKhata from a functionally complete system into a polished, role-aware daily product where every identity immediately sees and accesses what matters to them.
+
+### 1. Unified Composition Endpoint: `GET /api/dashboard`
+To prevent the client from executing cascading independent requests (`/api/meals/today`, `/api/reports/...`, `/api/payments/...`, `/api/settlements/...`, `/api/settings/reminders`), the backend exposes a cached-free composition endpoint:
+- **Route**: `GET /api/dashboard` (and alias `GET /api/dashboard/summary`)
+- **Headers**: `Cache-Control: no-store` (Network Only, never cached by service workers)
+- **Role Authority**: Session identity (`req.auth`) authoritatively dictates the derived payload; query parameters cannot spoof member identity.
+- **Parallel Composition**: Invokes existing domain services (`mealService`, `reportService`, `paymentSummaryService`, `settlementService`, `reminderSettingsService`) in parallel using `Promise.allSettled`. If an optional service fails, the remaining dashboard renders gracefully without fabricating data.
+- **Zero New Collections**: All dashboard data is derived on-the-fly; no `Dashboard` or `DashboardCache` MongoDB collections exist.
+
+### 2. Role-Aware Dashboard Profiles
+- **Member Profile** (Personalized Home):
+  - **Authoritative India Greeting**: "Good morning", "Good afternoon", or "Good evening" calculated strictly using `Asia/Kolkata` logical hour.
+  - **Your Meals Today Hero**: Direct Taking/Skip segmented controls for Morning and Night meals with instant optimistic feedback and server validation.
+  - **Household Today Card**: Kitchen plate requirements (e.g. "Morning 3 plates · Night 2 plates") and roommate statuses.
+  - **Your Month-to-Date Card**: Personal meal counts (Morning, Night, Total), authoritative bill to-date, total paid, remaining due, projected month-end bill, and direct payment CTA link.
+  - **Next Meal Reminder**: Upcoming meal window and device reminder status (in-app active or Web Push enabled).
+  - **Role-Aware Quick Actions**: Direct navigation to Calendar, Reports, and Payments with current month query parameter.
+- **Admin Profile** (Household Manager):
+  - Household Today plate counts and roommate breakdown.
+  - One-tap **Manage Today's Meals** operational shortcut.
+  - Household month-to-date financial summary (room plates, total bill, rates status).
+  - Shortcuts to Reports, Payments, and Calendar.
+- **Super Admin Profile** (Operational Attention & Control):
+  - Household plate totals and roommate status overview.
+  - **Attention Section**: Prioritized deterministic alerts:
+    - *Configuration blockers*: Current month meal rates not configured.
+    - *Settlement readiness*: Previous month is fully settled and ready to close.
+    - *Settlement blockers*: Previous month cannot close due to outstanding balances or overpayments.
+  - Quick management shortcuts: Manage Meals, Configure Rates, Payments, Monthly Settlement, and Reminder Settings.
+- **Viewer Profile** (Public Guest):
+  - Read-only daily meal schedule and household plate counts.
+  - Shortcuts to public Calendar, Reports, and Payments pages with zero mutation controls.
+
+### 3. Product-Wide UX Polish & Quality Improvements
+- **Deep Query Navigation**: `/reports`, `/payments`, and `/calendar` support validated `?month=YYYY-MM` search parameters for seamless cross-page month linking with safe fallbacks on invalid input.
+- **Document Titles**: Integrated lightweight `useDocumentTitle` updating the browser tab (`MealKhata — Dashboard`, `MealKhata — Calendar`, etc.).
+- **Account Identity Badge**: Desktop header displays member avatar with initial, display name, and role badge without crowding mobile headers.
+- **320px Viewport Hardening**: Compact responsive layouts with wrap-safe badges, touch-target compliance, and zero horizontal document scrolling across all mobile screen sizes.
+- **Accessibility & Motion**: WCAG-compliant color contrast, icon + text state indicators, full keyboard/focus compliance, and `prefers-reduced-motion` compliance.
+
 

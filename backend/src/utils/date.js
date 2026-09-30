@@ -43,3 +43,29 @@ export function canEditDate({ role, targetDate, now = new Date(), timeZone = env
 
   return targetDate === getLogicalDateInTimeZone(now, timeZone);
 }
+
+export function getLogicalHourInTimeZone(now = new Date(), timeZone = env.appTimezone) {
+  if (!(now instanceof Date) || Number.isNaN(now.getTime())) {
+    throw new TypeError('now must be a valid Date');
+  }
+
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    hour: 'numeric',
+    hour12: false,
+  }).formatToParts(now);
+
+  const part = parts.find((p) => p.type === 'hour');
+  return Number(part?.value ?? 0);
+}
+
+export function getIndiaGreeting(now = new Date(), timeZone = env.appTimezone) {
+  const hour = getLogicalHourInTimeZone(now, timeZone);
+  if (hour >= 5 && hour < 12) {
+    return 'Good morning';
+  }
+  if (hour >= 12 && hour < 17) {
+    return 'Good afternoon';
+  }
+  return 'Good evening';
+}

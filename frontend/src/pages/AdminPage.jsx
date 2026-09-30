@@ -9,6 +9,7 @@ import { ReminderSettingsPanel } from '../components/reminders/ReminderSettingsP
 import { ErrorState } from '../components/ui/ErrorState.jsx';
 import { LoadingState } from '../components/ui/LoadingState.jsx';
 import { useAuth } from '../hooks/useAuth.js';
+import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
 import { useMealDay } from '../hooks/useMealDay.js';
 import { useMealHistory } from '../hooks/useMealHistory.js';
 import { usePwa } from '../hooks/usePwa.js';
@@ -19,6 +20,7 @@ import { addLogicalDays, formatIndiaTime, formatLogicalDate, isValidLogicalDate 
 import { formatLogicalMonth } from '../lib/logicalMonth.js';
 
 export function AdminPage() {
+  useDocumentTitle('Admin');
   const auth = useAuth();
   const { isOnline } = usePwa();
   const [searchParams] = useSearchParams();

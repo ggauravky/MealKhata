@@ -1,35 +1,33 @@
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useState } from 'react';
 import { PageHeader } from '../components/common/PageHeader.jsx';
+import { AttentionSection } from '../components/dashboard/AttentionSection.jsx';
+import { HouseholdMonthlyCard } from '../components/dashboard/HouseholdMonthlyCard.jsx';
+import { HouseholdTodayCard } from '../components/dashboard/HouseholdTodayCard.jsx';
+import { NextReminderCard } from '../components/dashboard/NextReminderCard.jsx';
+import { PersonalMealHero } from '../components/dashboard/PersonalMealHero.jsx';
+import { PersonalMonthlyCard } from '../components/dashboard/PersonalMonthlyCard.jsx';
+import { QuickActionsCard } from '../components/dashboard/QuickActionsCard.jsx';
 import { LiveIndicator } from '../components/meals/LiveIndicator.jsx';
 import { MealCard } from '../components/meals/MealCard.jsx';
-import { PlateSummary } from '../components/meals/PlateSummary.jsx';
-import { BrowserReminderControl } from '../components/reminders/BrowserReminderControl.jsx';
 import { ErrorState } from '../components/ui/ErrorState.jsx';
 import { LoadingState } from '../components/ui/LoadingState.jsx';
 import { useAuth } from '../hooks/useAuth.js';
-import { useMealDay } from '../hooks/useMealDay.js';
+import { useDashboard } from '../hooks/useDashboard.js';
+import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
 import { usePwa } from '../hooks/usePwa.js';
 import { api } from '../lib/api.js';
 import { formatLogicalDate } from '../lib/logicalDate.js';
 
 export function DashboardPage() {
+  useDocumentTitle('Dashboard');
   const auth = useAuth();
-  const mealDay = useMealDay('today');
   const { isOnline } = usePwa();
+  const dashboard = useDashboard();
   const [pendingRow, setPendingRow] = useState('');
   const [saveMessage, setSaveMessage] = useState('');
   const [saveError, setSaveError] = useState('');
 
-  const greeting = useMemo(() => {
-    if (auth.role !== 'member' || !auth.displayName) return null;
-    const hour = new Date().getHours();
-    let timeGreeting = 'Welcome';
-    if (hour >= 5 && hour < 12) timeGreeting = 'Good morning';
-    else if (hour >= 12 && hour < 17) timeGreeting = 'Good afternoon';
-    else if (hour >= 17) timeGreeting = 'Good evening';
-    return `${timeGreeting}, ${auth.displayName}`;
-  }, [auth.role, auth.displayName]);
+  const data = dashboard.data;
 
   const handleMealChange = async (mealType, memberId, status) => {
     if (!isOnline) {
@@ -37,99 +35,140 @@ export function DashboardPage() {
       return;
     }
 
+    if (!data?.today || pendingRow) return;
+
     const rowId = `${mealType}:${memberId}`;
-    const currentStatus = mealDay.data?.meals?.[mealType]?.[memberId];
-
-    if (!mealDay.data?.date || currentStatus === status || pendingRow) {
-      return;
-    }
-
     setPendingRow(rowId);
     setSaveMessage('');
     setSaveError('');
 
     try {
-      const response = await api.patch(`/api/meals/${mealDay.data.date}`, {
+      const response = await api.patch(`/api/meals/${data.today}`, {
         mealType,
         memberId,
         status,
       });
-      mealDay.applyServerData(response.data);
+
+      if (response.data) {
+        dashboard.applyMealDayUpdate(response.data);
+      }
+
       const mealLabel = mealType === 'morning' ? 'Morning' : 'Night';
       const statusLabel = status === 'taking' ? 'Taking' : 'Skip';
-      setSaveMessage(response.changed ? `${mealLabel} meal changed to ${statusLabel}.` : 'Meal schedule is already up to date.');
-    } catch {
-      setSaveError('Unable to save the meal change. Please try again.');
+      setSaveMessage(
+        response.changed
+          ? `${mealLabel} meal updated to ${statusLabel}.`
+          : 'Meal schedule is already up to date.',
+      );
+    } catch (err) {
+      setSaveError(err?.message || 'Unable to save the meal change. Please try again.');
     } finally {
       setPendingRow('');
     }
   };
 
+  const pageDescription =
+    auth.role === 'member'
+      ? "Today's personalized meal schedule, monthly spending, and household overview."
+      : auth.role === 'admin'
+        ? "Today's household plate counts, monthly meal statistics, and kitchen management."
+        : auth.role === 'superadmin'
+          ? 'System overview, rate configurations, monthly settlement status, and household operations.'
+          : 'Public meal schedule and household plate counts.';
+
   return (
     <div className="page-stack">
       <div className="heading-with-status">
         <PageHeader
-          eyebrow={mealDay.data ? formatLogicalDate(mealDay.data.date) : 'India time'}
-          title={greeting || 'Today'}
-          description={
-            auth.role === 'member'
-              ? "Today's meal schedule. Tap to update your meals."
-              : 'Morning and night meals for the MealKhata household.'
-          }
+          eyebrow={data?.today ? formatLogicalDate(data.today) : 'India time'}
+          title={data?.greeting || 'Today'}
+          description={pageDescription}
         />
-        <LiveIndicator connected={mealDay.live} />
+        <LiveIndicator connected={dashboard.live} />
       </div>
 
-      {mealDay.loading && !mealDay.data && <LoadingState label="Loading today's meals" />}
+      {dashboard.loading && !data && <LoadingState label="Loading personalized dashboard" />}
 
-      {mealDay.error && (
+      {dashboard.error && !data && (
         <ErrorState
-          title="Meals unavailable"
+          title="Dashboard unavailable"
           message={
             !isOnline
-              ? "Meal data is unavailable while offline. Connect to the internet to load today's meals."
-              : mealDay.error
+              ? 'Dashboard data is unavailable while offline. Connect to the internet to load current data.'
+              : dashboard.error
           }
           actionLabel="Try again"
-          onAction={mealDay.refresh}
+          onAction={dashboard.refresh}
         />
       )}
 
-      {mealDay.data && (
+      {data && (
         <>
           {saveError && <ErrorState compact title="Change not saved" message={saveError} />}
-          {saveMessage && <p className="save-feedback" role="status" aria-live="polite">{saveMessage}</p>}
+          {saveMessage && (
+            <p className="save-feedback" role="status" aria-live="polite">
+              {saveMessage}
+            </p>
+          )}
 
-          <section id="today-meals" className="meal-card-grid" aria-label="Today's meal schedule">
-            <MealCard
-              mealType="morning"
-              title="Morning"
-              meals={mealDay.data.meals.morning}
-              editable={Boolean(mealDay.data.permissions?.canEdit) && isOnline}
-              editableMemberIds={mealDay.data.permissions?.editableMemberIds}
+          {/* 1. Member Hero: Personal Meals Today */}
+          {data.personalHero && (
+            <PersonalMealHero
+              hero={data.personalHero}
+              isOnline={isOnline}
               pendingRow={pendingRow}
               onChange={handleMealChange}
             />
-            <MealCard
-              mealType="night"
-              title="Night"
-              meals={mealDay.data.meals.night}
-              editable={Boolean(mealDay.data.permissions?.canEdit) && isOnline}
-              editableMemberIds={mealDay.data.permissions?.editableMemberIds}
-              pendingRow={pendingRow}
-              onChange={handleMealChange}
-            />
-          </section>
+          )}
 
-          <PlateSummary meals={mealDay.data.meals} label="Today's plate count" />
+          {/* 2. Attention Needed */}
+          <AttentionSection items={data.attention} />
 
-          <div className="meal-page-meta">
-            <span>{mealDay.data.saved ? 'Saved meal schedule' : 'Default Taking schedule'}</span>
-            {(auth.role === 'admin' || auth.role === 'superadmin') && (
-              <Link className="text-link" to="/admin">Manage meals</Link>
-            )}
-          </div>
-          <BrowserReminderControl />
+          {/* 3. Household Plate Summary */}
+          <HouseholdTodayCard
+            household={data.householdToday}
+            today={data.today}
+            role={auth.role}
+          />
+
+          {/* 4. Monthly Cards: Personal or Household */}
+          {data.currentMonth?.personal && (
+            <PersonalMonthlyCard personal={data.currentMonth.personal} />
+          )}
+
+          {!data.currentMonth?.personal && data.currentMonth?.household && (
+            <HouseholdMonthlyCard household={data.currentMonth.household} />
+          )}
+
+          {/* 5. Detailed Household Meal Cards for Admin/SuperAdmin/Viewer */}
+          {(auth.role === 'admin' || auth.role === 'superadmin') && data.meals && (
+            <section id="today-meals" className="meal-card-grid" aria-label="Detailed today meals">
+              <MealCard
+                mealType="morning"
+                title="Morning"
+                meals={data.meals.morning}
+                editable={Boolean(data.meals.permissions?.canEdit) && isOnline}
+                editableMemberIds={data.meals.permissions?.editableMemberIds}
+                pendingRow={pendingRow}
+                onChange={handleMealChange}
+              />
+              <MealCard
+                mealType="night"
+                title="Night"
+                meals={data.meals.night}
+                editable={Boolean(data.meals.permissions?.canEdit) && isOnline}
+                editableMemberIds={data.meals.permissions?.editableMemberIds}
+                pendingRow={pendingRow}
+                onChange={handleMealChange}
+              />
+            </section>
+          )}
+
+          {/* 6. Next Reminder */}
+          <NextReminderCard reminders={data.reminders} />
+
+          {/* 7. Quick Actions */}
+          <QuickActionsCard actions={data.quickActions} />
         </>
       )}
     </div>

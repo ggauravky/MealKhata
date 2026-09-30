@@ -5,11 +5,13 @@ import { BrandMark } from '../components/layout/BrandMark.jsx';
 import { ErrorState } from '../components/ui/ErrorState.jsx';
 import { LoadingState } from '../components/ui/LoadingState.jsx';
 import { useAuth } from '../hooks/useAuth.js';
+import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
 import { ApiError } from '../lib/api.js';
 import { getRoleLabel } from '../lib/constants.js';
 import { getSafeNextPath } from '../lib/navigation.js';
 
 export function LoginPage() {
+  useDocumentTitle('Sign In');
   const auth = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();

@@ -1,17 +1,19 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/common/PageHeader.jsx';
 import { ReportSummary } from '../components/reports/ReportSummary.jsx';
 import { SettlementPanel } from '../components/reports/SettlementPanel.jsx';
 import { ErrorState } from '../components/ui/ErrorState.jsx';
 import { LoadingState } from '../components/ui/LoadingState.jsx';
 import { useAuth } from '../hooks/useAuth.js';
+import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
 import { useMonthlyReport } from '../hooks/useMonthlyReport.js';
 import { useSettlement } from '../hooks/useSettlement.js';
 import { useServerToday } from '../hooks/useServerToday.js';
 import { api } from '../lib/api.js';
 import { formatLogicalDate } from '../lib/logicalDate.js';
-import { addLogicalMonths, formatLogicalMonth } from '../lib/logicalMonth.js';
+import { addLogicalMonths, formatLogicalMonth, isValidLogicalMonth } from '../lib/logicalMonth.js';
 import { formatPaise, paiseToRupeeInput, rupeesToPaise } from '../lib/money.js';
 
 const periodLabels = {
@@ -21,13 +23,16 @@ const periodLabels = {
 };
 
 export function ReportsPage() {
+  useDocumentTitle('Reports');
   const auth = useAuth();
   const serverToday = useServerToday();
+  const [searchParams] = useSearchParams();
+  const queryMonth = searchParams.get('month');
   const [selectedMonth, setSelectedMonth] = useState('');
   const [savingRates, setSavingRates] = useState(false);
   const [rateError, setRateError] = useState('');
   const [rateMessage, setRateMessage] = useState('');
-  const month = selectedMonth || serverToday.date.slice(0, 7);
+  const month = selectedMonth || (isValidLogicalMonth(queryMonth) ? queryMonth : serverToday.date.slice(0, 7));
   const report = useMonthlyReport(month);
   const settlement = useSettlement(month);
 

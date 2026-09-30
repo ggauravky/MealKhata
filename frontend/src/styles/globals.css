@@ -2513,6 +2513,691 @@ h3 {
   }
 }
 
+/* ============================================================
+   Phase 11: Personalized Dashboard & Role-Aware UX Styles
+   ============================================================ */
+
+.section-eyebrow {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+  margin-bottom: 2px;
+}
+
+/* 1. Personal Meal Hero */
+.personal-hero-card {
+  display: grid;
+  gap: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+}
+
+.personal-hero-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.personal-hero-card__header h2 {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.personal-hero-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.personal-slot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--background);
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.personal-slot--taking {
+  border-color: rgba(16, 185, 129, 0.3);
+  background: rgba(16, 185, 129, 0.04);
+}
+
+.personal-slot--skip {
+  border-color: rgba(239, 68, 68, 0.25);
+  background: rgba(239, 68, 68, 0.03);
+}
+
+.personal-slot__info {
+  display: grid;
+  gap: 2px;
+}
+
+.personal-slot__meal {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.personal-slot__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.status-text--taking {
+  color: #10b981;
+}
+
+.status-text--skip {
+  color: #ef4444;
+}
+
+.meal-switch {
+  display: inline-flex;
+  background: var(--surface-accent);
+  padding: 3px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  gap: 2px;
+}
+
+.meal-switch__btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.meal-switch__btn:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.meal-switch__btn.is-active.is-taking {
+  background: #10b981;
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(16, 185, 129, 0.3);
+}
+
+.meal-switch__btn.is-active.is-skip {
+  background: #ef4444;
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(239, 68, 68, 0.3);
+}
+
+.meal-switch__btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* 2. Household Today Plate Summary */
+.household-today-card {
+  display: grid;
+  gap: 16px;
+}
+
+.household-today-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.household-today-card__header h2 {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.plate-metric-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.plate-metric-card {
+  display: grid;
+  gap: 3px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: var(--background);
+  border: 1px solid var(--border);
+  text-align: center;
+}
+
+.plate-metric-card--total {
+  background: rgba(16, 185, 129, 0.06);
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
+.plate-metric-card__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+}
+
+.plate-metric-card__value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.household-member-list {
+  display: grid;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.household-member-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+}
+
+.household-member-row__name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.household-member-row__meals {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.badge-pill {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.badge-pill--taking {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+}
+
+.badge-pill--skip {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+}
+
+.household-member-row__count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  min-width: 48px;
+  text-align: right;
+}
+
+/* 3. Monthly Cards: Personal & Household */
+.personal-monthly-card,
+.household-monthly-card {
+  display: grid;
+  gap: 16px;
+}
+
+.personal-monthly-card__header,
+.household-monthly-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.personal-monthly-card__header h2,
+.household-monthly-card__header h2 {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.personal-monthly-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  text-align: center;
+}
+
+.monthly-stat-item {
+  display: grid;
+  gap: 2px;
+}
+
+.monthly-stat-item__label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+}
+
+.monthly-stat-item__value {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.personal-finance-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.finance-metric {
+  display: grid;
+  gap: 3px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: var(--background);
+  border: 1px solid var(--border);
+  text-align: center;
+}
+
+.finance-metric--due {
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.finance-metric__label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+}
+
+.finance-metric__value {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.rates-pending-notice {
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px dashed rgba(245, 158, 11, 0.35);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  margin: 0;
+}
+
+.personal-card-actions,
+.household-card-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.household-card-actions .button {
+  flex: 1 1 180px;
+  justify-content: center;
+}
+
+/* 4. Attention Section */
+.attention-section {
+  display: grid;
+  gap: 10px;
+}
+
+.attention-cards-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.attention-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  transition: transform 0.15s ease;
+}
+
+.attention-card--financial {
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.05);
+}
+
+.attention-card--financial .attention-card__icon {
+  color: #f59e0b;
+}
+
+.attention-card--settlement {
+  border-color: rgba(16, 185, 129, 0.35);
+  background: rgba(16, 185, 129, 0.05);
+}
+
+.attention-card--settlement .attention-card__icon {
+  color: #10b981;
+}
+
+.attention-card--configuration {
+  border-color: rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.04);
+}
+
+.attention-card--configuration .attention-card__icon {
+  color: #ef4444;
+}
+
+.attention-card--informational {
+  border-color: rgba(59, 130, 246, 0.3);
+  background: rgba(59, 130, 246, 0.04);
+}
+
+.attention-card--informational .attention-card__icon {
+  color: #3b82f6;
+}
+
+.attention-card__icon {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+}
+
+.attention-card__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.attention-card__title {
+  display: block;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.attention-card__message {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.attention-card__action {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.attention-empty-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-accent);
+  border: 1px solid var(--border);
+}
+
+.attention-empty-icon {
+  color: #10b981;
+}
+
+/* 5. Next Reminder Card */
+.next-reminder-card {
+  display: grid;
+  gap: 14px;
+}
+
+.next-reminder-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.next-reminder-card__header h2 {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.reminder-badge {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--surface-accent);
+  color: var(--accent);
+}
+
+.next-reminder-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  background: var(--background);
+  border: 1px solid var(--border);
+}
+
+.next-reminder-schedule {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.clock-icon {
+  color: var(--accent);
+}
+
+.next-reminder-schedule strong {
+  display: block;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.schedule-time {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.no-reminder-copy {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.reminder-status-pill {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pill-dot--push {
+  color: #10b981;
+}
+
+.pill-dot--inapp {
+  color: var(--text-secondary);
+}
+
+.reminder-control-wrapper {
+  margin-top: -6px;
+}
+
+/* 6. Quick Actions */
+.quick-actions-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.quick-actions-panel__header {
+  display: grid;
+  gap: 2px;
+}
+
+.quick-actions-panel__header h2 {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.quick-actions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.quick-action-button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--background);
+  color: var(--text-primary);
+  text-align: center;
+  transition: all 0.15s ease;
+  min-height: 84px;
+}
+
+.quick-action-button:hover {
+  background: var(--surface-accent);
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.quick-action-button__icon {
+  color: var(--accent);
+}
+
+.quick-action-button__label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* 7. Account Identity Badge (Header) */
+.account-identity-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--surface-accent);
+  border: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.avatar--mini {
+  width: 22px;
+  height: 22px;
+  font-size: 11px;
+}
+
+.account-identity__name {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.account-identity__role {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+}
+
+/* 8. 404 Polish */
+.not-found__copy {
+  color: var(--text-secondary);
+  font-size: 15px;
+  margin-bottom: 20px;
+}
+
+/* Responsive Adjustments for Mobile (320px - 430px) */
+@media (max-width: 480px) {
+  .personal-slot {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .personal-slot .meal-switch {
+    width: 100%;
+  }
+  .personal-slot .meal-switch__btn {
+    flex: 1;
+    text-align: center;
+    padding: 8px 10px;
+  }
+  .personal-finance-grid,
+  .plate-metric-row,
+  .personal-monthly-stats {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .quick-actions-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .attention-card {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .attention-card__action {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
