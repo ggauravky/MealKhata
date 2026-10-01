@@ -2,6 +2,7 @@ import { SignJWT, jwtVerify } from 'jose';
 import { env, isProduction } from '../config/env.js';
 import { MEMBER_IDS } from '../config/members.js';
 import { ROLES, getPrincipalForRole, isAuthenticatedRole } from './permissions.js';
+import { userAccountRepository } from './userAccount.repository.js';
 
 export const SESSION_COOKIE_NAME = 'mk_session';
 export const SESSION_DURATION_SECONDS = 12 * 60 * 60;
@@ -32,7 +33,12 @@ export function getClearSessionCookieOptions({ production = isProduction } = {})
 
 export async function createSessionToken(
   role,
-  { memberId = null, expiresIn = `${SESSION_DURATION_SECONDS}s` } = {},
+  {
+    memberId = null,
+    userId = null,
+    sessionVersion = 0,
+    expiresIn = `${SESSION_DURATION_SECONDS}s`,
+  } = {},
 ) {
   if (role === ROLES.MEMBER && (!memberId || !MEMBER_IDS.includes(memberId))) {
     throw new Error('A valid memberId is required to create a member session');
@@ -44,7 +50,10 @@ export async function createSessionToken(
     throw new Error('Cannot create a session for an unsupported role');
   }
 
-  const payload = { role };
+  const payload = { role, sessionVersion };
+  if (userId) {
+    payload.userId = userId;
+  }
   if (role === ROLES.MEMBER) {
     payload.memberId = memberId;
   }
@@ -59,7 +68,7 @@ export async function createSessionToken(
     .sign(getSecretKey());
 }
 
-export async function verifySessionToken(token) {
+export async function verifySessionToken(token, { accounts = userAccountRepository } = {}) {
   const { payload } = await jwtVerify(token, getSecretKey(), {
     algorithms: [ALGORITHM],
     issuer: ISSUER,
@@ -70,6 +79,32 @@ export async function verifySessionToken(token) {
     throw new Error('Unsupported session role');
   }
 
+  // If userId is in token and account repository is provided, verify against DB
+  if (payload.userId && accounts) {
+    const user = await accounts.findByUserId(payload.userId);
+    if (!user) {
+      throw new Error('User account not found');
+    }
+    if (user.active === false) {
+      throw new Error('User account is inactive');
+    }
+    if (typeof payload.sessionVersion === 'number' && user.sessionVersion !== payload.sessionVersion) {
+      throw new Error('Session has been revoked');
+    }
+
+    const principal = getPrincipalForRole(user.role, user.memberId);
+    return {
+      authenticated: true,
+      role: user.role,
+      memberId: user.memberId,
+      userId: user.userId,
+      displayName: user.displayName,
+      sessionVersion: user.sessionVersion,
+      principal,
+    };
+  }
+
+  // Fallback for tokens minted without userId (e.g. pure unit tests without DB)
   if (payload.role === ROLES.MEMBER) {
     const memberId = payload.memberId;
     if (typeof memberId !== 'string' || !MEMBER_IDS.includes(memberId)) {

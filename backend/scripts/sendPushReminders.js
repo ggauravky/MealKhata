@@ -1,5 +1,5 @@
-import mongoose from 'mongoose';
 import { env, validatePushRunnerEnvironment } from '../src/config/env.js';
+import { connectDatabase, disconnectDatabase } from '../src/config/db.js';
 import { reminderDispatchService } from '../src/push/reminderDispatch.service.js';
 import { logger } from '../src/utils/logger.js';
 
@@ -12,7 +12,7 @@ async function main() {
   }
 
   try {
-    await mongoose.connect(env.mongoUri);
+    await connectDatabase();
     logger.info('Connected to MongoDB for scheduled push reminders.');
 
     const summary = await reminderDispatchService.dispatchReminders();
@@ -30,7 +30,7 @@ async function main() {
     process.exitCode = 1;
   } finally {
     try {
-      await mongoose.disconnect();
+      await disconnectDatabase();
     } catch {
       // Disconnection cleanup error
     }

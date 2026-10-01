@@ -42,6 +42,7 @@ export class InMemoryMonthlySettlementRepository {
     month,
     sequence,
     snapshot,
+    snapshotVersion = 2,
     closedAt = new Date(),
     closedByRole = 'superadmin',
   }) {
@@ -60,7 +61,7 @@ export class InMemoryMonthlySettlementRepository {
       month,
       sequence,
       status: 'closed',
-      snapshotVersion: 1,
+      snapshotVersion,
       snapshot: clone(snapshot),
       closedAt,
       closedByRole,

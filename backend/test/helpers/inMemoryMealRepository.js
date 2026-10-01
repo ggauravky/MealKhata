@@ -72,6 +72,120 @@ export class InMemoryMealRepository {
     return clone(document);
   }
 
+  async updateAllocationIfCurrent({
+    date,
+    mealType,
+    allocation,
+    derivedStatuses,
+    revision,
+    allocationChange,
+  }) {
+    if (this.failWrites) {
+      throw new Error('simulated database outage');
+    }
+
+    const document = this.documents.get(date);
+    if (!document || document.revision !== revision) {
+      return null;
+    }
+
+    if (!document.allocations) {
+      document.allocations = { morning: null, night: null };
+    }
+    document.allocations[mealType] = clone(allocation);
+
+    if (derivedStatuses) {
+      for (const [memberId, status] of Object.entries(derivedStatuses)) {
+        document.meals[mealType][memberId] = status;
+      }
+    }
+
+    if (!document.allocationChanges) {
+      document.allocationChanges = [];
+    }
+    document.allocationChanges.push(clone(allocationChange));
+
+    document.revision += 1;
+    document.updatedAt = new Date();
+    return clone(document);
+  }
+
+  async clearAllocationIfCurrent({ date, mealType, revision, allocationChange }) {
+    if (this.failWrites) {
+      throw new Error('simulated database outage');
+    }
+
+    const document = this.documents.get(date);
+    if (!document || document.revision !== revision) {
+      return null;
+    }
+
+    if (document.allocations) {
+      document.allocations[mealType] = null;
+    }
+
+    if (!document.allocationChanges) {
+      document.allocationChanges = [];
+    }
+    document.allocationChanges.push(clone(allocationChange));
+
+    document.revision += 1;
+    document.updatedAt = new Date();
+    return clone(document);
+  }
+
+  async updateMealStatusWithAllocationReset({
+    date,
+    path,
+    from,
+    to,
+    fromStatus,
+    toStatus,
+    mealType,
+    revision,
+    change,
+    statusChange,
+    allocationResetChange,
+  }) {
+    if (this.failWrites) {
+      throw new Error('simulated database outage');
+    }
+
+    const prevStatus = fromStatus !== undefined ? fromStatus : from;
+    const nextStatus = toStatus !== undefined ? toStatus : to;
+    const changeObj = statusChange || change;
+
+    const document = this.documents.get(date);
+    if (!document || document.revision !== revision || getPathValue(document, path) !== prevStatus) {
+      return null;
+    }
+
+    setPathValue(document, path, nextStatus);
+
+    if (document.allocations) {
+      const type = mealType || path.split('.')[1];
+      document.allocations[type] = null;
+    }
+
+    if (!document.changes) {
+      document.changes = [];
+    }
+    if (changeObj) {
+      document.changes.push(clone(changeObj));
+    }
+
+    if (!document.allocationChanges) {
+      document.allocationChanges = [];
+    }
+    if (allocationResetChange) {
+      document.allocationChanges.push(clone(allocationResetChange));
+    }
+
+    document.revision += 1;
+    document.updatedAt = new Date();
+    return clone(document);
+  }
+
   count() {
     return this.documents.size;
   }

@@ -203,24 +203,15 @@ describe('Phase 10: Settlement Status & Pre-Close Validation', () => {
     assert.ok(res.body.data.blockers.some((b) => b.type === 'current_month'));
   });
 
-  test('past month with missing rates cannot be closed', async () => {
+  test('past month rates are permanently fixed at ₹50/₹70 and never missing', async () => {
     const res = await request(app).get(`/api/settlements/${PAST_MONTH}`).expect(200);
     assert.equal(res.body.success, true);
     assert.equal(res.body.data.state, 'not_ready');
     assert.equal(res.body.data.canClose, false);
-    assert.ok(res.body.data.blockers.some((b) => b.type === 'rates_missing'));
+    assert.ok(!res.body.data.blockers.some((b) => b.type === 'rates_missing'));
   });
 
   test('past month with remaining balances cannot be closed', async () => {
-    // Configure rates for past month: 50 morning, 60 night
-    await rateRepository.create({
-      month: PAST_MONTH,
-      morningPricePaise: 5000,
-      nightPricePaise: 6000,
-      revision: 1,
-      changes: [],
-    });
-
     const res = await request(app).get(`/api/settlements/${PAST_MONTH}`).expect(200);
     assert.equal(res.body.success, true);
     assert.equal(res.body.data.state, 'not_ready');
@@ -229,14 +220,6 @@ describe('Phase 10: Settlement Status & Pre-Close Validation', () => {
   });
 
   test('past month with overpayment cannot be closed', async () => {
-    await rateRepository.create({
-      month: PAST_MONTH,
-      morningPricePaise: 5000,
-      nightPricePaise: 6000,
-      revision: 1,
-      changes: [],
-    });
-
     // Record an overpayment for Gaurav: 10,000,000 paise (much more than 30 days of meals)
     await paymentRepository.create({
       paymentId: 'pay-overpaid-1',
@@ -257,22 +240,14 @@ describe('Phase 10: Settlement Status & Pre-Close Validation', () => {
 
   test('past month with exact settlement returns ready_to_close', async () => {
     // 30 days in September (2026-09-01 to 2026-09-30). Default meal day is taking both meals.
-    // 30 morning * 50 = 1500; 30 night * 60 = 1800. Total per member = 3300 = 330000 paise.
-    await rateRepository.create({
-      month: PAST_MONTH,
-      morningPricePaise: 5000,
-      nightPricePaise: 6000,
-      revision: 1,
-      changes: [],
-    });
-
+    // 30 morning * 50 = 1500; 30 night * 70 = 2100. Total per member = 3600 = 360000 paise.
     // Pay exact bill for all three members
     for (const memberId of MEMBER_IDS) {
       await paymentRepository.create({
         paymentId: `pay-settle-${memberId}`,
         month: PAST_MONTH,
         memberId,
-        amountPaise: 330000,
+        amountPaise: 360000,
         status: 'recorded',
         idempotencyKey: `idem-settle-${memberId}`,
         recordedAt: new Date('2026-09-30T10:00:00.000Z'),
@@ -304,7 +279,7 @@ describe('Phase 10: Month Closing, Authorization & Snapshot Immutability', () =>
         paymentId: `pay-settle-${memberId}`,
         month: PAST_MONTH,
         memberId,
-        amountPaise: 330000,
+        amountPaise: 360000,
         status: 'recorded',
         idempotencyKey: `idem-settle-${memberId}`,
         recordedAt: new Date('2026-09-30T10:00:00.000Z'),
@@ -351,26 +326,27 @@ describe('Phase 10: Month Closing, Authorization & Snapshot Immutability', () =>
     assert.equal(settlement.month, PAST_MONTH);
     assert.equal(settlement.sequence, 1);
     assert.equal(settlement.status, 'closed');
+    assert.equal(settlement.snapshotVersion, 2);
     assert.equal(settlement.closedByRole, 'superadmin');
     assert.ok(settlement.settlementId);
 
     // Snapshot integrity
     assert.equal(settlement.snapshot.rates.morningPricePaise, 5000);
-    assert.equal(settlement.snapshot.rates.nightPricePaise, 6000);
+    assert.equal(settlement.snapshot.rates.nightPricePaise, 7000);
 
     for (const memberId of MEMBER_IDS) {
       const member = settlement.snapshot.members[memberId];
       assert.equal(member.morningCount, 30);
       assert.equal(member.nightCount, 30);
       assert.equal(member.totalPlates, 60);
-      assert.equal(member.billAmountPaise, 330000);
-      assert.equal(member.paidAmountPaise, 330000);
+      assert.equal(member.billAmountPaise, 360000);
+      assert.equal(member.paidAmountPaise, 360000);
       assert.equal(member.remainingAmountPaise, 0);
     }
 
     assert.equal(settlement.snapshot.room.totalPlates, 180);
-    assert.equal(settlement.snapshot.room.billAmountPaise, 990000);
-    assert.equal(settlement.snapshot.room.paidAmountPaise, 990000);
+    assert.equal(settlement.snapshot.room.billAmountPaise, 1080000);
+    assert.equal(settlement.snapshot.room.paidAmountPaise, 1080000);
 
     // Verify Socket.IO broadcast
     assert.equal(settlementBroadcasts.length, 1);
@@ -419,7 +395,7 @@ describe('Phase 10: Closed-Month Mutation Locks', () => {
         paymentId: `pay-settle-${memberId}`,
         month: PAST_MONTH,
         memberId,
-        amountPaise: 330000,
+        amountPaise: 360000,
         status: 'recorded',
         idempotencyKey: `idem-settle-${memberId}`,
         recordedAt: new Date('2026-09-30T10:00:00.000Z'),
@@ -449,13 +425,13 @@ describe('Phase 10: Closed-Month Mutation Locks', () => {
     assert.match(res.body.message, /month is closed.*reopen/i);
   });
 
-  test('rate changes are rejected for closed month with 409 Conflict', async () => {
+  test('plate allocation changes are rejected for closed month with 409 Conflict', async () => {
     const superAdminCookie = await cookieFor(ROLES.SUPERADMIN);
     const res = await request(app)
-      .put(`/api/billing/rates/${PAST_MONTH}`)
+      .put('/api/meals/2026-09-15/morning/allocation')
       .set('Origin', ORIGIN)
       .set('Cookie', superAdminCookie)
-      .send({ morningPricePaise: 6000, nightPricePaise: 7000 })
+      .send({ plates: [{ shares: { gaurav: 6, nikhil: 0, devansh: 0 } }] })
       .expect(409);
 
     assert.equal(res.body.success, false);
@@ -507,35 +483,26 @@ describe('Phase 10: Closed-Month Mutation Locks', () => {
   });
 
   test('current open month operations continue normally', async () => {
-    // Current month meal rate update succeeds
     const superAdminCookie = await cookieFor(ROLES.SUPERADMIN);
-    const rateRes = await request(app)
-      .put(`/api/billing/rates/${CURRENT_MONTH}`)
+    const mealRes = await request(app)
+      .patch('/api/meals/2026-10-05')
       .set('Origin', ORIGIN)
       .set('Cookie', superAdminCookie)
-      .send({ morningPricePaise: 4500, nightPricePaise: 5500 })
+      .send({ mealType: 'morning', memberId: 'gaurav', status: 'skip' })
       .expect(200);
 
-    assert.equal(rateRes.body.success, true);
+    assert.equal(mealRes.body.success, true);
   });
 });
 
 describe('Phase 10: Reopening, Corrections & Historical Versioning', () => {
   beforeEach(async () => {
-    await rateRepository.create({
-      month: PAST_MONTH,
-      morningPricePaise: 5000,
-      nightPricePaise: 6000,
-      revision: 1,
-      changes: [],
-    });
-
     for (const memberId of MEMBER_IDS) {
       await paymentRepository.create({
         paymentId: `pay-settle-${memberId}`,
         month: PAST_MONTH,
         memberId,
-        amountPaise: 330000,
+        amountPaise: 360000,
         status: 'recorded',
         idempotencyKey: `idem-settle-${memberId}`,
         recordedAt: new Date('2026-09-30T10:00:00.000Z'),
@@ -595,8 +562,8 @@ describe('Phase 10: Reopening, Corrections & Historical Versioning', () => {
 
     assert.equal(mealRes.body.success, true);
 
-    // Gaurav skipped 1 night meal (6000 paise).
-    // Now Gaurav has overpaid by 6000 paise!
+    // Gaurav skipped 1 night meal (7000 paise).
+    // Now Gaurav has overpaid by 7000 paise!
     const statusRes = await request(app).get(`/api/settlements/${PAST_MONTH}`).expect(200);
     assert.equal(statusRes.body.data.canClose, false);
     assert.ok(statusRes.body.data.blockers.some((b) => b.type === 'overpayment'));
@@ -609,12 +576,12 @@ describe('Phase 10: Reopening, Corrections & Historical Versioning', () => {
       voidReason: 'Correcting for skipped meal',
     });
 
-    // Re-record exact payment (330000 - 6000 = 324000)
+    // Re-record exact payment (360000 - 7000 = 353000)
     await paymentRepository.create({
       paymentId: 'pay-settle-gaurav-2',
       month: PAST_MONTH,
       memberId: 'gaurav',
-      amountPaise: 324000,
+      amountPaise: 353000,
       status: 'recorded',
       idempotencyKey: 'idem-settle-gaurav-2',
       recordedAt: new Date(),
@@ -635,7 +602,7 @@ describe('Phase 10: Reopening, Corrections & Historical Versioning', () => {
     assert.equal(recloseRes.body.data.sequence, 2);
     assert.equal(recloseRes.body.data.status, 'closed');
     assert.equal(recloseRes.body.data.snapshot.members.gaurav.nightCount, 29);
-    assert.equal(recloseRes.body.data.snapshot.members.gaurav.billAmountPaise, 324000);
+    assert.equal(recloseRes.body.data.snapshot.members.gaurav.billAmountPaise, 353000);
 
     // Verify history returns sequence 2 and sequence 1
     const historyRes = await request(app)
@@ -653,20 +620,12 @@ describe('Phase 10: Reopening, Corrections & Historical Versioning', () => {
 
 describe('Phase 10: PDF & CSV Final Statement Exports', () => {
   beforeEach(async () => {
-    await rateRepository.create({
-      month: PAST_MONTH,
-      morningPricePaise: 5000,
-      nightPricePaise: 6000,
-      revision: 1,
-      changes: [],
-    });
-
     for (const memberId of MEMBER_IDS) {
       await paymentRepository.create({
         paymentId: `pay-settle-${memberId}`,
         month: PAST_MONTH,
         memberId,
-        amountPaise: 330000,
+        amountPaise: 360000,
         status: 'recorded',
         idempotencyKey: `idem-settle-${memberId}`,
         recordedAt: new Date('2026-09-30T10:00:00.000Z'),
@@ -720,7 +679,7 @@ describe('Phase 10: PDF & CSV Final Statement Exports', () => {
 
     // Check header columns
     assert.match(lines[0], /month,settlement_id,settlement_sequence,member_id,member_name/);
-    assert.match(lines[0], /morning_meals,night_meals,total_plates,morning_rate_paise,night_rate_paise/);
+    assert.match(lines[0], /morning_participations,night_participations/);
     assert.match(lines[0], /bill_amount_paise,paid_amount_paise,remaining_amount_paise,status,closed_at/);
 
     // Check member rows
@@ -728,7 +687,7 @@ describe('Phase 10: PDF & CSV Final Statement Exports', () => {
       const memberLine = lines.find((l) => l.includes(member.id));
       assert.ok(memberLine, `Missing CSV row for member ${member.id}`);
       assert.ok(memberLine.includes(member.name));
-      assert.ok(memberLine.includes('330000')); // bill and paid in paise
+      assert.ok(memberLine.includes('360000')); // bill and paid in paise
     }
   });
 

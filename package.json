@@ -15,6 +15,7 @@
     "lint": "eslint frontend/src frontend/test frontend/vite.config.js backend/src backend/scripts backend/test eslint.config.js",
     "test": "npm run test --workspaces --if-present",
     "hash-password": "npm run hash-password --workspace backend",
+    "migrate:user-accounts": "npm run migrate:user-accounts --workspace backend",
     "seed-members": "npm run seed-members --workspace backend",
     "generate-vapid-keys": "npm run generate-vapid-keys --workspace backend",
     "send-push-reminders": "npm run send-push-reminders --workspace backend",

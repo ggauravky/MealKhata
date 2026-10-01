@@ -1,9 +1,21 @@
-import { Check, X } from 'lucide-react';
+import { Check, Utensils, X } from 'lucide-react';
+import { formatPaise } from '../../lib/money.js';
+import { formatPlateFraction } from '../../lib/plates.js';
 
 export function PersonalMealHero({ hero, isOnline = true, pendingRow = '', onChange }) {
   if (!hero) return null;
 
-  const { morning, night, canEdit } = hero;
+  const {
+    morning,
+    night,
+    morningShareUnits = 0,
+    nightShareUnits = 0,
+    morningCostPaise = 0,
+    nightCostPaise = 0,
+    isMorningShared = false,
+    isNightShared = false,
+    canEdit,
+  } = hero;
 
   return (
     <section className="panel personal-hero-card" aria-labelledby="personal-hero-title">
@@ -18,7 +30,15 @@ export function PersonalMealHero({ hero, isOnline = true, pendingRow = '', onCha
         {/* Morning Slot */}
         <div className={`personal-slot personal-slot--${morning}`}>
           <div className="personal-slot__info">
-            <span className="personal-slot__meal">Morning Meal</span>
+            <div className="personal-slot__header-line">
+              <span className="personal-slot__meal">Morning Meal</span>
+              {isMorningShared && (
+                <span className="shared-pill shared-pill--compact" aria-label="Shared physical plate">
+                  <Utensils size={11} aria-hidden="true" /> Shared
+                </span>
+              )}
+            </div>
+
             <strong className={`personal-slot__status status-text--${morning}`}>
               {morning === 'taking' ? (
                 <>
@@ -30,7 +50,22 @@ export function PersonalMealHero({ hero, isOnline = true, pendingRow = '', onCha
                 </>
               )}
             </strong>
+
+            {morning === 'taking' && (
+              <p className="personal-slot__share-detail">
+                {isMorningShared ? (
+                  <>
+                    <span>Your share: <strong>{formatPlateFraction(morningShareUnits)} plate</strong></span>
+                    <span aria-hidden="true"> · </span>
+                    <span className="personal-slot__cost">{formatPaise(morningCostPaise)}</span>
+                  </>
+                ) : (
+                  <span>Cost: <strong>{formatPaise(morningCostPaise || 5000)}</strong></span>
+                )}
+              </p>
+            )}
           </div>
+
           {canEdit && (
             <div className="meal-switch" role="group" aria-label="Morning meal choice">
               <button
@@ -58,7 +93,15 @@ export function PersonalMealHero({ hero, isOnline = true, pendingRow = '', onCha
         {/* Night Slot */}
         <div className={`personal-slot personal-slot--${night}`}>
           <div className="personal-slot__info">
-            <span className="personal-slot__meal">Night Meal</span>
+            <div className="personal-slot__header-line">
+              <span className="personal-slot__meal">Night Meal</span>
+              {isNightShared && (
+                <span className="shared-pill shared-pill--compact" aria-label="Shared physical plate">
+                  <Utensils size={11} aria-hidden="true" /> Shared
+                </span>
+              )}
+            </div>
+
             <strong className={`personal-slot__status status-text--${night}`}>
               {night === 'taking' ? (
                 <>
@@ -70,7 +113,22 @@ export function PersonalMealHero({ hero, isOnline = true, pendingRow = '', onCha
                 </>
               )}
             </strong>
+
+            {night === 'taking' && (
+              <p className="personal-slot__share-detail">
+                {isNightShared ? (
+                  <>
+                    <span>Your share: <strong>{formatPlateFraction(nightShareUnits)} plate</strong></span>
+                    <span aria-hidden="true"> · </span>
+                    <span className="personal-slot__cost">{formatPaise(nightCostPaise)}</span>
+                  </>
+                ) : (
+                  <span>Cost: <strong>{formatPaise(nightCostPaise || 7000)}</strong></span>
+                )}
+              </p>
+            )}
           </div>
+
           {canEdit && (
             <div className="meal-switch" role="group" aria-label="Night meal choice">
               <button

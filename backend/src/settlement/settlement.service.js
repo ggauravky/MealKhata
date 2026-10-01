@@ -141,10 +141,21 @@ export function createSettlementService({
         const toDateMember = report.toDate?.members[memberId] || { morningCount: 0, nightCount: 0, totalMeals: 0, amountPaise: 0 };
         const summaryMember = summary.members[memberId] || { paidAmountPaise: 0 };
 
+        const morningParticipation = toDateMember.morningParticipationCount ?? toDateMember.morningCount ?? 0;
+        const nightParticipation = toDateMember.nightParticipationCount ?? toDateMember.nightCount ?? 0;
+        const morningUnits = toDateMember.morningShareUnits ?? morningParticipation * 6;
+        const nightUnits = toDateMember.nightShareUnits ?? nightParticipation * 6;
+        const totalUnits = toDateMember.totalShareUnits ?? (morningUnits + nightUnits);
+
         members[memberId] = {
-          morningCount: toDateMember.morningCount,
-          nightCount: toDateMember.nightCount,
-          totalPlates: toDateMember.totalMeals,
+          morningCount: morningParticipation,
+          nightCount: nightParticipation,
+          totalPlates: totalUnits / 6,
+          morningParticipationCount: morningParticipation,
+          nightParticipationCount: nightParticipation,
+          morningShareUnits: morningUnits,
+          nightShareUnits: nightUnits,
+          totalShareUnits: totalUnits,
           billAmountPaise: toDateMember.amountPaise,
           paidAmountPaise: summaryMember.paidAmountPaise,
           remainingAmountPaise: 0,
@@ -152,10 +163,19 @@ export function createSettlementService({
       }
 
       const toDateRoom = report.toDate?.room || { morningCount: 0, nightCount: 0, totalMeals: 0, amountPaise: 0 };
+      const roomMorningPlates = toDateRoom.morningPhysicalPlates ?? toDateRoom.morningCount ?? 0;
+      const roomNightPlates = toDateRoom.nightPhysicalPlates ?? toDateRoom.nightCount ?? 0;
+      const roomTotalPlates = toDateRoom.totalPhysicalPlates ?? toDateRoom.totalPlates ?? (roomMorningPlates + roomNightPlates);
+
       const room = {
-        morningCount: toDateRoom.morningCount,
-        nightCount: toDateRoom.nightCount,
-        totalPlates: toDateRoom.totalMeals,
+        morningCount: roomMorningPlates,
+        nightCount: roomNightPlates,
+        totalPlates: roomTotalPlates,
+        morningPhysicalPlates: roomMorningPlates,
+        nightPhysicalPlates: roomNightPlates,
+        totalPhysicalPlates: roomTotalPlates,
+        morningParticipants: toDateRoom.morningParticipants ?? roomMorningPlates,
+        nightParticipants: toDateRoom.nightParticipants ?? roomNightPlates,
         billAmountPaise: toDateRoom.amountPaise,
         paidAmountPaise: summary.room?.paidAmountPaise || 0,
         remainingAmountPaise: 0,
@@ -179,6 +199,7 @@ export function createSettlementService({
           settlementId,
           month,
           sequence,
+          snapshotVersion: 2,
           snapshot,
           closedAt: now(),
           closedByRole: actorRole,

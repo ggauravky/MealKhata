@@ -46,7 +46,7 @@ export function CalendarPage() {
     <div className="page-stack">
       <PageHeader
         title="Calendar"
-        description="Explore each day's Morning and Night meal schedule. Untouched dates use the default Taking schedule."
+        description="Explore each day's Morning and Night kitchen plate requirements. Cells show actual physical plates ordered."
       />
 
       {serverToday.error && <ErrorState title="Calendar unavailable" message={serverToday.error} />}
@@ -60,7 +60,7 @@ export function CalendarPage() {
             </button>
             <div className="month-toolbar__title">
               <h2 id="calendar-month">{formatLogicalMonth(month)}</h2>
-              <span>{calendar.loading ? 'Updating calendar' : 'Monthly meal schedule'}</span>
+              <span>{calendar.loading ? 'Updating calendar' : 'Monthly physical plate schedule'}</span>
             </div>
             <button className="button button--quiet" type="button" onClick={() => moveMonth(1)}>
               Next <ChevronRight size={17} aria-hidden="true" />
@@ -97,6 +97,8 @@ export function CalendarPage() {
                 const isToday = day.date === calendar.data.today;
                 const isSelected = day.date === activeDate;
                 const relation = day.date < calendar.data.today ? 'past' : day.date > calendar.data.today ? 'future' : 'today';
+                const morningPlates = day.counts.morningPhysicalPlates ?? day.counts.morningTaking ?? 0;
+                const nightPlates = day.counts.nightPhysicalPlates ?? day.counts.nightTaking ?? 0;
 
                 return (
                   <button
@@ -105,12 +107,15 @@ export function CalendarPage() {
                     key={day.date}
                     aria-current={isToday ? 'date' : undefined}
                     aria-pressed={isSelected}
-                    aria-label={`${formatLogicalDate(day.date, { day: 'numeric', month: 'long', year: 'numeric' })}. Morning: ${day.counts.morningTaking} plates. Night: ${day.counts.nightTaking} plates.`}
+                    aria-label={`${formatLogicalDate(day.date, { day: 'numeric', month: 'long', year: 'numeric' })}. Morning: ${morningPlates} physical plates. Night: ${nightPlates} physical plates.`}
                     onClick={() => setSelectedDate(day.date)}
                   >
                     <span className="calendar-day__number">{Number(day.date.slice(-2))}</span>
-                    <span><strong>M</strong> {day.counts.morningTaking}</span>
-                    <span><strong>N</strong> {day.counts.nightTaking}</span>
+                    <span><strong>M</strong> {morningPlates}</span>
+                    <span><strong>N</strong> {nightPlates}</span>
+                    {day.hasCustomAllocation && (
+                      <span className="calendar-day__shared-dot" title="Shared plates" aria-hidden="true" />
+                    )}
                     {day.saved && <i aria-label="Saved changes" />}
                   </button>
                 );
@@ -139,10 +144,24 @@ export function CalendarPage() {
             )}
           </div>
           {!activeDay.saved && <p className="default-note">Using default schedule</p>}
-          <PlateSummary meals={activeDay.meals} label={`Plate count for ${activeDay.date}`} />
+          <PlateSummary
+            meals={activeDay.meals}
+            allocations={activeDay.allocations}
+            label={`Physical plate count for ${activeDay.date}`}
+          />
           <div className="meal-card-grid">
-            <MealCard mealType="morning" title="Morning" meals={activeDay.meals.morning} />
-            <MealCard mealType="night" title="Night" meals={activeDay.meals.night} />
+            <MealCard
+              mealType="morning"
+              title="Morning"
+              meals={activeDay.meals.morning}
+              allocation={activeDay.allocations?.morning}
+            />
+            <MealCard
+              mealType="night"
+              title="Night"
+              meals={activeDay.meals.night}
+              allocation={activeDay.allocations?.night}
+            />
           </div>
         </section>
       )}

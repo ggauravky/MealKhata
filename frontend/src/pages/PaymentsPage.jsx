@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, CircleDollarSign, History, WalletCards } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CircleDollarSign, History, Info, WalletCards } from 'lucide-react';
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/common/PageHeader.jsx';
@@ -36,7 +36,10 @@ function MemberPaymentCard({ roommate, member, periodType, role, currentMemberId
     <article className="payment-member-card">
       <div className="payment-member-card__heading">
         <span className={`avatar avatar--${roommate.id}`} aria-hidden="true">{roommate.initial}</span>
-        <div><h3>{roommate.name}</h3><span className={`payment-status payment-status--${member.status}`}>{PAYMENT_STATUS_LABELS[member.status]}</span></div>
+        <div>
+          <h3>{roommate.name}</h3>
+          <span className={`payment-status payment-status--${member.status}`}>{PAYMENT_STATUS_LABELS[member.status]}</span>
+        </div>
       </div>
       <dl className="payment-amounts">
         <div><dt>Bill</dt><dd>{billLabel}</dd></div>
@@ -44,6 +47,10 @@ function MemberPaymentCard({ roommate, member, periodType, role, currentMemberId
         <div><dt>Remaining</dt><dd>{member.billAmountPaise === null ? '—' : formatPaise(member.remainingAmountPaise)}</dd></div>
         {member.overpaidAmountPaise > 0 && <div className="payment-amounts__overpaid"><dt>Overpaid</dt><dd>{formatPaise(member.overpaidAmountPaise)}</dd></div>}
       </dl>
+      <p className="card-note card-note--info">
+        <Info size={13} aria-hidden="true" />
+        Your bill reflects your exact share of physical plates ordered.
+      </p>
       {periodType === 'current' && Number.isSafeInteger(member.projectedBillAmountPaise) && (
         <p className="projection-note">Projected month total: {formatPaise(member.projectedBillAmountPaise)} · not currently due</p>
       )}
@@ -69,7 +76,6 @@ function MemberPaymentCard({ roommate, member, periodType, role, currentMemberId
         </button>
       )}
       {isClosed && <p className="card-note">This month is closed. Reopen this month before making financial changes.</p>}
-      {!isClosed && member.status === 'rates_missing' && <p className="card-note">Payment unavailable until this month&apos;s meal rates are configured.</p>}
       {periodType === 'future' && <p className="card-note">Projected bill: {formatPaise(member.projectedBillAmountPaise)}</p>}
     </article>
   );

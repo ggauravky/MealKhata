@@ -9,12 +9,12 @@ import { LoadingState } from '../components/ui/LoadingState.jsx';
 import { useAuth } from '../hooks/useAuth.js';
 import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
 import { useMonthlyReport } from '../hooks/useMonthlyReport.js';
-import { useSettlement } from '../hooks/useSettlement.js';
 import { useServerToday } from '../hooks/useServerToday.js';
-import { api } from '../lib/api.js';
+import { useSettlement } from '../hooks/useSettlement.js';
 import { formatLogicalDate } from '../lib/logicalDate.js';
 import { addLogicalMonths, formatLogicalMonth, isValidLogicalMonth } from '../lib/logicalMonth.js';
-import { formatPaise, paiseToRupeeInput, rupeesToPaise } from '../lib/money.js';
+import { formatPaise } from '../lib/money.js';
+import { MORNING_PRICE_PAISE, NIGHT_PRICE_PAISE } from '../lib/plates.js';
 
 const periodLabels = {
   past: 'Past month',
@@ -29,9 +29,6 @@ export function ReportsPage() {
   const [searchParams] = useSearchParams();
   const queryMonth = searchParams.get('month');
   const [selectedMonth, setSelectedMonth] = useState('');
-  const [savingRates, setSavingRates] = useState(false);
-  const [rateError, setRateError] = useState('');
-  const [rateMessage, setRateMessage] = useState('');
   const month = selectedMonth || (isValidLogicalMonth(queryMonth) ? queryMonth : serverToday.date.slice(0, 7));
   const report = useMonthlyReport(month);
   const settlement = useSettlement(month);
@@ -42,43 +39,49 @@ export function ReportsPage() {
     }
   };
 
-  const handleRateSubmit = async (event) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const morningPricePaise = rupeesToPaise(form.get('morningPrice'));
-    const nightPricePaise = rupeesToPaise(form.get('nightPrice'));
-
-    setRateError('');
-    setRateMessage('');
-
-    if (morningPricePaise === null || nightPricePaise === null) {
-      setRateError('Enter valid rupee amounts with no more than two decimal places.');
-      return;
-    }
-
-    setSavingRates(true);
-    try {
-      const response = await api.put(`/api/billing/rates/${month}`, {
-        morningPricePaise,
-        nightPricePaise,
-      });
-      setRateMessage(response.changed ? 'Meal rates saved.' : 'Meal rates are already up to date.');
-      report.refresh();
-    } catch {
-      setRateError('Unable to save meal rates. Please try again.');
-    } finally {
-      setSavingRates(false);
-    }
-  };
-
   const data = report.data;
   const monthLabel = formatLogicalMonth(month);
+
+  const getPastSummary = () => {
+    if (!settlement.isClosed || !settlement.status?.activeSettlement) {
+      return data.toDate;
+    }
+
+    const snapshot = settlement.status.activeSettlement.snapshot;
+    if (snapshot.snapshotVersion === 2) {
+      return {
+        members: snapshot.members,
+        room: snapshot.room,
+      };
+    }
+
+    // Legacy Snapshot v1
+    return {
+      members: Object.fromEntries(
+        Object.entries(snapshot.members).map(([id, m]) => [
+          id,
+          {
+            morningCount: m.morningCount,
+            nightCount: m.nightCount,
+            totalMeals: m.totalPlates,
+            amountPaise: m.billAmountPaise,
+          },
+        ]),
+      ),
+      room: {
+        morningCount: snapshot.room.morningCount,
+        nightCount: snapshot.room.nightCount,
+        totalMeals: snapshot.room.totalPlates,
+        amountPaise: snapshot.room.billAmountPaise,
+      },
+    };
+  };
 
   return (
     <div className="page-stack">
       <PageHeader
         title="Monthly Report"
-        description="Person-wise meal counts and bills calculated from the authoritative daily schedule."
+        description="Person-wise meal counts, plate shares, and bills calculated from daily physical plate allocations."
       />
 
       {serverToday.error && <ErrorState title="Report unavailable" message={serverToday.error} />}
@@ -111,38 +114,31 @@ export function ReportsPage() {
 
       {data && (
         <>
-          <section className="panel rate-panel" aria-labelledby="meal-rates-title">
+          {/* Permanent Fixed Meal Price Reference */}
+          <section className="panel rate-panel rate-panel--fixed" aria-labelledby="meal-rates-title">
             <div className="rate-panel__summary">
               <div>
-                <p className="page-heading__eyebrow">{periodLabels[data.periodType]}</p>
-                <h2 id="meal-rates-title">Meal Rates</h2>
-                {data.rates.configured ? (
-                  <p>Morning {formatPaise(data.rates.morningPricePaise)} <span aria-hidden="true">•</span> Night {formatPaise(data.rates.nightPricePaise)}</p>
-                ) : (
-                  <p>Meal rates have not been configured for {monthLabel}. Amounts cannot be calculated yet.</p>
-                )}
+                <p className="page-heading__eyebrow">Product Pricing</p>
+                <h2 id="meal-rates-title">Fixed Meal Prices</h2>
+                <p>Prices are permanent product constants per physical plate.</p>
               </div>
             </div>
 
-            {settlement.isClosed ? (
+            <div className="fixed-rate-grid">
+              <div className="fixed-rate-card fixed-rate-card--morning">
+                <span className="fixed-rate-card__label">Morning Plate</span>
+                <strong className="fixed-rate-card__price">{formatPaise(MORNING_PRICE_PAISE)}</strong>
+                <span className="fixed-rate-card__note">per physical plate</span>
+              </div>
+              <div className="fixed-rate-card fixed-rate-card--night">
+                <span className="fixed-rate-card__label">Night Plate</span>
+                <strong className="fixed-rate-card__price">{formatPaise(NIGHT_PRICE_PAISE)}</strong>
+                <span className="fixed-rate-card__note">per physical plate</span>
+              </div>
+            </div>
+            {settlement.isClosed && (
               <p className="card-note">This month is closed. Reopen the month before changing meal rates.</p>
-            ) : (
-              auth.role === 'superadmin' && (
-                <form className="rate-form" key={`${month}-${data.rates.revision}`} onSubmit={handleRateSubmit}>
-                  <label>
-                    <span>Morning meal price (₹)</span>
-                    <input name="morningPrice" inputMode="decimal" defaultValue={paiseToRupeeInput(data.rates.morningPricePaise)} placeholder="50" required />
-                  </label>
-                  <label>
-                    <span>Night meal price (₹)</span>
-                    <input name="nightPrice" inputMode="decimal" defaultValue={paiseToRupeeInput(data.rates.nightPricePaise)} placeholder="60" required />
-                  </label>
-                  <button className="button button--primary" type="submit" disabled={savingRates}>{savingRates ? 'Saving' : 'Save rates'}</button>
-                </form>
-              )
             )}
-            {rateError && <ErrorState compact title="Rates not saved" message={rateError} />}
-            <p className="save-feedback" role="status" aria-live="polite">{rateMessage}</p>
           </section>
 
           {data.periodType === 'past' && (
@@ -165,32 +161,11 @@ export function ReportsPage() {
             <ReportSummary
               title={`${monthLabel} total`}
               description={settlement.isClosed ? 'Frozen accounting statement' : 'Completed calendar month'}
-              summary={
-                settlement.isClosed && settlement.status?.activeSettlement
-                  ? {
-                      members: Object.fromEntries(
-                        Object.entries(settlement.status.activeSettlement.snapshot.members).map(([id, m]) => [
-                          id,
-                          {
-                            morningCount: m.morningCount,
-                            nightCount: m.nightCount,
-                            totalMeals: m.totalPlates,
-                            amountPaise: m.billAmountPaise,
-                          },
-                        ]),
-                      ),
-                      room: {
-                        morningCount: settlement.status.activeSettlement.snapshot.room.morningCount,
-                        nightCount: settlement.status.activeSettlement.snapshot.room.nightCount,
-                        totalMeals: settlement.status.activeSettlement.snapshot.room.totalPlates,
-                        amountPaise: settlement.status.activeSettlement.snapshot.room.billAmountPaise,
-                      },
-                    }
-                  : data.toDate
-              }
+              summary={getPastSummary()}
               isClosed={settlement.isClosed}
             />
           )}
+
           {data.periodType === 'current' && (
             <>
               <ReportSummary
@@ -198,15 +173,23 @@ export function ReportsPage() {
                 description="Future days are excluded from this total"
                 summary={data.toDate}
               />
-              <ReportSummary title={`Projected ${monthLabel} total`} description="Full calendar month using the current schedule" summary={data.projection} />
+              <ReportSummary
+                title={`Projected ${monthLabel} total`}
+                description="Full calendar month using the current schedule and shared plate plans"
+                summary={data.projection}
+              />
             </>
           )}
+
           {data.periodType === 'future' && (
-            <ReportSummary title={`Projected ${monthLabel} total`} description="Projection only—not an amount due" summary={data.projection} />
+            <ReportSummary
+              title={`Projected ${monthLabel} total`}
+              description="Projection only—not an amount due"
+              summary={data.projection}
+            />
           )}
         </>
       )}
     </div>
   );
 }
-

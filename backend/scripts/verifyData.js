@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { env } from '../src/config/env.js';
+import { connectDatabase, disconnectDatabase } from '../src/config/db.js';
 import { MEMBER_IDS } from '../src/config/members.js';
 import { isValidLogicalDate } from '../src/utils/date.js';
 import { isValidLogicalMonth } from '../src/utils/month.js';
@@ -14,7 +15,86 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
 
   const db = dbConnection.db;
 
-  // 1. Member Accounts Check
+  // 1. User Accounts Check
+  try {
+    const userAccounts = await db.collection('user_accounts').find({}).toArray();
+    let userIssues = 0;
+    const seenUserIds = new Set();
+    const seenEmails = new Set();
+    const seenMemberIds = new Set();
+
+    for (const u of userAccounts) {
+      if (!isValidUuid(u.userId)) {
+        issues.push(`[user_accounts] Invalid userId UUID for user: ${u.email || u._id}`);
+        userIssues++;
+      }
+      if (seenUserIds.has(u.userId)) {
+        issues.push(`[user_accounts] Duplicate userId found: ${u.userId}`);
+        userIssues++;
+      }
+      seenUserIds.add(u.userId);
+
+      const normalizedEmail = u.email?.trim().toLowerCase();
+      if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+        issues.push(`[user_accounts] Invalid email format for user: ${u.userId}`);
+        userIssues++;
+      }
+      if (seenEmails.has(normalizedEmail)) {
+        issues.push(`[user_accounts] Duplicate email found: ${normalizedEmail}`);
+        userIssues++;
+      }
+      seenEmails.add(normalizedEmail);
+
+      if (!['member', 'admin', 'superadmin'].includes(u.role)) {
+        issues.push(`[user_accounts] Invalid role ${u.role} for user: ${normalizedEmail}`);
+        userIssues++;
+      }
+
+      if (u.role === 'member') {
+        if (!MEMBER_IDS.includes(u.memberId)) {
+          issues.push(`[user_accounts] Member role must have valid memberId: ${u.memberId} for ${normalizedEmail}`);
+          userIssues++;
+        }
+        if (seenMemberIds.has(u.memberId)) {
+          issues.push(`[user_accounts] Duplicate active memberId mapping: ${u.memberId}`);
+          userIssues++;
+        }
+        seenMemberIds.add(u.memberId);
+      } else {
+        if (u.memberId !== null && u.memberId !== undefined) {
+          issues.push(`[user_accounts] Role ${u.role} must have memberId null, got: ${u.memberId}`);
+          userIssues++;
+        }
+      }
+
+      if (typeof u.active !== 'boolean') {
+        issues.push(`[user_accounts] active must be boolean for ${normalizedEmail}`);
+        userIssues++;
+      }
+
+      if (typeof u.sessionVersion !== 'number' || u.sessionVersion < 0 || !Number.isInteger(u.sessionVersion)) {
+        issues.push(`[user_accounts] sessionVersion must be nonnegative integer for ${normalizedEmail}`);
+        userIssues++;
+      }
+
+      // Validate bcrypt cost 12 without printing hash
+      if (!u.passwordHash || !/^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(u.passwordHash)) {
+        issues.push(`[user_accounts] Invalid password hash format for ${normalizedEmail}`);
+        userIssues++;
+      }
+    }
+
+    checks.push({
+      name: 'User Accounts',
+      recordsChecked: userAccounts.length,
+      status: userIssues === 0 ? 'PASS' : 'FAIL',
+      issues: userIssues,
+    });
+  } catch (error) {
+    checks.push({ name: 'User Accounts', status: 'FAIL', issues: 1, message: error.message });
+  }
+
+  // 1b. Legacy Member Accounts Check (Audit)
   try {
     const members = await db.collection('member_accounts').find({}).toArray();
     let memberIssues = 0;
@@ -38,13 +118,13 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
     }
 
     checks.push({
-      name: 'Member Accounts',
+      name: 'Legacy Member Accounts',
       recordsChecked: members.length,
       status: memberIssues === 0 ? 'PASS' : 'FAIL',
       issues: memberIssues,
     });
   } catch (error) {
-    checks.push({ name: 'Member Accounts', status: 'FAIL', issues: 1, message: error.message });
+    checks.push({ name: 'Legacy Member Accounts', status: 'FAIL', issues: 1, message: error.message });
   }
 
   // 2. Meal Days Check
@@ -71,6 +151,41 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
           if (status && !MEAL_STATUSES.includes(status)) {
             issues.push(`[meal_days] Invalid status ${status} for ${memberId} on ${md.date}`);
             mealIssues++;
+          }
+        }
+
+        // Plate allocation invariants
+        const alloc = md.allocations?.[mealType];
+        if (alloc && alloc.mode === 'custom') {
+          if (!Array.isArray(alloc.plates) || alloc.plates.length > 3) {
+            issues.push(`[meal_days] Invalid custom plate allocation count on ${md.date} (${mealType})`);
+            mealIssues++;
+          } else {
+            const memberTotalUnits = { gaurav: 0, nikhil: 0, devansh: 0 };
+            for (let i = 0; i < alloc.plates.length; i++) {
+              const p = alloc.plates[i];
+              let plateUnits = 0;
+              for (const memberId of MEMBER_IDS) {
+                const units = p.shares?.[memberId] ?? 0;
+                if (!Number.isInteger(units) || units < 0 || units > 6) {
+                  issues.push(`[meal_days] Plate #${i + 1} on ${md.date} (${mealType}) invalid units for ${memberId}: ${units}`);
+                  mealIssues++;
+                }
+                plateUnits += units;
+                memberTotalUnits[memberId] += units;
+              }
+              if (plateUnits !== 6) {
+                issues.push(`[meal_days] Plate #${i + 1} on ${md.date} (${mealType}) total units must equal 6, got ${plateUnits}`);
+                mealIssues++;
+              }
+            }
+
+            for (const memberId of MEMBER_IDS) {
+              if (memberTotalUnits[memberId] > 6) {
+                issues.push(`[meal_days] Member ${memberId} total units exceed 6 on ${md.date} (${mealType}): ${memberTotalUnits[memberId]}`);
+                mealIssues++;
+              }
+            }
           }
         }
       }
@@ -296,7 +411,7 @@ if (process.argv[1] && process.argv[1].endsWith('verifyData.js')) {
 
   console.info('Connecting to MongoDB for read-only data consistency audit...');
   try {
-    await mongoose.connect(env.mongoUri, { serverSelectionTimeoutMS: 10_000 });
+    await connectDatabase();
     const { passed, checks, issues } = await verifyDataIntegrity(mongoose.connection);
 
     console.info('\n--- Data Consistency Report ---');
@@ -314,7 +429,7 @@ if (process.argv[1] && process.argv[1].endsWith('verifyData.js')) {
       console.info('');
     }
 
-    await mongoose.disconnect();
+    await disconnectDatabase();
 
     if (!passed) {
       console.error('Data consistency audit failed.');

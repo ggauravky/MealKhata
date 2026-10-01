@@ -76,14 +76,17 @@ export function createViewerAuth() {
   };
 }
 
-export function createAuthenticatedSession(role, { memberId = null } = {}) {
+export function createAuthenticatedSession(role, { memberId = null, displayName = null } = {}) {
   const member = memberId ? MEMBERS.find((item) => item.id === memberId) : null;
+  const resolvedDisplayName = displayName || (member ? member.name : null);
 
   return {
     authenticated: true,
     role,
     ...(role === ROLES.MEMBER && memberId
-      ? { memberId, displayName: member?.name ?? memberId }
+      ? { memberId, displayName: resolvedDisplayName ?? memberId }
+      : resolvedDisplayName
+      ? { displayName: resolvedDisplayName }
       : {}),
     capabilities: getRoleCapabilities(role),
   };

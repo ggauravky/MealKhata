@@ -136,14 +136,6 @@ describe('Phase 11: Dashboard API - Viewer Experience', () => {
 
 describe('Phase 11: Dashboard API - Member Personalization', () => {
   test('Member Gaurav receives personal hero, personal month, and payment status', async () => {
-    // Configure rates for 2026-10: morning 5000 paise (50), night 6000 paise (60)
-    await rateService.updateRate({
-      month: '2026-10',
-      morningPricePaise: 5000,
-      nightPricePaise: 6000,
-      actorRole: ROLES.SUPERADMIN,
-    });
-
     const cookie = await cookieFor(ROLES.MEMBER, 'gaurav');
     const res = await request(testApp)
       .get('/api/dashboard')
@@ -168,18 +160,18 @@ describe('Phase 11: Dashboard API - Member Personalization', () => {
     // Personal monthly financial stats
     assert.ok(data.currentMonth.personal);
     assert.equal(data.currentMonth.personal.memberId, 'gaurav');
-    // On Oct 1st, 1 morning + 1 night = 11000 paise (Rs 110)
+    // On Oct 1st, 1 morning (50) + 1 night (70) = 12000 paise (Rs 120)
     assert.equal(data.currentMonth.personal.morningCount, 1);
     assert.equal(data.currentMonth.personal.nightCount, 1);
     assert.equal(data.currentMonth.personal.totalPlates, 2);
-    assert.equal(data.currentMonth.personal.billAmountPaise, 11000);
+    assert.equal(data.currentMonth.personal.billAmountPaise, 12000);
     assert.equal(data.currentMonth.personal.paidAmountPaise, 0);
-    assert.equal(data.currentMonth.personal.remainingAmountPaise, 11000);
+    assert.equal(data.currentMonth.personal.remainingAmountPaise, 12000);
 
     // Attention item for outstanding balance
     assert.ok(data.attention.some((att) => att.id === 'payment_due'));
     const dueAtt = data.attention.find((att) => att.id === 'payment_due');
-    assert.match(dueAtt.message, /110/);
+    assert.match(dueAtt.message, /120/);
     assert.equal(dueAtt.link, '/payments?month=2026-10');
   });
 
@@ -207,8 +199,7 @@ describe('Phase 11: Dashboard API - Member Personalization', () => {
     assert.equal(res.body.data.identity.memberId, 'gaurav');
   });
 
-  test('Missing rates are clearly reported without becoming fake zero rupees', async () => {
-    // 2026-10 has no rates configured
+  test('Fixed rates mean dashboard always has accurate pricing and never reports rates_missing', async () => {
     const cookie = await cookieFor(ROLES.MEMBER, 'gaurav');
     const res = await request(testApp)
       .get('/api/dashboard')
@@ -217,12 +208,9 @@ describe('Phase 11: Dashboard API - Member Personalization', () => {
       .expect(200);
 
     const personal = res.body.data.currentMonth.personal;
-    assert.equal(personal.billAmountPaise, null);
-    assert.equal(personal.remainingAmountPaise, null);
-    assert.equal(personal.status, 'rates_missing');
-
-    // Attention item for pending rates
-    assert.ok(res.body.data.attention.some((att) => att.id === 'rates_missing'));
+    assert.equal(personal.billAmountPaise, 12000);
+    assert.notEqual(personal.status, 'rates_missing');
+    assert.ok(!res.body.data.attention.some((att) => att.id === 'rates_missing'));
   });
 });
 
@@ -245,7 +233,7 @@ describe('Phase 11: Dashboard API - Admin & Super Admin Experience', () => {
     assert.ok(data.quickActions.some((a) => a.id === 'manage-today' && a.to.includes('2026-10-01')));
   });
 
-  test('Super Admin receives operational attention items for missing rates and settlements', async () => {
+  test('Super Admin receives operational quick actions and settlement reminders', async () => {
     const cookie = await cookieFor(ROLES.SUPERADMIN);
     const res = await request(testApp)
       .get('/api/dashboard')
@@ -256,11 +244,6 @@ describe('Phase 11: Dashboard API - Admin & Super Admin Experience', () => {
     const data = res.body.data;
     assert.equal(data.identity.role, 'superadmin');
     assert.match(data.greeting, /Super Admin/);
-
-    // Missing rates attention item for Super Admin has action "Set Rates"
-    const ratesAtt = data.attention.find((att) => att.id === 'rates_missing');
-    assert.ok(ratesAtt);
-    assert.equal(ratesAtt.actionLabel, 'Set Rates');
 
     // Quick actions include settlement and reminders
     assert.ok(data.quickActions.some((a) => a.id === 'settlement'));

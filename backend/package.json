@@ -9,6 +9,7 @@
     "start": "node src/server.js",
     "test": "node --test --import ./test/setup-env.js test/*.test.js",
     "hash-password": "node scripts/hashPassword.js",
+    "migrate:user-accounts": "node scripts/migrateUserAccounts.js",
     "seed-members": "node scripts/seedMemberAccounts.js",
     "generate-vapid-keys": "node scripts/generateVapidKeys.js",
     "send-push-reminders": "node scripts/sendPushReminders.js",

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import mongoose from 'mongoose';
 import { env } from '../src/config/env.js';
+import { connectDatabase, disconnectDatabase } from '../src/config/db.js';
 import { createEncryptedBackup } from '../src/backup/backupEngine.js';
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -23,7 +24,7 @@ async function run() {
   }
 
   console.info('Connecting to MongoDB for export...');
-  await mongoose.connect(env.mongoUri, { serverSelectionTimeoutMS: 10_000 });
+  await connectDatabase();
 
   try {
     await fs.mkdir(backupsDir, { recursive: true });
@@ -52,7 +53,7 @@ async function run() {
     }
     console.info('');
   } finally {
-    await mongoose.disconnect();
+    await disconnectDatabase();
   }
 }
 

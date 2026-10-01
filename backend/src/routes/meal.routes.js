@@ -23,6 +23,14 @@ function validateDate(req, res, next) {
   return next();
 }
 
+function validateMealType(req, res, next) {
+  if (!MEAL_TYPES.includes(req.params.mealType)) {
+    return reject(res, 'Invalid meal type.');
+  }
+
+  return next();
+}
+
 function validateMealChange(req, res, next) {
   const body = req.body;
 
@@ -85,6 +93,7 @@ function withPermissions(data, req, now, timezone) {
     ...data,
     permissions: {
       canEdit: isDateEditable && editableMemberIds.length > 0,
+      canConfigureAllocation: isDateEditable && (req.auth?.role === ROLES.SUPERADMIN || req.auth?.role === ROLES.ADMIN),
       editableMemberIds,
     },
   };
@@ -118,6 +127,95 @@ export function createMealRouter({
     return res.json({ success: true, data });
   });
 
+  router.put(
+    '/:date/:mealType/allocation',
+    requireAdminOrAbove,
+    validateDate,
+    validateMealType,
+    authorizeLogicalDate({ source: 'params', now, timeZone: timezone }),
+    async (req, res, next) => {
+      try {
+        const month = req.params.date.slice(0, 7);
+        if (settlements && (await settlements.isMonthClosed(month))) {
+          return res.status(409).json({
+            success: false,
+            message: 'This month is closed. Reopen the month before changing plate allocation.',
+          });
+        }
+
+        const result = await service.setAllocation({
+          date: req.logicalDate,
+          mealType: req.params.mealType,
+          allocation: req.body,
+          actorRole: req.auth.role,
+          actorMemberId: req.auth.role === ROLES.MEMBER ? req.auth.memberId : null,
+        });
+
+        if (result.changed) {
+          broadcast({
+            date: result.data.date,
+            mealType: req.params.mealType,
+            allocationChanged: true,
+            revision: result.data.revision,
+            updatedAt: result.data.updatedAt,
+          });
+        }
+
+        return res.json({
+          success: true,
+          changed: result.changed,
+          data: withPermissions(result.data, req, now(), timezone),
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.delete(
+    '/:date/:mealType/allocation',
+    requireAdminOrAbove,
+    validateDate,
+    validateMealType,
+    authorizeLogicalDate({ source: 'params', now, timeZone: timezone }),
+    async (req, res, next) => {
+      try {
+        const month = req.params.date.slice(0, 7);
+        if (settlements && (await settlements.isMonthClosed(month))) {
+          return res.status(409).json({
+            success: false,
+            message: 'This month is closed. Reopen the month before changing plate allocation.',
+          });
+        }
+
+        const result = await service.clearAllocation({
+          date: req.logicalDate,
+          mealType: req.params.mealType,
+          actorRole: req.auth.role,
+          actorMemberId: req.auth.role === ROLES.MEMBER ? req.auth.memberId : null,
+        });
+
+        if (result.changed) {
+          broadcast({
+            date: result.data.date,
+            mealType: req.params.mealType,
+            allocationChanged: true,
+            revision: result.data.revision,
+            updatedAt: result.data.updatedAt,
+          });
+        }
+
+        return res.json({
+          success: true,
+          changed: result.changed,
+          data: withPermissions(result.data, req, now(), timezone),
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
   router.patch(
     '/:date',
     requireAuthenticated,
@@ -142,20 +240,25 @@ export function createMealRouter({
           actorMemberId: req.auth.role === ROLES.MEMBER ? req.auth.memberId : null,
         });
 
-      if (result.changed) {
-        broadcast({
-          date: result.data.date,
-          mealType: req.mealChange.mealType,
-          memberId: req.mealChange.memberId,
-          status: req.mealChange.status,
-          revision: result.data.revision,
-          updatedAt: result.data.updatedAt,
-        });
-      }
+        if (result.changed) {
+          const payload = {
+            date: result.data.date,
+            mealType: req.mealChange.mealType,
+            memberId: req.mealChange.memberId,
+            status: req.mealChange.status,
+            revision: result.data.revision,
+            updatedAt: result.data.updatedAt,
+          };
+          if (result.allocationReset) {
+            payload.allocationChanged = true;
+          }
+          broadcast(payload);
+        }
 
         return res.json({
           success: true,
           changed: result.changed,
+          allocationReset: Boolean(result.allocationReset),
           data: withPermissions(result.data, req, now(), timezone),
         });
       } catch (error) {

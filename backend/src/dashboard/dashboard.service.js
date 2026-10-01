@@ -2,6 +2,12 @@ import { ROLES } from '../auth/permissions.js';
 import { env, isPushConfigured } from '../config/env.js';
 import { MEMBERS } from '../config/members.js';
 import { mealService as defaultMealService } from '../meals/meal.service.js';
+import {
+  calculateMemberShareUnits,
+  getEffectiveMealAllocation,
+  splitMealCost,
+} from '../meals/plateAllocation.service.js';
+import { MEAL_PRICES } from '../meals/plateAllocation.constants.js';
 import { paymentSummaryService as defaultPaymentSummaryService } from '../payments/paymentSummary.service.js';
 import { getLogicalTimeInTimeZone } from '../push/reminderDispatch.service.js';
 import { reportService as defaultReportService } from '../reports/report.service.js';
@@ -87,19 +93,60 @@ export function createDashboardService({
         devansh: defaultMealStatus,
       };
 
-      const morningPlates = MEMBERS.filter((m) => morningMeals[m.id] === 'taking').length;
-      const nightPlates = MEMBERS.filter((m) => nightMeals[m.id] === 'taking').length;
+      const morningAllocation = getEffectiveMealAllocation({
+        statuses: morningMeals,
+        customAllocation: todayDay?.allocations?.morning,
+      });
+
+      const nightAllocation = getEffectiveMealAllocation({
+        statuses: nightMeals,
+        customAllocation: todayDay?.allocations?.night,
+      });
+
+      const morningUnits = calculateMemberShareUnits(morningAllocation);
+      const nightUnits = calculateMemberShareUnits(nightAllocation);
+
+      const morningCost = splitMealCost({
+        date: today,
+        mealType: 'morning',
+        effectiveAllocation: morningAllocation,
+        pricePaise: MEAL_PRICES.morning,
+      });
+
+      const nightCost = splitMealCost({
+        date: today,
+        mealType: 'night',
+        effectiveAllocation: nightAllocation,
+        pricePaise: MEAL_PRICES.night,
+      });
+
+      const morningEating = MEMBERS.filter((m) => morningMeals[m.id] === 'taking').length;
+      const nightEating = MEMBERS.filter((m) => nightMeals[m.id] === 'taking').length;
+      const morningPlates = morningAllocation.plates.length;
+      const nightPlates = nightAllocation.plates.length;
       const totalPlatesToday = morningPlates + nightPlates;
 
-      const memberPlates = MEMBERS.map((m) => ({
-        memberId: m.id,
-        name: m.name,
-        morning: morningMeals[m.id] || defaultMealStatus,
-        night: nightMeals[m.id] || defaultMealStatus,
-        plates:
-          (morningMeals[m.id] === 'taking' ? 1 : 0) +
-          (nightMeals[m.id] === 'taking' ? 1 : 0),
-      }));
+      const memberPlates = MEMBERS.map((m) => {
+        const mUnits = morningUnits[m.id] ?? 0;
+        const nUnits = nightUnits[m.id] ?? 0;
+        const totalUnits = mUnits + nUnits;
+        const mCost = morningCost.members[m.id]?.amountPaise ?? 0;
+        const nCost = nightCost.members[m.id]?.amountPaise ?? 0;
+
+        return {
+          memberId: m.id,
+          name: m.name,
+          morning: morningMeals[m.id] || defaultMealStatus,
+          night: nightMeals[m.id] || defaultMealStatus,
+          morningShareUnits: mUnits,
+          nightShareUnits: nUnits,
+          totalShareUnits: totalUnits,
+          morningCostPaise: mCost,
+          nightCostPaise: nCost,
+          totalCostPaise: mCost + nCost,
+          plates: totalUnits / 6,
+        };
+      });
 
       const canEdit = canEditDate({
         role: actorRole,
@@ -118,11 +165,25 @@ export function createDashboardService({
       // 2. Member Hero (Personal meals today)
       let personalHero = null;
       if (actorRole === ROLES.MEMBER && actorMemberId) {
+        const mUnits = morningUnits[actorMemberId] ?? 0;
+        const nUnits = nightUnits[actorMemberId] ?? 0;
+        const mCost = morningCost.members[actorMemberId]?.amountPaise ?? 0;
+        const nCost = nightCost.members[actorMemberId]?.amountPaise ?? 0;
+
         personalHero = {
           memberId: actorMemberId,
           displayName,
           morning: morningMeals[actorMemberId] || defaultMealStatus,
           night: nightMeals[actorMemberId] || defaultMealStatus,
+          morningShareUnits: mUnits,
+          nightShareUnits: nUnits,
+          morningPlateEquivalent: mUnits / 6,
+          nightPlateEquivalent: nUnits / 6,
+          morningCostPaise: mCost,
+          nightCostPaise: nCost,
+          totalCostPaise: mCost + nCost,
+          isMorningShared: morningAllocation.source === 'custom',
+          isNightShared: nightAllocation.source === 'custom',
           canEdit,
         };
       }
@@ -142,13 +203,10 @@ export function createDashboardService({
         errors.paymentSummary = paymentSummaryResult.reason?.message || 'Failed to fetch payment summary';
       }
 
-      const ratesConfigured = Boolean(report?.rates?.configured);
-      const rates = ratesConfigured
-        ? {
-            morningPricePaise: report.rates.morningPricePaise,
-            nightPricePaise: report.rates.nightPricePaise,
-          }
-        : null;
+      const rates = {
+        morningPricePaise: MEAL_PRICES.morning,
+        nightPricePaise: MEAL_PRICES.night,
+      };
 
       let personalMonthly = null;
       if (actorRole === ROLES.MEMBER && actorMemberId) {
@@ -161,15 +219,18 @@ export function createDashboardService({
           monthLabel: formatLogicalMonth(currentMonth),
           memberId: actorMemberId,
           displayName,
-          morningCount: repToDate?.morningCount ?? 0,
-          nightCount: repToDate?.nightCount ?? 0,
-          totalPlates: repToDate?.totalMeals ?? 0,
-          billAmountPaise: ratesConfigured ? (payMem?.billAmountPaise ?? null) : null,
+          morningCount: repToDate?.morningParticipationCount ?? repToDate?.morningCount ?? 0,
+          nightCount: repToDate?.nightParticipationCount ?? repToDate?.nightCount ?? 0,
+          morningShareUnits: repToDate?.morningShareUnits ?? 0,
+          nightShareUnits: repToDate?.nightShareUnits ?? 0,
+          totalShareUnits: repToDate?.totalShareUnits ?? 0,
+          totalPlates: repToDate?.totalPlateEquivalent ?? repToDate?.totalPlates ?? 0,
+          billAmountPaise: payMem?.billAmountPaise ?? 0,
           paidAmountPaise: payMem?.paidAmountPaise ?? 0,
-          remainingAmountPaise: ratesConfigured ? (payMem?.remainingAmountPaise ?? null) : null,
+          remainingAmountPaise: payMem?.remainingAmountPaise ?? 0,
           overpaidAmountPaise: payMem?.overpaidAmountPaise ?? 0,
-          projectedBillAmountPaise: ratesConfigured ? (payMem?.projectedBillAmountPaise ?? repProj?.amountPaise ?? null) : null,
-          status: payMem?.status ?? (ratesConfigured ? 'no_due' : 'rates_missing'),
+          projectedBillAmountPaise: payMem?.projectedBillAmountPaise ?? repProj?.amountPaise ?? 0,
+          status: payMem?.status ?? 'no_due',
         };
       }
 
@@ -182,15 +243,17 @@ export function createDashboardService({
         householdMonthly = {
           month: currentMonth,
           monthLabel: formatLogicalMonth(currentMonth),
-          morningCount: roomToDate?.morningCount ?? 0,
-          nightCount: roomToDate?.nightCount ?? 0,
-          totalPlates: roomToDate?.totalMeals ?? 0,
-          billAmountPaise: ratesConfigured ? (roomPay?.billAmountPaise ?? null) : null,
-          projectedBillAmountPaise: ratesConfigured ? (roomPay?.projectedBillAmountPaise ?? roomProj?.amountPaise ?? null) : null,
+          morningCount: roomToDate?.morningPhysicalPlates ?? roomToDate?.morningCount ?? 0,
+          nightCount: roomToDate?.nightPhysicalPlates ?? roomToDate?.nightCount ?? 0,
+          totalPlates: roomToDate?.totalPhysicalPlates ?? roomToDate?.totalPlates ?? 0,
+          morningParticipants: roomToDate?.morningParticipants ?? 0,
+          nightParticipants: roomToDate?.nightParticipants ?? 0,
+          billAmountPaise: roomPay?.billAmountPaise ?? 0,
+          projectedBillAmountPaise: roomPay?.projectedBillAmountPaise ?? roomProj?.amountPaise ?? 0,
           paidAmountPaise: roomPay?.paidAmountPaise ?? 0,
-          remainingAmountPaise: ratesConfigured ? (roomPay?.remainingAmountPaise ?? null) : null,
+          remainingAmountPaise: roomPay?.remainingAmountPaise ?? 0,
           overpaidAmountPaise: roomPay?.overpaidAmountPaise ?? 0,
-          ratesConfigured,
+          ratesConfigured: true,
         };
       }
 
@@ -289,42 +352,7 @@ export function createDashboardService({
         }
       }
 
-      // Priority 2: Missing rates for current month
-      if (!ratesConfigured) {
-        if (actorRole === ROLES.SUPERADMIN) {
-          attention.push({
-            id: 'rates_missing',
-            type: 'configuration',
-            priority: 2,
-            title: 'Meal Rates Missing',
-            message: `Action needed: Configure ${formatLogicalMonth(currentMonth)} meal rates.`,
-            link: `/reports?month=${currentMonth}`,
-            actionLabel: 'Set Rates',
-          });
-        } else if (actorRole === ROLES.ADMIN) {
-          attention.push({
-            id: 'rates_missing',
-            type: 'configuration',
-            priority: 2,
-            title: 'Meal Rates Missing',
-            message: `${formatLogicalMonth(currentMonth)} meal rates are not configured yet.`,
-            link: `/reports?month=${currentMonth}`,
-            actionLabel: 'View Report',
-          });
-        } else if (actorRole === ROLES.MEMBER) {
-          attention.push({
-            id: 'rates_missing',
-            type: 'configuration',
-            priority: 3,
-            title: 'Meal Rates Pending',
-            message: `${formatLogicalMonth(currentMonth)} meal rates are not configured yet. Bills calculate once rates are set.`,
-            link: `/reports?month=${currentMonth}`,
-            actionLabel: 'View Report',
-          });
-        }
-      }
-
-      // Priority 3: Previous month settlement
+      // Priority 2: Previous month settlement
       if (settlementSummary.state === 'ready_to_close') {
         if (actorRole === ROLES.SUPERADMIN) {
           attention.push({
@@ -391,7 +419,8 @@ export function createDashboardService({
       } else if (actorRole === ROLES.SUPERADMIN) {
         quickActions = [
           { id: 'manage-today', label: "Manage Today's Meals", icon: 'UtensilsCrossed', to: `/admin?date=${today}` },
-          { id: 'set-rates', label: 'Meal Rates', icon: 'Coins', to: `/reports?month=${currentMonth}` },
+          { id: 'calendar', label: 'Calendar', icon: 'CalendarDays', to: '/calendar' },
+          { id: 'reports', label: 'Reports', icon: 'ChartNoAxesCombined', to: `/reports?month=${currentMonth}` },
           { id: 'payments', label: 'Payments', icon: 'CreditCard', to: `/payments?month=${currentMonth}` },
           { id: 'settlement', label: 'Monthly Settlement', icon: 'FileCheck', to: `/reports?month=${previousMonth}` },
           { id: 'reminders', label: 'Reminder Settings', icon: 'Bell', to: '/admin' },
@@ -421,6 +450,10 @@ export function createDashboardService({
           revision: todayDay?.revision ?? 0,
           morning: morningMeals,
           night: nightMeals,
+          allocations: {
+            morning: morningAllocation,
+            night: nightAllocation,
+          },
           permissions: {
             canEdit,
             editableMemberIds,
@@ -430,13 +463,18 @@ export function createDashboardService({
           morningPlates,
           nightPlates,
           totalPlates: totalPlatesToday,
+          morningEating,
+          nightEating,
+          totalEating: morningEating + nightEating,
+          isMorningCustom: morningAllocation.source === 'custom',
+          isNightCustom: nightAllocation.source === 'custom',
           members: memberPlates,
         },
         personalHero,
         currentMonth: {
           month: currentMonth,
           monthLabel: formatLogicalMonth(currentMonth),
-          ratesConfigured,
+          ratesConfigured: true,
           rates,
           personal: personalMonthly,
           household: householdMonthly,

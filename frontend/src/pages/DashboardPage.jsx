@@ -53,13 +53,17 @@ export function DashboardPage() {
         dashboard.applyMealDayUpdate(response.data);
       }
 
-      const mealLabel = mealType === 'morning' ? 'Morning' : 'Night';
-      const statusLabel = status === 'taking' ? 'Taking' : 'Skip';
-      setSaveMessage(
-        response.changed
-          ? `${mealLabel} meal updated to ${statusLabel}.`
-          : 'Meal schedule is already up to date.',
-      );
+      if (response.allocationReset) {
+        setSaveMessage('Your meal choice was updated. The previous shared-plate plan was reset because participants changed.');
+      } else {
+        const mealLabel = mealType === 'morning' ? 'Morning' : 'Night';
+        const statusLabel = status === 'taking' ? 'Taking' : 'Skip';
+        setSaveMessage(
+          response.changed
+            ? `${mealLabel} meal updated to ${statusLabel}.`
+            : 'Meal schedule is already up to date.',
+        );
+      }
     } catch (err) {
       setSaveError(err?.message || 'Unable to save the meal change. Please try again.');
     } finally {
@@ -147,6 +151,8 @@ export function DashboardPage() {
                 mealType="morning"
                 title="Morning"
                 meals={data.meals.morning}
+                allocation={data.meals.allocations?.morning}
+                allocationDetails={data.meals.allocationDetails?.morning}
                 editable={Boolean(data.meals.permissions?.canEdit) && isOnline}
                 editableMemberIds={data.meals.permissions?.editableMemberIds}
                 pendingRow={pendingRow}
@@ -156,6 +162,8 @@ export function DashboardPage() {
                 mealType="night"
                 title="Night"
                 meals={data.meals.night}
+                allocation={data.meals.allocations?.night}
+                allocationDetails={data.meals.allocationDetails?.night}
                 editable={Boolean(data.meals.permissions?.canEdit) && isOnline}
                 editableMemberIds={data.meals.permissions?.editableMemberIds}
                 pendingRow={pendingRow}

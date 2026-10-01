@@ -1,11 +1,13 @@
 import mongoose from 'mongoose';
 import { env } from '../src/config/env.js';
+import { connectDatabase, disconnectDatabase } from '../src/config/db.js';
 import { MealDay } from '../src/meals/meal.model.js';
 import { MonthlyMealRate } from '../src/billing/monthlyRate.model.js';
 import { Payment } from '../src/payments/payment.model.js';
 import { PaymentSettings } from '../src/payments/paymentSettings.model.js';
 import { MonthlySettlement } from '../src/settlement/monthlySettlement.model.js';
 import { MemberAccount } from '../src/auth/memberAccount.model.js';
+import { UserAccount } from '../src/auth/userAccount.model.js';
 import { ReminderSettings } from '../src/settings/reminderSettings.model.js';
 import { PushSubscription } from '../src/push/pushSubscription.model.js';
 import { PushDelivery } from '../src/push/pushDelivery.model.js';
@@ -17,6 +19,7 @@ export const MONITORED_MODELS = [
   PaymentSettings,
   MonthlySettlement,
   MemberAccount,
+  UserAccount,
   ReminderSettings,
   PushSubscription,
   PushDelivery,
@@ -105,7 +108,7 @@ if (process.argv[1] && process.argv[1].endsWith('verifyIndexes.js')) {
 
   console.info('Connecting to MongoDB to verify critical indexes...');
   try {
-    await mongoose.connect(env.mongoUri, { serverSelectionTimeoutMS: 10_000 });
+    await connectDatabase();
     const { passed, results } = await verifyIndexes(mongoose.connection);
 
     console.info('\n--- Index Verification Report ---');
@@ -118,7 +121,7 @@ if (process.argv[1] && process.argv[1].endsWith('verifyIndexes.js')) {
     }
     console.info('---------------------------------\n');
 
-    await mongoose.disconnect();
+    await disconnectDatabase();
     if (!passed) {
       console.error('Index verification failed: missing critical indexes.');
       process.exit(1);

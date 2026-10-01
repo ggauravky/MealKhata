@@ -159,7 +159,9 @@ describe('Phase 13: Final QA, Versioning & Release Contracts', () => {
     const report = res.body.data;
     assert.equal(report.month, '2026-10');
     assert.ok(report.rates);
-    assert.equal(report.rates.configured, false);
+    assert.equal(report.rates.configured, true);
+    assert.equal(report.rates.morningPricePaise, 5000);
+    assert.equal(report.rates.nightPricePaise, 7000);
     assert.ok(report.projection);
     assert.ok(typeof report.projection.room.totalMeals === 'number');
   });

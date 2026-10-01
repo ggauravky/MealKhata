@@ -3,7 +3,14 @@ import { api } from '../lib/api.js';
 import { socket } from '../lib/socket.js';
 
 export function useMealHistory(date) {
-  const [state, setState] = useState({ date: null, loading: true, error: '', items: [] });
+  const [state, setState] = useState({
+    date: null,
+    loading: true,
+    error: '',
+    items: [],
+    allocationChanges: [],
+    allChanges: [],
+  });
   const [refreshVersion, setRefreshVersion] = useState(0);
 
   const refresh = useCallback(() => {
@@ -19,7 +26,20 @@ export function useMealHistory(date) {
     const controller = new AbortController();
     api.get(`/api/meals/${encodeURIComponent(date)}/history`, { signal: controller.signal })
       .then((response) => {
-        setState({ date, loading: false, error: '', items: response.data.items });
+        const items = response.data?.items || [];
+        const allocationChanges = response.data?.allocationChanges || [];
+        const allChanges = [...items, ...allocationChanges].sort((a, b) => {
+          return new Date(b.changedAt).getTime() - new Date(a.changedAt).getTime();
+        });
+
+        setState({
+          date,
+          loading: false,
+          error: '',
+          items,
+          allocationChanges,
+          allChanges,
+        });
       })
       .catch(() => {
         if (!controller.signal.aborted) {
@@ -28,6 +48,8 @@ export function useMealHistory(date) {
             loading: false,
             error: 'Recent changes could not be loaded.',
             items: [],
+            allocationChanges: [],
+            allChanges: [],
           });
         }
       });
@@ -62,6 +84,8 @@ export function useMealHistory(date) {
     loading: !isCurrentDate || state.loading,
     error: isCurrentDate ? state.error : '',
     items: isCurrentDate ? state.items : [],
+    allocationChanges: isCurrentDate ? state.allocationChanges : [],
+    allChanges: isCurrentDate ? state.allChanges : [],
     refresh,
   };
 }

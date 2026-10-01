@@ -21,14 +21,21 @@ export function createAuthRouter({ service = { authenticateCredentials } } = {})
 
     try {
       const auth = await service.authenticateCredentials(credentials);
-      const token = await createSessionToken(auth.role, { memberId: auth.memberId });
+      const token = await createSessionToken(auth.role, {
+        memberId: auth.memberId,
+        userId: auth.userId,
+        sessionVersion: auth.sessionVersion,
+      });
 
       res.cookie(SESSION_COOKIE_NAME, token, getSessionCookieOptions());
       logger.info('Authentication succeeded', { role: auth.role, memberId: auth.memberId });
 
       return res.json({
         success: true,
-        session: createAuthenticatedSession(auth.role, { memberId: auth.memberId }),
+        session: createAuthenticatedSession(auth.role, {
+          memberId: auth.memberId,
+          displayName: auth.displayName,
+        }),
       });
     } catch (error) {
       if (error.statusCode === 401) {
@@ -41,7 +48,10 @@ export function createAuthRouter({ service = { authenticateCredentials } } = {})
 
   router.get('/session', (req, res) => {
     const session = req.auth?.authenticated
-      ? createAuthenticatedSession(req.auth.role, { memberId: req.auth.memberId })
+      ? createAuthenticatedSession(req.auth.role, {
+          memberId: req.auth.memberId,
+          displayName: req.auth.displayName,
+        })
       : createViewerSession();
 
     res.json({

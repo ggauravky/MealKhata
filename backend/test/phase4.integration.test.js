@@ -111,14 +111,16 @@ describe('logical month utilities', () => {
 describe('monthly rate API and service', () => {
   const valid = { morningPricePaise: 5000, nightPricePaise: 6000 };
 
-  test('missing public GET returns configured false and creates nothing', async () => {
+  test('public GET rates returns fixed configured prices and creates nothing', async () => {
     const response = await request(testApp).get(`/api/billing/rates/${MONTH}`).expect(200);
     assert.deepEqual(response.body.data, {
       month: MONTH,
-      configured: false,
-      morningPricePaise: null,
-      nightPricePaise: null,
-      revision: 0,
+      configured: true,
+      fixed: true,
+      source: 'fixed',
+      morningPricePaise: 5000,
+      nightPricePaise: 7000,
+      revision: 1,
       updatedAt: null,
     });
     assert.equal(rateRepository.count(), 0);
@@ -135,74 +137,14 @@ describe('monthly rate API and service', () => {
     assert.equal((await putRate(ROLES.ADMIN, valid)).status, 403);
   });
 
-  test('Super Admin first save succeeds with revision one and one event', async () => {
+  test('Super Admin PUT is rejected with 405 Method Not Allowed because prices are permanently fixed', async () => {
     const response = await putRate(ROLES.SUPERADMIN, valid);
-    assert.equal(response.status, 200);
-    assert.equal(response.body.changed, true);
-    assert.equal(response.body.data.revision, 1);
-    assert.equal(response.body.data.configured, true);
-    assert.equal(rateEvents.length, 1);
-    assert.deepEqual(Object.keys(rateEvents[0]).sort(), ['month', 'morningPricePaise', 'nightPricePaise', 'revision', 'updatedAt'].sort());
-  });
-
-  test('negative, floating, oversized, and unsafe paise values return 400', async () => {
-    for (const body of [
-      { ...valid, morningPricePaise: -1 },
-      { ...valid, morningPricePaise: 62.5 },
-      { ...valid, morningPricePaise: 10_000_001 },
-      { ...valid, morningPricePaise: Number.MAX_SAFE_INTEGER + 1 },
-    ]) {
-      assert.equal((await putRate(ROLES.SUPERADMIN, body)).status, 400);
-    }
+    assert.equal(response.status, 405);
+    assert.equal(response.body.message, 'Meal prices are fixed at ₹50 for Morning and ₹70 for Night.');
   });
 
   test('invalid logical month returns 400', async () => {
     assert.equal((await putRate(ROLES.SUPERADMIN, valid, '2026-13')).status, 400);
-  });
-
-  test('real update increments revision and records authenticated actor', async () => {
-    await putRate(ROLES.SUPERADMIN, { ...valid, actorRole: 'admin' });
-    const response = await putRate(ROLES.SUPERADMIN, { morningPricePaise: 6250, nightPricePaise: 7000 });
-    const stored = await rateRepository.findByMonth(MONTH);
-    assert.equal(response.body.data.revision, 2);
-    assert.equal(stored.changes.length, 2);
-    assert.equal(stored.changes[0].actorRole, ROLES.SUPERADMIN);
-    assert.deepEqual(stored.changes[1].from, valid);
-  });
-
-  test('identical update is a no-op without revision, history, or event changes', async () => {
-    await putRate(ROLES.SUPERADMIN, valid);
-    rateEvents.length = 0;
-    const response = await putRate(ROLES.SUPERADMIN, valid);
-    const stored = await rateRepository.findByMonth(MONTH);
-    assert.equal(response.body.changed, false);
-    assert.equal(response.body.data.revision, 1);
-    assert.equal(stored.changes.length, 1);
-    assert.equal(rateEvents.length, 0);
-  });
-
-  test('repeated and racing updates retain exactly one document per month', async () => {
-    await Promise.all([
-      rateService.updateRate({ month: MONTH, ...valid, actorRole: ROLES.SUPERADMIN }),
-      rateService.updateRate({ month: MONTH, morningPricePaise: 5500, nightPricePaise: 6500, actorRole: ROLES.SUPERADMIN }),
-    ]);
-    assert.equal(rateRepository.count(), 1);
-  });
-
-  test('failed write returns sanitized 503 and emits nothing', async () => {
-    rateRepository.failWrites = true;
-    const response = await putRate(ROLES.SUPERADMIN, valid);
-    assert.equal(response.status, 503);
-    assert.equal(response.body.message, 'Unable to save meal rates. Please try again.');
-    assert.equal(rateEvents.length, 0);
-    assert.doesNotMatch(JSON.stringify(response.body), /simulated|database|stack/i);
-  });
-
-  test('explicit zero prices remain configured and distinct from missing rates', async () => {
-    const response = await putRate(ROLES.SUPERADMIN, { morningPricePaise: 0, nightPricePaise: 0 });
-    assert.equal(response.body.data.configured, true);
-    assert.equal(response.body.data.morningPricePaise, 0);
-    assert.equal(response.body.data.nightPricePaise, 0);
   });
 
   test('schema uses a unique month and strict integer paise validation', async () => {
@@ -269,22 +211,16 @@ describe('derived monthly reports', () => {
   test('current to-date includes Sep 1-10 and excludes future override while projection includes it', async () => {
     await seedSkip('2026-09-05', 'night', 'nikhil');
     await seedSkip('2026-09-25', 'night', 'nikhil');
-    await rateService.updateRate({
-      month: MONTH,
-      morningPricePaise: 5000,
-      nightPricePaise: 6000,
-      actorRole: ROLES.SUPERADMIN,
-    });
     const report = await reportService.getMonthlyReport(MONTH);
     assert.equal(report.periodType, 'current');
     assert.equal(report.toDate.endDate, TODAY);
     assert.equal(report.toDate.members.nikhil.morningCount, 10);
     assert.equal(report.toDate.members.nikhil.nightCount, 9);
     assert.equal(report.toDate.members.nikhil.totalMeals, 19);
-    assert.equal(report.toDate.members.nikhil.amountPaise, 104_000);
+    assert.equal(report.toDate.members.nikhil.amountPaise, 113_000);
     assert.equal(report.projection.members.nikhil.nightCount, 28);
     assert.equal(report.projection.members.nikhil.totalMeals, 58);
-    assert.equal(report.projection.members.nikhil.amountPaise, 318_000);
+    assert.equal(report.projection.members.nikhil.amountPaise, 346_000);
   });
 
   test('future month has no to-date and projects the full month', async () => {
@@ -302,28 +238,15 @@ describe('derived monthly reports', () => {
     assert.deepEqual(report.toDate, report.projection);
   });
 
-  test('missing rates preserve counts but return explicit null amounts', async () => {
-    const report = await reportService.getMonthlyReport(MONTH);
-    assert.equal(report.rates.configured, false);
-    assert.equal(report.toDate.amountsAvailable, false);
-    assert.equal(report.toDate.members.gaurav.totalMeals, 20);
-    assert.equal(report.toDate.members.gaurav.amountPaise, null);
-    assert.equal(report.toDate.room.amountPaise, null);
-  });
-
-  test('explicit zero rates make amounts available and calculate zero', async () => {
-    await rateService.updateRate({ month: MONTH, morningPricePaise: 0, nightPricePaise: 0, actorRole: ROLES.SUPERADMIN });
+  test('rates are permanently fixed at ₹50 for Morning and ₹70 for Night', async () => {
     const report = await reportService.getMonthlyReport(MONTH);
     assert.equal(report.rates.configured, true);
+    assert.equal(report.rates.fixed, true);
+    assert.equal(report.rates.morningPricePaise, 5000);
+    assert.equal(report.rates.nightPricePaise, 7000);
     assert.equal(report.toDate.amountsAvailable, true);
-    assert.equal(report.toDate.members.gaurav.amountPaise, 0);
-    assert.equal(report.toDate.room.amountPaise, 0);
-  });
-
-  test('integer paise arithmetic remains exact', async () => {
-    await rateService.updateRate({ month: MONTH, morningPricePaise: 6250, nightPricePaise: 0, actorRole: ROLES.SUPERADMIN });
-    const report = await reportService.getMonthlyReport(MONTH);
-    assert.equal(report.toDate.members.gaurav.morningAmountPaise, 62_500);
+    assert.equal(report.toDate.members.gaurav.totalMeals, 20);
+    assert.equal(report.toDate.members.gaurav.amountPaise, 120_000);
   });
 
   test('report endpoint is public, safe, and uses one meal bulk query plus one rate lookup', async () => {

@@ -30,6 +30,7 @@ export function createMonthlySettlementRepository({ model = MonthlySettlementMod
       month,
       sequence,
       snapshot,
+      snapshotVersion = 2,
       closedAt = new Date(),
       closedByRole = 'superadmin',
     }) {
@@ -38,7 +39,7 @@ export function createMonthlySettlementRepository({ model = MonthlySettlementMod
         month,
         sequence,
         status: 'closed',
-        snapshotVersion: 1,
+        snapshotVersion,
         snapshot,
         closedAt,
         closedByRole,

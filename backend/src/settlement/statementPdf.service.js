@@ -1,5 +1,6 @@
 import PDFDocument from 'pdfkit';
 import { MEMBER_NAMES } from '../config/members.js';
+import { formatPlateFraction } from '../meals/plateAllocation.service.js';
 
 function formatRupees(paise) {
   const amount = (paise / 100).toFixed(2);
@@ -85,26 +86,38 @@ export function generateSettlementPdf(settlement) {
         .font('Helvetica')
         .fillColor('#334155')
         .text(
-          `Morning Meal: ${formatRupees(rates.morningPricePaise)} per plate   |   Night Meal: ${formatRupees(rates.nightPricePaise)} per plate`,
+          `Morning Meal: ${formatRupees(rates.morningPricePaise)} / physical plate   |   Night Meal: ${formatRupees(rates.nightPricePaise)} / physical plate`,
         );
 
       doc.moveDown(1);
 
       // Member Settlement Table Header
+      // Layout (50 to 545 = 495):
+      // Member: 50 -> 125 (width 75)
+      // M. Meals: 125 -> 165 (width 40)
+      // M. Plates: 165 -> 210 (width 45)
+      // N. Meals: 210 -> 250 (width 40)
+      // N. Plates: 250 -> 295 (width 45)
+      // Total: 295 -> 340 (width 45)
+      // Bill: 340 -> 405 (width 65)
+      // Paid: 405 -> 475 (width 70)
+      // Balance: 475 -> 545 (width 70)
       const tableTop = doc.y;
       doc.rect(50, tableTop, 495, 24).fill('#f1f5f9');
 
       doc
-        .fontSize(9)
+        .fontSize(8)
         .font('Helvetica-Bold')
         .fillColor('#1e293b')
-        .text('Member', 55, tableTop + 7, { width: 85 })
-        .text('Morning', 140, tableTop + 7, { width: 50, align: 'right' })
-        .text('Night', 195, tableTop + 7, { width: 50, align: 'right' })
-        .text('Plates', 250, tableTop + 7, { width: 45, align: 'right' })
-        .text('Bill Amount', 300, tableTop + 7, { width: 75, align: 'right' })
-        .text('Total Paid', 380, tableTop + 7, { width: 75, align: 'right' })
-        .text('Balance', 460, tableTop + 7, { width: 75, align: 'right' });
+        .text('Member', 53, tableTop + 7, { width: 72 })
+        .text('M. Joined', 125, tableTop + 7, { width: 40, align: 'right' })
+        .text('M. Plates', 165, tableTop + 7, { width: 45, align: 'right' })
+        .text('N. Joined', 210, tableTop + 7, { width: 40, align: 'right' })
+        .text('N. Plates', 250, tableTop + 7, { width: 45, align: 'right' })
+        .text('Total Plt', 295, tableTop + 7, { width: 45, align: 'right' })
+        .text('Bill Amount', 340, tableTop + 7, { width: 65, align: 'right' })
+        .text('Total Paid', 405, tableTop + 7, { width: 70, align: 'right' })
+        .text('Balance', 475, tableTop + 7, { width: 67, align: 'right' });
 
       let currentY = tableTop + 24;
 
@@ -121,37 +134,50 @@ export function generateSettlementPdf(settlement) {
         };
 
         const name = MEMBER_NAMES[key] || key;
+        const morningPart = m.morningParticipationCount ?? m.morningCount ?? 0;
+        const nightPart = m.nightParticipationCount ?? m.nightCount ?? 0;
+        const morningUnits = m.morningShareUnits ?? (morningPart * 6);
+        const nightUnits = m.nightShareUnits ?? (nightPart * 6);
+        const totalUnits = m.totalShareUnits ?? (morningUnits + nightUnits);
 
         doc.strokeColor('#e2e8f0').lineWidth(0.5).moveTo(50, currentY).lineTo(545, currentY).stroke();
 
         doc
-          .fontSize(9)
+          .fontSize(8)
           .font('Helvetica')
           .fillColor('#0f172a')
-          .text(name, 55, currentY + 6, { width: 85 })
-          .text(String(m.morningCount), 140, currentY + 6, { width: 50, align: 'right' })
-          .text(String(m.nightCount), 195, currentY + 6, { width: 50, align: 'right' })
-          .text(String(m.totalPlates), 250, currentY + 6, { width: 45, align: 'right' })
-          .text(formatRupees(m.billAmountPaise), 300, currentY + 6, { width: 75, align: 'right' })
-          .text(formatRupees(m.paidAmountPaise), 380, currentY + 6, { width: 75, align: 'right' })
-          .text(formatRupees(m.remainingAmountPaise || 0), 460, currentY + 6, { width: 75, align: 'right' });
+          .text(name, 53, currentY + 6, { width: 72 })
+          .text(String(morningPart), 125, currentY + 6, { width: 40, align: 'right' })
+          .text(formatPlateFraction(morningUnits), 165, currentY + 6, { width: 45, align: 'right' })
+          .text(String(nightPart), 210, currentY + 6, { width: 40, align: 'right' })
+          .text(formatPlateFraction(nightUnits), 250, currentY + 6, { width: 45, align: 'right' })
+          .text(formatPlateFraction(totalUnits), 295, currentY + 6, { width: 45, align: 'right' })
+          .text(formatRupees(m.billAmountPaise), 340, currentY + 6, { width: 65, align: 'right' })
+          .text(formatRupees(m.paidAmountPaise), 405, currentY + 6, { width: 70, align: 'right' })
+          .text(formatRupees(m.remainingAmountPaise || 0), 475, currentY + 6, { width: 67, align: 'right' });
 
         currentY += 22;
       }
 
       // Room Total Row
+      const roomMorningPlates = room.morningPhysicalPlates ?? room.morningCount ?? 0;
+      const roomNightPlates = room.nightPhysicalPlates ?? room.nightCount ?? 0;
+      const roomTotalPlates = room.totalPhysicalPlates ?? room.totalPlates ?? (roomMorningPlates + roomNightPlates);
+
       doc.rect(50, currentY, 495, 24).fill('#e2e8f0');
       doc
-        .fontSize(9)
+        .fontSize(8)
         .font('Helvetica-Bold')
         .fillColor('#0f172a')
-        .text('Room Total', 55, currentY + 7, { width: 85 })
-        .text(String(room.morningCount), 140, currentY + 7, { width: 50, align: 'right' })
-        .text(String(room.nightCount), 195, currentY + 7, { width: 50, align: 'right' })
-        .text(String(room.totalPlates), 250, currentY + 7, { width: 45, align: 'right' })
-        .text(formatRupees(room.billAmountPaise), 300, currentY + 7, { width: 75, align: 'right' })
-        .text(formatRupees(room.paidAmountPaise), 380, currentY + 7, { width: 75, align: 'right' })
-        .text(formatRupees(room.remainingAmountPaise || 0), 460, currentY + 7, { width: 75, align: 'right' });
+        .text('Room Physical', 53, currentY + 7, { width: 72 })
+        .text('-', 125, currentY + 7, { width: 40, align: 'right' })
+        .text(String(roomMorningPlates), 165, currentY + 7, { width: 45, align: 'right' })
+        .text('-', 210, currentY + 7, { width: 40, align: 'right' })
+        .text(String(roomNightPlates), 250, currentY + 7, { width: 45, align: 'right' })
+        .text(String(roomTotalPlates), 295, currentY + 7, { width: 45, align: 'right' })
+        .text(formatRupees(room.billAmountPaise), 340, currentY + 7, { width: 65, align: 'right' })
+        .text(formatRupees(room.paidAmountPaise), 405, currentY + 7, { width: 70, align: 'right' })
+        .text(formatRupees(room.remainingAmountPaise || 0), 475, currentY + 7, { width: 67, align: 'right' });
 
       currentY += 34;
 

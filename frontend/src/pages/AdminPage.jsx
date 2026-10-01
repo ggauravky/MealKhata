@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/common/PageHeader.jsx';
 import { LiveIndicator } from '../components/meals/LiveIndicator.jsx';
 import { MealCard } from '../components/meals/MealCard.jsx';
+import { PlateSharingDialog } from '../components/meals/PlateSharingDialog.jsx';
 import { PlateSummary } from '../components/meals/PlateSummary.jsx';
 import { ReminderSettingsPanel } from '../components/reminders/ReminderSettingsPanel.jsx';
 import { ErrorState } from '../components/ui/ErrorState.jsx';
@@ -31,6 +32,8 @@ export function AdminPage() {
   const [pendingRow, setPendingRow] = useState('');
   const [saveMessage, setSaveMessage] = useState('');
   const [saveError, setSaveError] = useState('');
+  const [sharingMealType, setSharingMealType] = useState(null);
+
   const mealDay = useMealDay(requestedDate);
   const displayedDate = mealDay.data?.date ?? '';
   const month = displayedDate ? displayedDate.slice(0, 7) : '';
@@ -73,7 +76,12 @@ export function AdminPage() {
         status,
       });
       mealDay.applyServerData(response.data);
-      setSaveMessage(response.changed ? 'Meal change saved.' : 'Meal schedule is already up to date.');
+
+      if (response.allocationReset) {
+        setSaveMessage('Your meal choice was updated. The previous shared-plate plan was reset because the participants changed.');
+      } else {
+        setSaveMessage(response.changed ? 'Meal change saved.' : 'Meal schedule is already up to date.');
+      }
       history.refresh();
     } catch {
       setSaveError('Unable to save the meal change. Please try again.');
@@ -82,13 +90,17 @@ export function AdminPage() {
     }
   };
 
+  const canConfigureSharing = Boolean(
+    mealDay.data?.permissions?.canConfigureAllocation && isOnline && !isMonthClosed,
+  );
+
   return (
     <div className="page-stack">
       <div className="heading-with-status">
         <PageHeader
           eyebrow={getRoleLabel(auth.role)}
           title="Meal Management"
-          description="Review any logical date and update meals allowed by your role."
+          description="Review any logical date and update meals and shared physical plates allowed by your role."
         />
         <LiveIndicator connected={mealDay.live} />
       </div>
@@ -137,41 +149,98 @@ export function AdminPage() {
               mealType="morning"
               title="Morning"
               meals={mealDay.data.meals.morning}
+              allocation={mealDay.data.allocations?.morning}
+              allocationDetails={mealDay.data.allocationDetails?.morning}
               editable={Boolean(mealDay.data.permissions.canEdit) && isOnline && !isMonthClosed}
               editableMemberIds={mealDay.data.permissions?.editableMemberIds}
               pendingRow={pendingRow}
               onChange={handleMealChange}
+              canConfigureSharing={canConfigureSharing}
+              onConfigureSharing={() => setSharingMealType('morning')}
             />
             <MealCard
               mealType="night"
               title="Night"
               meals={mealDay.data.meals.night}
+              allocation={mealDay.data.allocations?.night}
+              allocationDetails={mealDay.data.allocationDetails?.night}
               editable={Boolean(mealDay.data.permissions.canEdit) && isOnline && !isMonthClosed}
               editableMemberIds={mealDay.data.permissions?.editableMemberIds}
               pendingRow={pendingRow}
               onChange={handleMealChange}
+              canConfigureSharing={canConfigureSharing}
+              onConfigureSharing={() => setSharingMealType('night')}
             />
           </section>
-          <PlateSummary meals={mealDay.data.meals} label={`Plate count for ${displayedDate}`} />
+
+          <PlateSummary
+            meals={mealDay.data.meals}
+            allocations={mealDay.data.allocations}
+            allocationDetails={mealDay.data.allocationDetails}
+            label={`Plate count for ${displayedDate}`}
+          />
         </>
+      )}
+
+      {sharingMealType && mealDay.data && (
+        <PlateSharingDialog
+          date={displayedDate}
+          mealType={sharingMealType}
+          currentAllocation={mealDay.data.allocations?.[sharingMealType]}
+          currentMeals={mealDay.data.meals?.[sharingMealType]}
+          onClose={() => setSharingMealType(null)}
+          onSaved={(updatedMealDay) => {
+            mealDay.applyServerData(updatedMealDay);
+            setSaveMessage('Plate sharing allocation saved.');
+            history.refresh();
+          }}
+        />
       )}
 
       <section className="panel history-panel" aria-labelledby="recent-changes-title">
         <div className="section-heading section-heading--compact">
           <div>
             <h2 id="recent-changes-title">Recent Changes</h2>
-            <p>Newest updates for the selected date.</p>
+            <p>Newest updates and plate sharing changes for the selected date.</p>
           </div>
         </div>
         {history.loading ? (
           <LoadingState compact label="Loading recent changes" />
         ) : history.error ? (
           <ErrorState compact title="History unavailable" message={history.error} actionLabel="Try again" onAction={history.refresh} />
-        ) : history.items.length === 0 ? (
+        ) : history.allChanges.length === 0 ? (
           <p className="history-empty">No changes recorded for this date.</p>
         ) : (
           <ol className="history-list">
-            {history.items.map((item, index) => {
+            {history.allChanges.map((item, index) => {
+              if (item.type === 'allocation') {
+                const mealLabel = item.mealType === 'morning' ? 'Morning' : 'Night';
+                const actorLabel = getRoleLabel(item.actorRole);
+                let title;
+                let subtitle;
+
+                if (item.changeType === 'reset') {
+                  title = `${mealLabel} shared allocation reset`;
+                  subtitle = item.reason || 'Reset to individual plates because participants changed.';
+                } else {
+                  title = `${actorLabel} updated ${mealLabel} plate sharing`;
+                  const fromPlates = item.from?.plates?.length ?? 'default';
+                  const toPlates = item.to?.plates?.length ?? 'default';
+                  subtitle = `${fromPlates} plates → ${toPlates} plates`;
+                }
+
+                return (
+                  <li key={`${item.changedAt}-alloc-${index}`}>
+                    <time dateTime={item.changedAt}>{formatIndiaTime(item.changedAt)}</time>
+                    <div>
+                      <strong>{title}</strong>
+                      <span>{subtitle}</span>
+                    </div>
+                  </li>
+                );
+              }
+
+              // Status change item
               const memberName = item.memberId[0].toUpperCase() + item.memberId.slice(1);
               let actionDescription;
               if (item.actorRole === 'member' && item.actorMemberId) {

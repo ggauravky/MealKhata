@@ -1,105 +1,12 @@
-import { ROOMMATES } from './constants.js';
-
-export const SHARE_UNITS_PER_PLATE = 6;
-export const MAX_PHYSICAL_PLATES = 3;
-export const MAX_MEMBER_SHARE_UNITS = 6;
-
-export const MORNING_PRICE_PAISE = 5000;
-export const NIGHT_PRICE_PAISE = 7000;
-
-export const MEAL_PRICES = Object.freeze({
-  morning: MORNING_PRICE_PAISE,
-  night: NIGHT_PRICE_PAISE,
-});
-
-export const ALLOCATION_MODES = Object.freeze({
-  DEFAULT: 'default',
-  CUSTOM: 'custom',
-});
-
-export const PRESET_NAMES = Object.freeze({
-  INDIVIDUAL: 'individual',
-  ONE_PLATE_TWO_SHARED: 'one_plate_two_shared',
-  ONE_PLATE_THREE_SHARED: 'one_plate_three_shared',
-  TWO_PLATES_THREE_EQUAL: 'two_plates_three_equal',
-  TWO_PLATES_ONE_FULL_TWO_HALF: 'two_plates_one_full_two_half',
-  THREE_PLATES_THREE_FULL: 'three_plates_three_full',
-});
-
-const MEMBER_IDS = ROOMMATES.map((r) => r.id);
-const MEAL_TYPES = Object.freeze(['morning', 'night']);
-
-export function getMealPlateCount(meals = {}) {
-  return Object.values(meals).filter((status) => status === 'taking').length;
-}
-
-export function getPlateCounts(meals = {}) {
-  const counts = Object.fromEntries(
-    MEAL_TYPES.map((mealType) => [mealType, getMealPlateCount(meals[mealType])]),
-  );
-
-  return Object.freeze({
-    ...counts,
-    total: counts.morning + counts.night,
-  });
-}
-
-export function formatPlateCount(count) {
-  return `${count} ${count === 1 ? 'plate' : 'plates'}`;
-}
-
-export function formatPlateFraction(shareUnits) {
-  if (shareUnits === 0 || !shareUnits) return '0';
-
-  const FRACTIONS = {
-    1: '⅙',
-    2: '⅓',
-    3: '½',
-    4: '⅔',
-    5: '⅚',
-  };
-
-  const whole = Math.floor(shareUnits / SHARE_UNITS_PER_PLATE);
-  const remainder = shareUnits % SHARE_UNITS_PER_PLATE;
-
-  if (remainder === 0) {
-    return String(whole);
-  }
-
-  const frac = FRACTIONS[remainder] ?? `${remainder}/6`;
-  if (whole === 0) {
-    return frac;
-  }
-
-  return `${whole}${frac}`;
-}
-
-export function formatPlateFractionAccessible(shareUnits) {
-  if (shareUnits === 0 || !shareUnits) return '0 plates';
-
-  const LABELS = {
-    1: 'one-sixth plate',
-    2: 'one-third plate',
-    3: 'half plate',
-    4: 'two-thirds plate',
-    5: 'five-sixths plate',
-    6: 'one plate',
-  };
-
-  if (shareUnits <= 6 && LABELS[shareUnits]) {
-    return LABELS[shareUnits];
-  }
-
-  const whole = Math.floor(shareUnits / SHARE_UNITS_PER_PLATE);
-  const remainder = shareUnits % SHARE_UNITS_PER_PLATE;
-
-  if (remainder === 0) {
-    return `${whole} ${whole === 1 ? 'plate' : 'plates'}`;
-  }
-
-  const fracLabel = LABELS[remainder] || `${remainder}/6 plate`;
-  return `${whole} and ${fracLabel}`;
-}
+import { MEMBER_IDS } from '../config/members.js';
+import {
+  ALLOCATION_MODES,
+  MAX_MEMBER_SHARE_UNITS,
+  MAX_PHYSICAL_PLATES,
+  MEAL_PRICES,
+  PRESET_NAMES,
+  SHARE_UNITS_PER_PLATE,
+} from './plateAllocation.constants.js';
 
 export function validatePlateAllocation(allocation) {
   if (!allocation || typeof allocation !== 'object') {
@@ -177,8 +84,9 @@ export function validatePlateAllocation(allocation) {
 }
 
 export function getEffectiveMealAllocation({ statuses = {}, customAllocation = null } = {}) {
+  let result;
   if (customAllocation && customAllocation.mode === ALLOCATION_MODES.CUSTOM && Array.isArray(customAllocation.plates)) {
-    return {
+    result = {
       mode: ALLOCATION_MODES.CUSTOM,
       source: 'custom',
       plates: customAllocation.plates.map((plate) => ({
@@ -187,22 +95,25 @@ export function getEffectiveMealAllocation({ statuses = {}, customAllocation = n
         ),
       })),
     };
-  }
-
-  const plates = [];
-  for (const memberId of MEMBER_IDS) {
-    if (statuses[memberId] === 'taking') {
-      const shares = Object.fromEntries(MEMBER_IDS.map((id) => [id, 0]));
-      shares[memberId] = SHARE_UNITS_PER_PLATE;
-      plates.push({ shares });
+  } else {
+    const plates = [];
+    for (const memberId of MEMBER_IDS) {
+      if (statuses[memberId] === 'taking') {
+        const shares = Object.fromEntries(MEMBER_IDS.map((id) => [id, 0]));
+        shares[memberId] = SHARE_UNITS_PER_PLATE;
+        plates.push({ shares });
+      }
     }
+
+    result = {
+      mode: ALLOCATION_MODES.DEFAULT,
+      source: 'default',
+      plates,
+    };
   }
 
-  return {
-    mode: ALLOCATION_MODES.DEFAULT,
-    source: 'default',
-    plates,
-  };
+  result.shareUnits = calculateMemberShareUnits(result);
+  return result;
 }
 
 export function calculateMemberShareUnits(effectiveAllocation) {
@@ -240,15 +151,18 @@ export function splitMealCost({
   date = '',
   mealType = 'morning',
   effectiveAllocation,
+  allocation,
   pricePaise = MEAL_PRICES[mealType] ?? 0,
 }) {
-  const plates = effectiveAllocation?.plates ?? [];
+  const targetAllocation = effectiveAllocation || allocation;
+  const plates = targetAllocation?.plates ?? [];
   const physicalPlates = plates.length;
   const totalCostPaise = physicalPlates * pricePaise;
 
   if (physicalPlates === 0) {
     return {
       physicalPlates: 0,
+      physicalPlateCount: 0,
       pricePaise,
       totalCostPaise: 0,
       members: Object.fromEntries(
@@ -261,11 +175,12 @@ export function splitMealCost({
           },
         ]),
       ),
+      memberAmountsPaise: Object.fromEntries(MEMBER_IDS.map((id) => [id, 0])),
       roomAmountPaise: 0,
     };
   }
 
-  const memberUnits = calculateMemberShareUnits(effectiveAllocation);
+  const memberUnits = calculateMemberShareUnits(targetAllocation);
   const totalWeight = physicalPlates * SHARE_UNITS_PER_PLATE;
 
   const baseAmounts = {};
@@ -314,11 +229,41 @@ export function splitMealCost({
 
   return {
     physicalPlates,
+    physicalPlateCount: physicalPlates,
     pricePaise,
     totalCostPaise,
     members: membersResult,
+    memberAmountsPaise: Object.fromEntries(
+      MEMBER_IDS.map((memberId) => [memberId, finalAmounts[memberId]]),
+    ),
     roomAmountPaise: totalCostPaise,
   };
+}
+
+export function formatPlateFraction(shareUnits) {
+  if (shareUnits === 0 || !shareUnits) return '0';
+
+  const FRACTIONS = {
+    1: '⅙',
+    2: '⅓',
+    3: '½',
+    4: '⅔',
+    5: '⅚',
+  };
+
+  const whole = Math.floor(shareUnits / SHARE_UNITS_PER_PLATE);
+  const remainder = shareUnits % SHARE_UNITS_PER_PLATE;
+
+  if (remainder === 0) {
+    return String(whole);
+  }
+
+  const frac = FRACTIONS[remainder] ?? `${remainder}/6`;
+  if (whole === 0) {
+    return frac;
+  }
+
+  return `${whole}${frac}`;
 }
 
 export function createPresetAllocation(presetName, { members = MEMBER_IDS, fullMemberId = null } = {}) {

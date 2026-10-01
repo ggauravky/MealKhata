@@ -15,7 +15,6 @@ export function HouseholdMonthlyCard({ household }) {
     projectedBillAmountPaise,
     paidAmountPaise,
     remainingAmountPaise,
-    ratesConfigured,
   } = household;
 
   return (
@@ -25,8 +24,8 @@ export function HouseholdMonthlyCard({ household }) {
           <span className="section-eyebrow">HOUSEHOLD {monthLabel.toUpperCase()}</span>
           <h2 id="household-monthly-title">Monthly Kitchen &amp; Expenses</h2>
         </div>
-        <span className={`badge-pill ${ratesConfigured ? 'badge-pill--taking' : 'badge-pill--skip'}`}>
-          {ratesConfigured ? 'Rates Set' : 'Rates Missing'}
+        <span className="badge-pill badge-pill--taking">
+          Fixed Pricing
         </span>
       </div>
 
@@ -40,7 +39,7 @@ export function HouseholdMonthlyCard({ household }) {
           <strong className="monthly-stat-item__value">{nightCount}</strong>
         </div>
         <div className="monthly-stat-item">
-          <span className="monthly-stat-item__label">Total Household</span>
+          <span className="monthly-stat-item__label">Total Physical</span>
           <strong className="monthly-stat-item__value">{totalPlates}</strong>
         </div>
       </div>
@@ -49,7 +48,7 @@ export function HouseholdMonthlyCard({ household }) {
         <div className="finance-metric">
           <span className="finance-metric__label">Room Bill to Date</span>
           <strong className="finance-metric__value">
-            {ratesConfigured && billAmountPaise !== null ? formatPaise(billAmountPaise) : 'Rates Pending'}
+            {billAmountPaise !== null ? formatPaise(billAmountPaise) : '—'}
           </strong>
         </div>
         <div className="finance-metric">
@@ -59,7 +58,7 @@ export function HouseholdMonthlyCard({ household }) {
         <div className="finance-metric finance-metric--due">
           <span className="finance-metric__label">Outstanding Total</span>
           <strong className="finance-metric__value">
-            {ratesConfigured && remainingAmountPaise !== null ? formatPaise(remainingAmountPaise) : '—'}
+            {remainingAmountPaise !== null ? formatPaise(remainingAmountPaise) : '—'}
           </strong>
         </div>
       </div>

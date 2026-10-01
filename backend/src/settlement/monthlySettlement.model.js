@@ -2,9 +2,14 @@ import mongoose from 'mongoose';
 
 const memberSnapshotSchema = new mongoose.Schema(
   {
-    morningCount: { type: Number, required: true, min: 0 },
-    nightCount: { type: Number, required: true, min: 0 },
-    totalPlates: { type: Number, required: true, min: 0 },
+    morningCount: { type: Number, required: false, min: 0 },
+    nightCount: { type: Number, required: false, min: 0 },
+    totalPlates: { type: Number, required: false, min: 0 },
+    morningParticipationCount: { type: Number, required: false, min: 0 },
+    nightParticipationCount: { type: Number, required: false, min: 0 },
+    morningShareUnits: { type: Number, required: false, min: 0 },
+    nightShareUnits: { type: Number, required: false, min: 0 },
+    totalShareUnits: { type: Number, required: false, min: 0 },
     billAmountPaise: { type: Number, required: true, min: 0 },
     paidAmountPaise: { type: Number, required: true, min: 0 },
     remainingAmountPaise: { type: Number, required: true, default: 0 },
@@ -14,9 +19,14 @@ const memberSnapshotSchema = new mongoose.Schema(
 
 const roomSnapshotSchema = new mongoose.Schema(
   {
-    morningCount: { type: Number, required: true, min: 0 },
-    nightCount: { type: Number, required: true, min: 0 },
-    totalPlates: { type: Number, required: true, min: 0 },
+    morningCount: { type: Number, required: false, min: 0 },
+    nightCount: { type: Number, required: false, min: 0 },
+    totalPlates: { type: Number, required: false, min: 0 },
+    morningPhysicalPlates: { type: Number, required: false, min: 0 },
+    nightPhysicalPlates: { type: Number, required: false, min: 0 },
+    totalPhysicalPlates: { type: Number, required: false, min: 0 },
+    morningParticipants: { type: Number, required: false, min: 0 },
+    nightParticipants: { type: Number, required: false, min: 0 },
     billAmountPaise: { type: Number, required: true, min: 0 },
     paidAmountPaise: { type: Number, required: true, min: 0 },
     remainingAmountPaise: { type: Number, required: true, default: 0 },
@@ -74,7 +84,7 @@ const monthlySettlementSchema = new mongoose.Schema(
     },
     snapshotVersion: {
       type: Number,
-      default: 1,
+      default: 2,
     },
     snapshot: {
       type: settlementSnapshotSchema,

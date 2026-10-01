@@ -1,4 +1,5 @@
 import { MEMBER_NAMES } from '../config/members.js';
+import { formatPlateFraction } from '../meals/plateAllocation.service.js';
 
 function escapeCsvCell(value) {
   if (value === null || value === undefined) {
@@ -18,8 +19,13 @@ export function generateSettlementCsv(settlement) {
     'settlement_sequence',
     'member_id',
     'member_name',
-    'morning_meals',
-    'night_meals',
+    'morning_participations',
+    'night_participations',
+    'morning_share_units',
+    'night_share_units',
+    'total_share_units',
+    'morning_plate_equivalent',
+    'night_plate_equivalent',
     'total_plates',
     'morning_rate_paise',
     'night_rate_paise',
@@ -47,15 +53,26 @@ export function generateSettlementCsv(settlement) {
       remainingAmountPaise: 0,
     };
 
+    const morningPart = m.morningParticipationCount ?? m.morningCount ?? 0;
+    const nightPart = m.nightParticipationCount ?? m.nightCount ?? 0;
+    const morningUnits = m.morningShareUnits ?? (morningPart * 6);
+    const nightUnits = m.nightShareUnits ?? (nightPart * 6);
+    const totalUnits = m.totalShareUnits ?? (morningUnits + nightUnits);
+
     const row = [
       month,
       settlementId,
       sequence,
       memberId,
       MEMBER_NAMES[memberId] || memberId,
-      m.morningCount,
-      m.nightCount,
-      m.totalPlates,
+      morningPart,
+      nightPart,
+      morningUnits,
+      nightUnits,
+      totalUnits,
+      formatPlateFraction(morningUnits),
+      formatPlateFraction(nightUnits),
+      formatPlateFraction(totalUnits),
       rates.morningPricePaise,
       rates.nightPricePaise,
       m.billAmountPaise,
