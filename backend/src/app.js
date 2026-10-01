@@ -11,6 +11,8 @@ import { authenticateSession } from './middleware/authenticate.js';
 import { enforceTrustedOrigin } from './middleware/csrfProtection.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { apiNotFound, notFound } from './middleware/notFound.js';
+import { sensitiveMutationLimiter } from './middleware/rateLimiters.js';
+import { requestCorrelation } from './middleware/requestCorrelation.js';
 import { authRouter } from './routes/auth.routes.js';
 import { healthRouter } from './routes/health.routes.js';
 import { mealRouter } from './routes/meal.routes.js';
@@ -81,6 +83,7 @@ export function createApp({
     app.set('trust proxy', PRODUCTION_TRUST_PROXY_HOPS);
   }
 
+  app.use(requestCorrelation);
   app.use(helmet(createHelmetOptions()));
   app.use((req, res, next) => {
     res.set('Permissions-Policy', 'camera=(), geolocation=(), microphone=()');
@@ -119,12 +122,15 @@ export function createApp({
   app.use('/api/billing', billing);
   app.use('/api/calendar', calendar);
   app.use('/api/reports', reports);
-  app.use('/api/payments', payments);
-  app.use('/api/settlements', settlements);
   app.use('/api/dashboard', dashboard);
-  app.use('/api/payment-settings', paymentSettings);
-  app.use('/api/settings/reminders', reminderSettings);
-  app.use('/api/push', push);
+
+  // Apply sensitive mutation limiter to financial, settlement, settings, and push mutation endpoints
+  app.use('/api/payments', sensitiveMutationLimiter, payments);
+  app.use('/api/settlements', sensitiveMutationLimiter, settlements);
+  app.use('/api/payment-settings', sensitiveMutationLimiter, paymentSettings);
+  app.use('/api/settings/reminders', sensitiveMutationLimiter, reminderSettings);
+  app.use('/api/push', sensitiveMutationLimiter, push);
+
   app.use('/api', apiNotFound);
 
   if (isProduction) {
@@ -132,10 +138,13 @@ export function createApp({
       immutable: true,
       index: false,
       maxAge: '1y',
+      dotfiles: 'deny',
     }));
+
     app.use(express.static(frontendDistPath, {
       index: false,
       maxAge: 0,
+      dotfiles: 'deny',
       setHeaders: (res, filePath) => {
         if (filePath.endsWith('sw.js')) {
           res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -147,9 +156,12 @@ export function createApp({
     }));
 
     app.use((req, res, next) => {
+      // Disallow dotfiles, API, or socket.io routes from falling into SPA index.html
+      const isHiddenPath = req.path.startsWith('/.') || req.path.includes('/..');
       const shouldServeApp =
         req.method === 'GET' &&
         req.accepts('html') &&
+        !isHiddenPath &&
         !req.path.startsWith('/api') &&
         !req.path.startsWith('/socket.io');
 

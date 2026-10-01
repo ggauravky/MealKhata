@@ -324,4 +324,40 @@ To prevent the client from executing cascading independent requests (`/api/meals
 - **320px Viewport Hardening**: Compact responsive layouts with wrap-safe badges, touch-target compliance, and zero horizontal document scrolling across all mobile screen sizes.
 - **Accessibility & Motion**: WCAG-compliant color contrast, icon + text state indicators, full keyboard/focus compliance, and `prefers-reduced-motion` compliance.
 
+---
+
+## Production Operations, Security & Reliability (Phase 12)
+
+MealKhata includes production hardening, operational observability, data integrity verification, and disaster recovery tooling.
+
+### 1. Observability & Logging Architecture
+- **Request Correlation**: All incoming requests receive an `X-Request-ID` header generated via `crypto.randomUUID()` (or validated client correlation token) correlated through request completion, error handling, and client responses.
+- **Structured JSON Logging**: In production, logs output single-line JSON format with timestamps, severity levels, request IDs, and event names.
+- **Centralized Redaction**: `backend/src/utils/sanitizer.js` automatically and recursively scrubs passwords, hashes, tokens, auth headers, cookies, JWTs, VAPID private keys, and MongoDB URIs from all log outputs.
+- **Performance Tracking**: API latency is recorded on response completion; requests taking $\ge 1000\text{ ms}$ automatically emit structured `request.slow` warnings.
+- **Error Boundaries**: Unhandled 5xx errors log request references and safe error names, returning `{ success: false, message: "Something went wrong", requestId }` without exposing stack traces to clients. Malformed JSON returns `400 Bad Request`.
+
+### 2. Server Lifecycle & Graceful Shutdown
+- **Lifecycle States**: The server implements an explicit state machine: `starting` $\to$ `ready` $\to$ `draining` $\to$ `stopped`.
+- **Draining State**: Upon receiving `SIGTERM` or `SIGINT`, the server transitions to `draining`. The readiness endpoint (`GET /api/ready`) immediately returns `503 Service Unavailable`, signaling reverse proxies (Render) to cease routing new traffic.
+- **Bounded Graceful Shutdown**: HTTP listener closes, Socket.IO clients disconnect, and MongoDB disconnects with a bounded 15-second timeout guard preventing hung processes.
+- **Process Failure Handling**: Global listeners for `uncaughtException` and `unhandledRejection` log sanitized fatal events, initiate graceful shutdown, and exit non-zero.
+
+### 3. Operational & Verification Commands
+
+| Command | Description |
+| :--- | :--- |
+| `npm run security:check` | Orchestrates static pattern analysis, secret leak scans, and dependency vulnerability audits. |
+| `npm run verify-indexes` | Verifies that all expected Mongoose schema indexes are present in MongoDB without dropping or altering production indexes. |
+| `npm run verify-data` | Runs read-only consistency checks across all collections (meal statuses, dates, positive paise, settlement sums). |
+| `npm run db:backup` | Generates a compressed, AES-256-GCM encrypted backup archive preserving BSON Extended JSON types. |
+| `npm run db:backup:verify -- <file>` | Verifies backup archive decryption, SHA-256 checksum, manifest schema, and collection record counts. |
+| `npm run db:restore -- <file>` | Restores a verified backup to a target database (`RESTORE_MONGODB_URI`) with production overwrite guards. |
+
+### 4. Operational Documentation
+- **Security Policy & Secret Rotation**: [SECURITY.md](./SECURITY.md)
+- **Production Operations & Troubleshooting**: [docs/PRODUCTION_RUNBOOK.md](./docs/PRODUCTION_RUNBOOK.md)
+- **Backup & Disaster Recovery Guide**: [docs/BACKUP_AND_RECOVERY.md](./docs/BACKUP_AND_RECOVERY.md)
+
+
 

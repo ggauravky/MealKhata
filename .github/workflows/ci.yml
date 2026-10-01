@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  quality-and-security:
+    name: Lint, Test, Build & Security Gates
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 24.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: 'npm'
+
+      - name: Install dependencies (clean install)
+        run: npm ci
+
+      - name: Code Quality & Linting
+        run: npm run lint
+
+      - name: Run Test Suites
+        run: npm test
+
+      - name: Build Production Frontend
+        run: npm run build
+
+      - name: Verify Production Server & Dual-Mode Build
+        run: npm run verify-production-build
+
+      - name: Automated Security & Dependency Check
+        run: npm run security:check

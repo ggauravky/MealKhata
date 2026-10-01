@@ -11,6 +11,9 @@ coverage/
 tmp/
 temp/
 screenshots/
+backups/
+restore-work/
+*.mealkhata-backup
 *.tmp
 *.bak
 *.dump

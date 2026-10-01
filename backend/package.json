@@ -12,7 +12,13 @@
     "seed-members": "node scripts/seedMemberAccounts.js",
     "generate-vapid-keys": "node scripts/generateVapidKeys.js",
     "send-push-reminders": "node scripts/sendPushReminders.js",
-    "verify-production-build": "node scripts/verifyProductionBuild.js"
+    "verify-production-build": "node scripts/verifyProductionBuild.js",
+    "security:check": "node scripts/securityCheck.js",
+    "verify-indexes": "node scripts/verifyIndexes.js",
+    "verify-data": "node scripts/verifyData.js",
+    "db:backup": "node scripts/backupDatabase.js",
+    "db:backup:verify": "node scripts/verifyBackup.js",
+    "db:restore": "node scripts/restoreDatabase.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

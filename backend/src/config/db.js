@@ -2,20 +2,45 @@ import mongoose from 'mongoose';
 import { env } from './env.js';
 import { logger } from '../utils/logger.js';
 
+let eventsAttached = false;
+
+function attachConnectionEvents() {
+  if (eventsAttached) {
+    return;
+  }
+  eventsAttached = true;
+
+  mongoose.connection.on('connected', () => {
+    logger.info('database.connected', { state: 'connected' });
+  });
+
+  mongoose.connection.on('disconnected', () => {
+    logger.warn('database.disconnected', { state: 'disconnected' });
+  });
+
+  mongoose.connection.on('reconnected', () => {
+    logger.info('database.reconnected', { state: 'connected' });
+  });
+
+  mongoose.connection.on('error', (error) => {
+    logger.error('database.error', { message: error.message });
+  });
+}
+
 export async function connectDatabase() {
+  attachConnectionEvents();
+
   await mongoose.connect(env.mongoUri, {
     serverSelectionTimeoutMS: 10_000,
     maxPoolSize: 5,
     minPoolSize: 0,
   });
-
-  logger.info('MongoDB connected');
 }
 
 export async function disconnectDatabase() {
   if (mongoose.connection.readyState !== 0) {
     await mongoose.disconnect();
-    logger.info('MongoDB disconnected');
+    logger.info('database.disconnected', { state: 'disconnected' });
   }
 }
 

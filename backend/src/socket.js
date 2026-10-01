@@ -1,4 +1,5 @@
 import { Server } from 'socket.io';
+import { env, isProduction } from './config/env.js';
 import { logger } from './utils/logger.js';
 
 let activeSocketServer = null;
@@ -7,15 +8,33 @@ export function createSocketServer(httpServer) {
   const io = new Server(httpServer, {
     path: '/socket.io',
     serveClient: false,
+    cors: {
+      origin: isProduction ? env.appOrigin : true,
+      credentials: true,
+    },
   });
+
+  if (isProduction) {
+    io.use((socket, next) => {
+      const origin = socket.handshake.headers.origin;
+      if (origin && origin !== env.appOrigin) {
+        logger.warn('socket.origin_rejected', {
+          socketId: socket.id,
+          origin,
+        });
+        return next(new Error('Unauthorized origin'));
+      }
+      return next();
+    });
+  }
 
   activeSocketServer = io;
 
   io.on('connection', (socket) => {
-    logger.info('Socket client connected', { socketId: socket.id });
+    logger.info('socket.connected', { socketId: socket.id });
 
     socket.on('disconnect', (reason) => {
-      logger.info('Socket client disconnected', { socketId: socket.id, reason });
+      logger.info('socket.disconnected', { socketId: socket.id, reason });
     });
   });
 

@@ -64,6 +64,35 @@ assert.match(cookie, /Secure/i);
 assert.match(cookie, /SameSite=Lax/i);
 assert.match(cookie, /Path=\//i);
 assert.ok(login.headers['strict-transport-security']);
+assert.ok(login.headers['x-request-id'], 'response must include X-Request-ID');
+
+// Phase 12: Minimal safe health liveness response
+const healthRes = await request(app).get('/api/health').expect(200);
+assert.equal(healthRes.body.success, true);
+assert.equal(healthRes.body.service, 'MealKhata');
+assert.equal(healthRes.body.status, 'ok');
+assert.ok(typeof healthRes.body.uptimeSeconds === 'number');
+assert.ok(!JSON.stringify(healthRes.body).includes('mongodb'));
+
+// Phase 12: Malformed JSON handling
+const badJson = await request(app)
+  .post('/api/payments')
+  .set('Origin', process.env.APP_ORIGIN)
+  .set('Content-Type', 'application/json')
+  .send('{invalid-json-payload')
+  .expect(400);
+assert.equal(badJson.body.message, 'Invalid JSON payload');
+
+// Phase 12: Dotfile and sensitive path protection
+const dotEnvRes = await request(app).get('/.env').set('Accept', 'text/html').expect(404);
+assert.ok(!dotEnvRes.text.includes('AUTH_JWT_SECRET'));
+
+// Phase 12: Lifecycle draining readiness check
+const { LIFECYCLE_STATES, setLifecycleState } = await import('../src/config/lifecycle.js');
+setLifecycleState(LIFECYCLE_STATES.DRAINING);
+const drainingRes = await request(app).get('/api/ready').expect(503);
+assert.equal(drainingRes.body.status, 'draining');
+setLifecycleState(LIFECYCLE_STATES.STARTING);
 
 await request(app)
   .post('/api/auth/logout')

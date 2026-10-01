@@ -18,7 +18,13 @@
     "seed-members": "npm run seed-members --workspace backend",
     "generate-vapid-keys": "npm run generate-vapid-keys --workspace backend",
     "send-push-reminders": "npm run send-push-reminders --workspace backend",
-    "verify-production-build": "npm run verify-production-build --workspace backend"
+    "verify-production-build": "npm run verify-production-build --workspace backend",
+    "security:check": "npm run security:check --workspace backend",
+    "verify-indexes": "npm run verify-indexes --workspace backend",
+    "verify-data": "npm run verify-data --workspace backend",
+    "db:backup": "npm run db:backup --workspace backend",
+    "db:backup:verify": "npm run db:backup:verify --workspace backend",
+    "db:restore": "npm run db:restore --workspace backend"
   },
   "engines": {
     "node": ">=24.19.0 <25"
