@@ -1,6 +1,6 @@
 {
   "name": "@mealkhata/backend",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "main": "src/server.js",
@@ -18,7 +18,10 @@
     "verify-data": "node scripts/verifyData.js",
     "db:backup": "node scripts/backupDatabase.js",
     "db:backup:verify": "node scripts/verifyBackup.js",
-    "db:restore": "node scripts/restoreDatabase.js"
+    "db:restore": "node scripts/restoreDatabase.js",
+    "perf:check": "node -e \"process.env.NODE_ENV='test'; import('./scripts/perfCheck.js')\"",
+    "release:check": "node scripts/releaseCheck.js",
+    "release:smoke": "node scripts/releaseSmoke.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

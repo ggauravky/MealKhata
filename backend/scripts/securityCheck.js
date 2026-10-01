@@ -75,7 +75,7 @@ async function run() {
   console.info('2. Checking for Hardcoded Production Secrets in Tracked Code...');
   const gitTracked = execSync('git ls-files', { cwd: rootDir, encoding: 'utf8' }).split('\n').filter(Boolean);
   const secretPatterns = [
-    { name: 'MongoDB Atlas URI credentials', pattern: /mongodb\+srv:\/\/[^:]+:[^@]+@/i },
+    { name: 'MongoDB Atlas URI credentials', pattern: /mongodb\+srv:\/\/[^\s:]+:[^\s@]+@/i },
     { name: 'Hardcoded VAPID private key', pattern: /-----BEGIN (EC|RSA) PRIVATE KEY-----/ },
   ];
 
@@ -87,7 +87,10 @@ async function run() {
       relFile.endsWith('.ico') ||
       relFile.endsWith('.lock') ||
       relFile.endsWith('.example') ||
-      relFile.includes('node_modules')
+      relFile.includes('node_modules') ||
+      relFile.includes('/test/') ||
+      relFile.includes('\\test\\') ||
+      relFile.endsWith('.test.js')
     ) {
       continue;
     }

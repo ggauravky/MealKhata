@@ -1,6 +1,6 @@
 {
   "name": "mealkhata",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "A private meal and shared-bill tracker for three roommates.",
@@ -24,7 +24,10 @@
     "verify-data": "npm run verify-data --workspace backend",
     "db:backup": "npm run db:backup --workspace backend",
     "db:backup:verify": "npm run db:backup:verify --workspace backend",
-    "db:restore": "npm run db:restore --workspace backend"
+    "db:restore": "npm run db:restore --workspace backend",
+    "perf:check": "npm run perf:check --workspace backend",
+    "release:check": "npm run release:check --workspace backend",
+    "release:smoke": "npm run release:smoke --workspace backend"
   },
   "engines": {
     "node": ">=24.19.0 <25"

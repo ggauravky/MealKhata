@@ -65,6 +65,18 @@ export function getPreviousLogicalMonth(value) {
   return `${year}-${String(month).padStart(2, '0')}`;
 }
 
+export function getNextLogicalMonth(value) {
+  const parts = parseLogicalMonth(value);
+
+  if (!parts) {
+    throw new TypeError('month must use the YYYY-MM format');
+  }
+
+  const year = parts.month === 12 ? parts.year + 1 : parts.year;
+  const month = parts.month === 12 ? 1 : parts.month + 1;
+  return `${year}-${String(month).padStart(2, '0')}`;
+}
+
 export function formatLogicalMonth(value) {
   const parts = parseLogicalMonth(value);
 

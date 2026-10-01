@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { checkDatabaseReadiness } from '../config/db.js';
 import { isDraining } from '../config/lifecycle.js';
+import { APP_VERSION } from '../config/version.js';
 
-export function createHealthRouter({ readiness = checkDatabaseReadiness, drainingCheck = isDraining } = {}) {
+export function createHealthRouter({ readiness = checkDatabaseReadiness, drainingCheck = isDraining, version = APP_VERSION } = {}) {
   const router = Router();
 
   router.get('/health', (req, res) => {
@@ -10,6 +11,7 @@ export function createHealthRouter({ readiness = checkDatabaseReadiness, drainin
       success: true,
       service: 'MealKhata',
       status: 'ok',
+      version,
       uptimeSeconds: Math.floor(process.uptime()),
     });
   });
