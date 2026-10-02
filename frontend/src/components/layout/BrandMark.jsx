@@ -1,17 +1,15 @@
-import { CookingPot } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { APP_NAME, APP_TAGLINE } from '../../lib/constants.js';
+import { MealKhataLogo } from '../brand/MealKhataLogo.jsx';
+import { APP_NAME } from '../../lib/constants.js';
 
-export function BrandMark({ compact = false }) {
+export function BrandMark({ compact = false, className = '' }) {
   return (
-    <Link className="brand" to="/" aria-label={`${APP_NAME} dashboard`}>
-      <span className="brand__mark" aria-hidden="true">
-        <CookingPot size={20} strokeWidth={1.8} />
-      </span>
-      <span className="brand__copy">
-        <strong>{APP_NAME}</strong>
-        {!compact && <small>{APP_TAGLINE}</small>}
-      </span>
+    <Link
+      to="/"
+      aria-label={`${APP_NAME} home`}
+      className={`inline-flex items-center gap-2 group transition-opacity hover:opacity-90 ${className}`}
+    >
+      <MealKhataLogo variant={compact ? 'mark' : 'full'} size={28} />
     </Link>
   );
 }

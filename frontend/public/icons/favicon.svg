@@ -1,27 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <defs>
-    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#32658d"/>
-      <stop offset="100%" stop-color="#193853"/>
-    </linearGradient>
-  </defs>
-  <rect width="512" height="512" rx="112" fill="url(#bgGrad)"/>
-  <g fill="#ffffff" stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round">
-    <!-- Lid knob -->
-    <rect x="236" y="162" width="40" height="16" rx="8" />
-    <!-- Lid -->
-    <path d="M160 214 C160 188 352 188 352 214 Z" />
-    <!-- Rim -->
-    <rect x="144" y="214" width="224" height="18" rx="9" />
-    <!-- Handles -->
-    <path d="M144 240 C110 240 110 270 144 270" fill="none" stroke-width="16" />
-    <path d="M368 240 C402 240 402 270 368 270" fill="none" stroke-width="16" />
-    <!-- Body -->
-    <path d="M160 232 L352 232 C352 334 320 364 256 364 C192 364 160 334 160 232 Z" />
-    <!-- Steam waves -->
-    <path d="M256 148 Q264 130 256 112" fill="none" stroke-width="10" />
-    <path d="M220 148 Q228 130 220 112" fill="none" stroke-width="9" />
-    <path d="M292 148 Q300 130 292 112" fill="none" stroke-width="9" />
+  <rect width="512" height="512" rx="112" fill="#0f766e"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Three roommate marks -->
+    <circle cx="160" cy="140" r="32" fill="#5eead4"/>
+    <circle cx="256" cy="112" r="32" fill="#ffffff"/>
+    <circle cx="352" cy="140" r="32" fill="#5eead4"/>
+    
+    <!-- Bowl / plate rim -->
+    <path d="M96 224 H416" stroke="#ffffff" stroke-width="32"/>
+    <path d="M112 256 C112 360 176 424 256 424 C336 424 400 360 400 256" stroke="#ffffff" stroke-width="32"/>
+    
+    <!-- Ledger check / accounting tally mark -->
+    <path d="M184 328 L236 380 L336 270" stroke="#34d399" stroke-width="34"/>
   </g>
 </svg>

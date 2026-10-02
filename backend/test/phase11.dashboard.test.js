@@ -323,4 +323,71 @@ describe('Phase 11: Dashboard API - Error Resilience', () => {
     // Error recorded safely
     assert.ok(res.body.data.errors?.paymentSummary);
   });
+
+  test('Requirement 5 Regression: default taking yields 3 eating and 3 plates for morning and night', async () => {
+    const customApp = createApp({
+      dashboard: createDashboardRouter({ service: dashboardService }),
+    });
+
+    const res = await request(customApp)
+      .get('/api/dashboard')
+      .set('Origin', ORIGIN)
+      .expect(200);
+
+    const ht = res.body.data.householdToday;
+    assert.equal(ht.morningEating, 3);
+    assert.equal(ht.morningPlates, 3);
+    assert.equal(ht.nightEating, 3);
+    assert.equal(ht.nightPlates, 3);
+    assert.equal(ht.totalEating, 6);
+    assert.equal(ht.totalPlates, 6);
+  });
+
+  test('Requirement 5 Regression: 2 physical plates shared by 3 taking members keeps eating=3, plates=2', async () => {
+    // Save shared allocation for today: 2 plates shared equally by 3 roommates
+    mealRepo.documents.set('2026-10-01', {
+      date: '2026-10-01',
+      saved: true,
+      revision: 1,
+      meals: {
+        morning: { gaurav: 'taking', nikhil: 'taking', devansh: 'taking' },
+        night: { gaurav: 'taking', nikhil: 'taking', devansh: 'taking' },
+      },
+      allocations: {
+        morning: {
+          mode: 'custom',
+          plates: [
+            { shares: { gaurav: 2, nikhil: 2, devansh: 2 } },
+            { shares: { gaurav: 2, nikhil: 2, devansh: 2 } },
+          ],
+        },
+        night: null,
+      },
+      changes: [],
+      allocationChanges: [],
+    });
+
+    const customApp = createApp({
+      dashboard: createDashboardRouter({ service: dashboardService }),
+    });
+
+    const res = await request(customApp)
+      .get('/api/dashboard')
+      .set('Origin', ORIGIN)
+      .expect(200);
+
+    const ht = res.body.data.householdToday;
+    // Morning: 3 people eating, but only 2 physical plates ordered!
+    assert.equal(ht.morningEating, 3, 'morningEating must be 3 people');
+    assert.equal(ht.morningPlates, 2, 'morningPlates must be 2 physical plates');
+    assert.equal(ht.isMorningCustom, true);
+
+    // Night remains default: 3 eating, 3 plates
+    assert.equal(ht.nightEating, 3);
+    assert.equal(ht.nightPlates, 3);
+    assert.equal(ht.isNightCustom, false);
+
+    // Clean up repo for subsequent tests
+    mealRepo.documents.delete('2026-10-01');
+  });
 });

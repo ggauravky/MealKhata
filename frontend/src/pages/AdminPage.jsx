@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, History } from 'lucide-react';
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/common/PageHeader.jsx';
@@ -7,8 +7,10 @@ import { MealCard } from '../components/meals/MealCard.jsx';
 import { PlateSharingDialog } from '../components/meals/PlateSharingDialog.jsx';
 import { PlateSummary } from '../components/meals/PlateSummary.jsx';
 import { ReminderSettingsPanel } from '../components/reminders/ReminderSettingsPanel.jsx';
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card.jsx';
+import { Button } from '../components/ui/button.jsx';
 import { ErrorState } from '../components/ui/ErrorState.jsx';
-import { LoadingState } from '../components/ui/LoadingState.jsx';
+import { Skeleton } from '../components/ui/skeleton.jsx';
 import { useAuth } from '../hooks/useAuth.js';
 import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
 import { useMealDay } from '../hooks/useMealDay.js';
@@ -78,9 +80,13 @@ export function AdminPage() {
       mealDay.applyServerData(response.data);
 
       if (response.allocationReset) {
-        setSaveMessage('Your meal choice was updated. The previous shared-plate plan was reset because the participants changed.');
+        setSaveMessage(
+          'Your meal choice was updated. The previous shared-plate plan was reset because the participants changed.',
+        );
       } else {
-        setSaveMessage(response.changed ? 'Meal change saved.' : 'Meal schedule is already up to date.');
+        setSaveMessage(
+          response.changed ? 'Meal change saved.' : 'Meal schedule is already up to date.',
+        );
       }
       history.refresh();
     } catch {
@@ -95,56 +101,135 @@ export function AdminPage() {
   );
 
   return (
-    <div className="page-stack">
-      <div className="heading-with-status">
+    <div className="space-y-6 max-w-4xl mx-auto">
+      {/* Header section with Live status */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-200/80 dark:border-slate-800/80 pb-4">
         <PageHeader
           eyebrow={getRoleLabel(auth.role)}
-          title="Meal Management"
-          description="Review any logical date and update meals and shared physical plates allowed by your role."
+          title="Meal management"
+          description="Review any logical date and update meals and shared physical plates."
         />
-        <LiveIndicator connected={mealDay.live} />
+        <div className="self-start sm:self-center">
+          <LiveIndicator connected={mealDay.live} />
+        </div>
       </div>
 
-      <section className="panel date-navigator" aria-labelledby="selected-date-title">
-        <div>
-          <p className="date-navigator__label">Selected date</p>
-          <h2 id="selected-date-title">{displayedDate ? formatLogicalDate(displayedDate, { day: 'numeric', month: 'short', year: 'numeric' }) : 'Loading date'}</h2>
-        </div>
-        <div className="date-navigator__controls">
-          <button className="button button--quiet" type="button" onClick={() => moveDate(-1)} disabled={!displayedDate}>
-            <ChevronLeft size={17} aria-hidden="true" /> Previous day
-          </button>
-          <button className="button button--quiet" type="button" onClick={() => setRequestedDate('today')}>Today</button>
-          <button className="button button--quiet" type="button" onClick={() => moveDate(1)} disabled={!displayedDate}>
-            Next day <ChevronRight size={17} aria-hidden="true" />
-          </button>
-          <label className="date-input">
-            <span className="sr-only">Choose logical date</span>
-            <input type="date" value={displayedDate} onChange={(event) => setRequestedDate(event.target.value)} />
-          </label>
-        </div>
-      </section>
+      {/* Date Selector Card */}
+      <Card className="border-slate-200/90 dark:border-slate-800">
+        <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4">
+          <div>
+            <span className="text-[11px] font-medium uppercase tracking-wider text-slate-400 dark:text-slate-500">
+              Selected date
+            </span>
+            <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">
+              {displayedDate
+                ? formatLogicalDate(displayedDate, {
+                    day: 'numeric',
+                    month: 'short',
+                    year: 'numeric',
+                  })
+                : 'Loading date...'}
+            </h2>
+          </div>
 
-      {mealDay.loading && !mealDay.data && <LoadingState label="Loading meal schedule" />}
-      {mealDay.error && <ErrorState title="Meals unavailable" message={mealDay.error} actionLabel="Try again" onAction={mealDay.refresh} />}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 w-8 p-0"
+              onClick={() => moveDate(-1)}
+              disabled={!displayedDate}
+              aria-label="Previous day"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 px-2.5 text-xs font-medium"
+              onClick={() => setRequestedDate('today')}
+            >
+              Today
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 w-8 p-0"
+              onClick={() => moveDate(1)}
+              disabled={!displayedDate}
+              aria-label="Next day"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+            <input
+              type="date"
+              value={displayedDate}
+              onChange={(event) => setRequestedDate(event.target.value)}
+              className="h-8 rounded-sm border border-slate-200 bg-white px-2 text-xs text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 ml-1 cursor-pointer"
+              aria-label="Choose logical date"
+            />
+          </div>
+        </CardHeader>
+      </Card>
+
+      {mealDay.loading && !mealDay.data && (
+        <div className="space-y-4">
+          <Skeleton className="h-44 w-full rounded-lg" />
+          <Skeleton className="h-28 w-full rounded-lg" />
+        </div>
+      )}
+
+      {mealDay.error && (
+        <ErrorState
+          title="Meals unavailable"
+          message={mealDay.error}
+          actionLabel="Try again"
+          onAction={mealDay.refresh}
+        />
+      )}
 
       {mealDay.data && (
         <>
-          {!mealDay.data.permissions.canEdit && auth.role === 'admin' && (
-            <p className="permission-note">Admin can edit today&apos;s meals only. This date remains view-only.</p>
+          {!mealDay.data.permissions?.canEdit && auth.role === 'admin' && (
+            <p className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 p-2.5 rounded-lg border border-amber-200/80 dark:border-amber-900/40">
+              Admin can edit today&apos;s meals only. Historical dates remain view-only.
+            </p>
           )}
-          {!mealDay.data.saved && <p className="default-note">Using default schedule</p>}
-          {saveError && <ErrorState compact title="Change not saved" message={saveError} />}
-          <p className="save-feedback" role="status" aria-live="polite">{saveMessage}</p>
+
+          {!mealDay.data.saved && (
+            <p className="text-xs text-slate-500 dark:text-slate-400 italic">
+              Using default schedule
+            </p>
+          )}
+
+          {saveError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">
+              {saveError}
+            </div>
+          )}
+
+          {saveMessage && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-xs text-teal-800 dark:border-teal-900/50 dark:bg-teal-950/40 dark:text-teal-300"
+            >
+              {saveMessage}
+            </div>
+          )}
 
           {isMonthClosed && (
-            <div className="panel settlement-banner" role="status">
+            <div
+              role="status"
+              className="rounded-lg border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200"
+            >
               <strong>{formatLogicalMonth(month)} is closed.</strong>
               <p>Reopen the month before editing historical meals.</p>
             </div>
           )}
 
-          <section className="meal-card-grid" aria-label={`Meal editor for ${displayedDate}`}>
+          {/* Morning and Night Meal Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <MealCard
               mealType="morning"
               title="Morning"
@@ -171,8 +256,9 @@ export function AdminPage() {
               canConfigureSharing={canConfigureSharing}
               onConfigureSharing={() => setSharingMealType('night')}
             />
-          </section>
+          </div>
 
+          {/* Physical Plate Summary */}
           <PlateSummary
             meals={mealDay.data.meals}
             allocations={mealDay.data.allocations}
@@ -197,77 +283,116 @@ export function AdminPage() {
         />
       )}
 
-      <section className="panel history-panel" aria-labelledby="recent-changes-title">
-        <div className="section-heading section-heading--compact">
-          <div>
-            <h2 id="recent-changes-title">Recent Changes</h2>
-            <p>Newest updates and plate sharing changes for the selected date.</p>
+      {/* Recent Changes Audit Card */}
+      <Card className="border-slate-200/90 dark:border-slate-800">
+        <CardHeader className="flex flex-row items-center justify-between pb-3">
+          <div className="flex items-center gap-2">
+            <History className="h-4 w-4 text-slate-500" />
+            <CardTitle className="text-base font-semibold text-slate-900 dark:text-slate-100">
+              Recent changes
+            </CardTitle>
           </div>
-        </div>
-        {history.loading ? (
-          <LoadingState compact label="Loading recent changes" />
-        ) : history.error ? (
-          <ErrorState compact title="History unavailable" message={history.error} actionLabel="Try again" onAction={history.refresh} />
-        ) : history.allChanges.length === 0 ? (
-          <p className="history-empty">No changes recorded for this date.</p>
-        ) : (
-          <ol className="history-list">
-            {history.allChanges.map((item, index) => {
-              if (item.type === 'allocation') {
-                const mealLabel = item.mealType === 'morning' ? 'Morning' : 'Night';
-                const actorLabel = getRoleLabel(item.actorRole);
-                let title;
-                let subtitle;
+          <span className="text-xs text-slate-400">Audit trail</span>
+        </CardHeader>
 
-                if (item.changeType === 'reset') {
-                  title = `${mealLabel} shared allocation reset`;
-                  subtitle = item.reason || 'Reset to individual plates because participants changed.';
+        <CardContent>
+          {history.loading ? (
+            <div className="space-y-2">
+              <Skeleton className="h-10 w-full rounded-md" />
+              <Skeleton className="h-10 w-full rounded-md" />
+            </div>
+          ) : history.error ? (
+            <ErrorState
+              compact
+              title="History unavailable"
+              message={history.error}
+              actionLabel="Try again"
+              onAction={history.refresh}
+            />
+          ) : history.allChanges.length === 0 ? (
+            <p className="text-xs text-slate-400 dark:text-slate-500 py-3 text-center">
+              No changes recorded for this date.
+            </p>
+          ) : (
+            <div className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
+              {history.allChanges.map((item, index) => {
+                if (item.type === 'allocation') {
+                  const mealLabel = item.mealType === 'morning' ? 'Morning' : 'Night';
+                  const actorLabel = getRoleLabel(item.actorRole);
+                  let title;
+                  let subtitle;
+
+                  if (item.changeType === 'reset') {
+                    title = `${mealLabel} shared allocation reset`;
+                    subtitle =
+                      item.reason || 'Reset to individual plates because participants changed.';
+                  } else {
+                    title = `${actorLabel} updated ${mealLabel} plate sharing`;
+                    const fromPlates = item.from?.plates?.length ?? 'default';
+                    const toPlates = item.to?.plates?.length ?? 'default';
+                    subtitle = `${fromPlates} plates → ${toPlates} plates`;
+                  }
+
+                  return (
+                    <div
+                      key={`${item.changedAt}-alloc-${index}`}
+                      className="py-2.5 flex items-start justify-between gap-3"
+                    >
+                      <div>
+                        <strong className="font-semibold text-slate-900 dark:text-slate-100 block">
+                          {title}
+                        </strong>
+                        <span className="text-slate-500 dark:text-slate-400">{subtitle}</span>
+                      </div>
+                      <time className="text-slate-400 shrink-0 text-[11px]" dateTime={item.changedAt}>
+                        {formatIndiaTime(item.changedAt)}
+                      </time>
+                    </div>
+                  );
+                }
+
+                // Status change item
+                const memberName = item.memberId[0].toUpperCase() + item.memberId.slice(1);
+                let actionDescription;
+                if (item.actorRole === 'member' && item.actorMemberId) {
+                  const actorName =
+                    item.actorMemberId[0].toUpperCase() + item.actorMemberId.slice(1);
+                  if (item.actorMemberId === item.memberId) {
+                    actionDescription = `${actorName} changed their ${item.mealType === 'morning' ? 'Morning' : 'Night'} meal`;
+                  } else {
+                    actionDescription = `${actorName} changed ${memberName}'s ${item.mealType === 'morning' ? 'Morning' : 'Night'} meal`;
+                  }
                 } else {
-                  title = `${actorLabel} updated ${mealLabel} plate sharing`;
-                  const fromPlates = item.from?.plates?.length ?? 'default';
-                  const toPlates = item.to?.plates?.length ?? 'default';
-                  subtitle = `${fromPlates} plates → ${toPlates} plates`;
+                  actionDescription = `${getRoleLabel(item.actorRole)} changed ${memberName}'s ${item.mealType === 'morning' ? 'Morning' : 'Night'} meal`;
                 }
 
                 return (
-                  <li key={`${item.changedAt}-alloc-${index}`}>
-                    <time dateTime={item.changedAt}>{formatIndiaTime(item.changedAt)}</time>
+                  <div
+                    key={`${item.changedAt}-${item.revision ?? index}`}
+                    className="py-2.5 flex items-start justify-between gap-3"
+                  >
                     <div>
-                      <strong>{title}</strong>
-                      <span>{subtitle}</span>
+                      <strong className="font-semibold text-slate-900 dark:text-slate-100 block">
+                        {actionDescription}
+                      </strong>
+                      <span className="text-slate-500 dark:text-slate-400">
+                        {item.from === 'taking' ? 'Taking' : 'Skip'}{' '}
+                        <span aria-hidden="true">→</span>{' '}
+                        {item.to === 'taking' ? 'Taking' : 'Skip'}
+                      </span>
                     </div>
-                  </li>
-                );
-              }
-
-              // Status change item
-              const memberName = item.memberId[0].toUpperCase() + item.memberId.slice(1);
-              let actionDescription;
-              if (item.actorRole === 'member' && item.actorMemberId) {
-                const actorName = item.actorMemberId[0].toUpperCase() + item.actorMemberId.slice(1);
-                if (item.actorMemberId === item.memberId) {
-                  actionDescription = `${actorName} changed their ${item.mealType === 'morning' ? 'Morning' : 'Night'} meal`;
-                } else {
-                  actionDescription = `${actorName} changed ${memberName}'s ${item.mealType === 'morning' ? 'Morning' : 'Night'} meal`;
-                }
-              } else {
-                actionDescription = `${getRoleLabel(item.actorRole)} changed ${memberName}'s ${item.mealType === 'morning' ? 'Morning' : 'Night'} meal`;
-              }
-
-              return (
-                <li key={`${item.changedAt}-${item.revision ?? index}`}>
-                  <time dateTime={item.changedAt}>{formatIndiaTime(item.changedAt)}</time>
-                  <div>
-                    <strong>{actionDescription}</strong>
-                    <span>{item.from === 'taking' ? 'Taking' : 'Skip'} <span aria-hidden="true">→</span> {item.to === 'taking' ? 'Taking' : 'Skip'}</span>
+                    <time className="text-slate-400 shrink-0 text-[11px]" dateTime={item.changedAt}>
+                      {formatIndiaTime(item.changedAt)}
+                    </time>
                   </div>
-                </li>
-              );
-            })}
-          </ol>
-        )}
-      </section>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
+      {/* Reminder Settings Panel */}
       <ReminderSettingsPanel editable={auth.role === 'superadmin'} />
     </div>
   );

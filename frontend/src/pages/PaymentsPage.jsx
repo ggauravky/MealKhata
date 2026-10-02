@@ -1,13 +1,24 @@
-import { ChevronLeft, ChevronRight, CircleDollarSign, History, Info, WalletCards } from 'lucide-react';
+import {
+  AlertCircle,
+  ChevronLeft,
+  ChevronRight,
+  CircleDollarSign,
+  CreditCard,
+  History,
+  WalletCards,
+} from 'lucide-react';
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/common/PageHeader.jsx';
 import { PaymentFlowDialog } from '../components/payments/PaymentFlowDialog.jsx';
 import { PaymentSettingsPanel } from '../components/payments/PaymentSettingsPanel.jsx';
 import { VoidPaymentDialog } from '../components/payments/VoidPaymentDialog.jsx';
-import { EmptyState } from '../components/ui/EmptyState.jsx';
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card.jsx';
+import { Button } from '../components/ui/button.jsx';
+import { Badge } from '../components/ui/badge.jsx';
+import { MemberAvatar } from '../components/ui/avatar.jsx';
 import { ErrorState } from '../components/ui/ErrorState.jsx';
-import { LoadingState } from '../components/ui/LoadingState.jsx';
+import { Skeleton } from '../components/ui/skeleton.jsx';
 import { useAuth } from '../hooks/useAuth.js';
 import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
 import { usePaymentHistory } from '../hooks/usePaymentHistory.js';
@@ -20,64 +31,145 @@ import { addLogicalMonths, formatLogicalMonth, isValidLogicalMonth } from '../li
 import { formatPaise } from '../lib/money.js';
 import { canInitiatePayment, PAYMENT_STATUS_LABELS } from '../lib/paymentFlow.js';
 
-const periodLabels = { past: 'Completed month', current: 'Current total to date', future: 'Future month' };
+const periodLabels = {
+  past: 'Completed month',
+  current: 'Current total to date',
+  future: 'Future month',
+};
 
 function formatPaymentTime(value) {
   return new Intl.DateTimeFormat('en-IN', {
-    day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Kolkata',
+    day: 'numeric',
+    month: 'short',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'Asia/Kolkata',
   }).format(new Date(value));
 }
 
-function MemberPaymentCard({ roommate, member, periodType, role, currentMemberId, isOnline = true, isClosed = false, onPay }) {
+function MemberPaymentCard({
+  roommate,
+  member,
+  periodType,
+  role,
+  currentMemberId,
+  isOnline = true,
+  isClosed = false,
+  onPay,
+}) {
+  const isSelf = roommate.id === currentMemberId;
   const canPay = canInitiatePayment({ role, member, currentMemberId });
-  const billLabel = member.billAmountPaise === null ? PAYMENT_STATUS_LABELS[member.status] : formatPaise(member.billAmountPaise);
+  const billLabel =
+    member.billAmountPaise === null
+      ? PAYMENT_STATUS_LABELS[member.status]
+      : formatPaise(member.billAmountPaise);
+
+  const statusVariant =
+    member.status === 'paid'
+      ? 'taking'
+      : member.status === 'partial' || member.status === 'due'
+        ? 'warning'
+        : 'secondary';
+
+  const hasRemaining =
+    Number.isSafeInteger(member.remainingAmountPaise) && member.remainingAmountPaise > 0;
 
   return (
-    <article className="payment-member-card">
-      <div className="payment-member-card__heading">
-        <span className={`avatar avatar--${roommate.id}`} aria-hidden="true">{roommate.initial}</span>
-        <div>
-          <h3>{roommate.name}</h3>
-          <span className={`payment-status payment-status--${member.status}`}>{PAYMENT_STATUS_LABELS[member.status]}</span>
+    <Card
+      className={`transition-all ${
+        isSelf
+          ? 'border-teal-600/80 bg-teal-50/20 dark:border-teal-700/60 dark:bg-teal-950/20 ring-1 ring-teal-500/20'
+          : 'border-slate-200/90 dark:border-slate-800'
+      }`}
+    >
+      <CardHeader className="flex flex-row items-center justify-between pb-3">
+        <div className="flex items-center gap-2.5">
+          <MemberAvatar memberId={roommate.id} name={roommate.name} size="sm" />
+          <div>
+            <div className="flex items-center gap-1.5">
+              <CardTitle className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                {roommate.name}
+              </CardTitle>
+              {isSelf && (
+                <span className="rounded-full bg-teal-100 dark:bg-teal-900/60 text-teal-800 dark:text-teal-300 text-[10px] font-semibold px-1.5 py-0.2">
+                  You
+                </span>
+              )}
+            </div>
+          </div>
         </div>
-      </div>
-      <dl className="payment-amounts">
-        <div><dt>Bill</dt><dd>{billLabel}</dd></div>
-        <div><dt>Paid</dt><dd>{formatPaise(member.paidAmountPaise)}</dd></div>
-        <div><dt>Remaining</dt><dd>{member.billAmountPaise === null ? '—' : formatPaise(member.remainingAmountPaise)}</dd></div>
-        {member.overpaidAmountPaise > 0 && <div className="payment-amounts__overpaid"><dt>Overpaid</dt><dd>{formatPaise(member.overpaidAmountPaise)}</dd></div>}
-      </dl>
-      <p className="card-note card-note--info">
-        <Info size={13} aria-hidden="true" />
-        Your bill reflects your exact share of physical plates ordered.
-      </p>
-      {periodType === 'current' && Number.isSafeInteger(member.projectedBillAmountPaise) && (
-        <p className="projection-note">Projected month total: {formatPaise(member.projectedBillAmountPaise)} · not currently due</p>
-      )}
-      {canPay && (
-        <button
-          className={`button ${isClosed ? 'button--secondary' : 'button--primary'} button--full`}
-          type="button"
-          disabled={!isOnline || isClosed}
-          title={
-            isClosed
-              ? 'Reopen this month before making financial changes.'
-              : !isOnline
-                ? 'Payments are unavailable while offline'
-                : undefined
-          }
-          onClick={() => isOnline && !isClosed && onPay({ ...roommate, ...member })}
-        >
-          {isClosed
-            ? 'Month closed'
-            : isOnline
-              ? `Pay ${formatPaise(member.remainingAmountPaise)}`
-              : 'Offline — Payment unavailable'}
-        </button>
-      )}
-      {isClosed && <p className="card-note">This month is closed. Reopen this month before making financial changes.</p>}
-      {periodType === 'future' && <p className="card-note">Projected bill: {formatPaise(member.projectedBillAmountPaise)}</p>}
-    </article>
+        <Badge variant={statusVariant} className="text-xs">
+          {PAYMENT_STATUS_LABELS[member.status]}
+        </Badge>
+      </CardHeader>
+
+      <CardContent className="space-y-3.5">
+        {/* Figures strip */}
+        <div className="grid grid-cols-3 gap-2 rounded-lg bg-slate-50 p-3 text-xs dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800/80">
+          <div>
+            <span className="block text-slate-400 text-[11px]">Bill</span>
+            <span className="font-semibold text-slate-900 dark:text-slate-100 text-sm">
+              {billLabel}
+            </span>
+          </div>
+          <div>
+            <span className="block text-slate-400 text-[11px]">Paid</span>
+            <span className="font-semibold text-emerald-700 dark:text-emerald-400 text-sm">
+              {formatPaise(member.paidAmountPaise)}
+            </span>
+          </div>
+          <div>
+            <span className="block text-slate-400 text-[11px]">Remaining</span>
+            <span
+              className={`font-semibold text-sm ${
+                hasRemaining
+                  ? 'text-orange-700 dark:text-orange-400 font-bold'
+                  : 'text-slate-900 dark:text-slate-100'
+              }`}
+            >
+              {member.billAmountPaise === null ? '—' : formatPaise(member.remainingAmountPaise)}
+            </span>
+          </div>
+        </div>
+
+        {member.overpaidAmountPaise > 0 && (
+          <p className="text-xs text-purple-700 dark:text-purple-300">
+            Overpaid: {formatPaise(member.overpaidAmountPaise)}
+          </p>
+        )}
+
+        {periodType === 'current' && Number.isSafeInteger(member.projectedBillAmountPaise) && (
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+            Projected month total: {formatPaise(member.projectedBillAmountPaise)}
+          </p>
+        )}
+
+        {canPay && (
+          <Button
+            variant={isClosed ? 'secondary' : 'default'}
+            size="default"
+            className="w-full gap-2 text-xs font-semibold"
+            disabled={!isOnline || isClosed}
+            onClick={() => isOnline && !isClosed && onPay({ ...roommate, ...member })}
+          >
+            <CreditCard className="h-4 w-4" />
+            <span>
+              {isClosed
+                ? 'Month closed'
+                : isOnline
+                  ? `Pay ${formatPaise(member.remainingAmountPaise)}`
+                  : 'Offline — payment unavailable'}
+            </span>
+          </Button>
+        )}
+
+        {isClosed && (
+          <p className="text-[11px] text-slate-400 text-center">
+            Month closed. Statements frozen.
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -92,69 +184,194 @@ export function PaymentsPage() {
   const [payingMember, setPayingMember] = useState(null);
   const [voidingPayment, setVoidingPayment] = useState(null);
   const [message, setMessage] = useState('');
-  const month = selectedMonth || (isValidLogicalMonth(queryMonth) ? queryMonth : serverToday.date.slice(0, 7));
+
+  const month =
+    selectedMonth ||
+    (isValidLogicalMonth(queryMonth) ? queryMonth : serverToday.date.slice(0, 7));
   const summary = usePaymentSummary(month);
   const history = usePaymentHistory(month);
   const settlement = useSettlement(month);
   const isClosed = settlement.isClosed;
   const data = summary.data;
 
-  const refreshPayments = () => { summary.refresh(); history.refresh(); };
+  const refreshPayments = () => {
+    summary.refresh();
+    history.refresh();
+  };
+
   const handleRecorded = () => {
     setPayingMember(null);
-    setMessage('Payment recorded. It was confirmed by the user, not verified by a bank.');
+    setMessage('Payment recorded. Recorded by user confirmation; not verified by a bank.');
     refreshPayments();
   };
+
   const handleVoided = () => {
     setVoidingPayment(null);
-    setMessage('Payment voided. The financial record remains in history.');
+    setMessage('Payment voided. The financial record remains in audit history.');
     refreshPayments();
   };
 
   return (
-    <div className="page-stack">
-      <PageHeader title="Payments" description="Monthly bills, manual UPI payments, and an auditable payment history." />
+    <div className="space-y-6 max-w-4xl mx-auto">
+      <PageHeader
+        title="Payments"
+        description="Monthly room bills, peer-to-peer UPI payments, and auditable history."
+      />
 
-      {serverToday.error && <ErrorState title="Payments unavailable" message={serverToday.error} />}
-      {serverToday.loading && !month && <LoadingState label="Loading current month" />}
-
-      {month && (
-        <section className="panel report-toolbar" aria-label="Payment month controls">
-          <button className="button button--quiet" type="button" onClick={() => setSelectedMonth(addLogicalMonths(month, -1))}><ChevronLeft size={17} aria-hidden="true" /> Previous</button>
-          <div><strong>{formatLogicalMonth(month)}</strong><span>{data ? periodLabels[data.periodType] : 'Loading payments'}</span></div>
-          <button className="button button--quiet" type="button" onClick={() => setSelectedMonth(addLogicalMonths(month, 1))}>Next <ChevronRight size={17} aria-hidden="true" /></button>
-          <button className="button button--quiet" type="button" onClick={() => setSelectedMonth(serverToday.date.slice(0, 7))}>Current month</button>
-          <label className="month-input"><span className="sr-only">Choose payment month</span><input type="month" value={month} onChange={(event) => setSelectedMonth(event.target.value)} /></label>
-        </section>
+      {serverToday.error && (
+        <ErrorState title="Payments unavailable" message={serverToday.error} />
       )}
 
-      <p className="save-feedback payment-page-feedback" role="status" aria-live="polite">{message}</p>
+      {/* Month Toolbar Card */}
+      {month && (
+        <Card className="border-slate-200/90 dark:border-slate-800">
+          <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4">
+            <div>
+              <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                {formatLogicalMonth(month)}
+              </h2>
+              <span className="text-xs text-slate-500 dark:text-slate-400">
+                {data ? periodLabels[data.periodType] : 'Loading payments...'}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 w-8 p-0"
+                onClick={() => setSelectedMonth(addLogicalMonths(month, -1))}
+                aria-label="Previous month"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 px-2.5 text-xs font-medium"
+                onClick={() => setSelectedMonth(serverToday.date.slice(0, 7))}
+              >
+                Current
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 w-8 p-0"
+                onClick={() => setSelectedMonth(addLogicalMonths(month, 1))}
+                aria-label="Next month"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+              <input
+                type="month"
+                value={month}
+                onChange={(event) => setSelectedMonth(event.target.value)}
+                className="h-8 rounded-sm border border-slate-200 bg-white px-2 text-xs text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 ml-1 cursor-pointer"
+                aria-label="Jump to payment month"
+              />
+            </div>
+          </CardHeader>
+        </Card>
+      )}
+
+      {message && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-xs text-teal-800 dark:border-teal-900/50 dark:bg-teal-950/40 dark:text-teal-300"
+        >
+          {message}
+        </div>
+      )}
+
+      {/* Super Admin Payment Receiver Configuration */}
       {auth.role === 'superadmin' && <PaymentSettingsPanel />}
-      {summary.error && <ErrorState title="Payment summary unavailable" message={summary.error} actionLabel="Try again" onAction={summary.refresh} />}
-      {summary.loading && !data && <LoadingState label="Calculating payment status" />}
+
+      {summary.error && (
+        <ErrorState
+          title="Payment summary unavailable"
+          message={summary.error}
+          actionLabel="Try again"
+          onAction={summary.refresh}
+        />
+      )}
+
+      {summary.loading && !data && (
+        <div className="space-y-4">
+          <Skeleton className="h-28 w-full rounded-lg" />
+          <Skeleton className="h-48 w-full rounded-lg" />
+        </div>
+      )}
 
       {data && (
         <>
-          <section className="panel payment-room-summary" aria-labelledby="room-payment-title">
-            <div className="section-heading section-heading--compact">
-              <span className="feature-icon" aria-hidden="true"><WalletCards size={22} /></span>
-              <div><h2 id="room-payment-title">Room total</h2><p>{periodLabels[data.periodType]}</p></div>
-            </div>
-            <div className="room-payment-figures">
-              <div><span>Bill</span><strong>{data.room.billAmountPaise === null ? PAYMENT_STATUS_LABELS[data.room.status] : formatPaise(data.room.billAmountPaise)}</strong></div>
-              <div><span>Paid</span><strong>{formatPaise(data.room.paidAmountPaise)}</strong></div>
-              <div><span>Remaining</span><strong>{data.room.billAmountPaise === null ? '—' : formatPaise(data.room.remainingAmountPaise)}</strong></div>
-            </div>
-          </section>
+          {/* Room Total Card */}
+          <Card className="border-slate-200/90 dark:border-slate-800">
+            <CardHeader className="flex flex-row items-center justify-between pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="h-9 w-9 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-700 dark:text-slate-300">
+                  <WalletCards className="h-5 w-5" />
+                </div>
+                <div>
+                  <CardTitle className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                    Room Total
+                  </CardTitle>
+                  <span className="text-xs text-slate-500 dark:text-slate-400">
+                    {periodLabels[data.periodType]}
+                  </span>
+                </div>
+              </div>
+            </CardHeader>
+
+            <CardContent>
+              <div className="grid grid-cols-3 gap-2.5 rounded-lg bg-slate-50 p-3.5 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800/80">
+                <div>
+                  <span className="block text-slate-500 dark:text-slate-400 text-xs">Total Bill</span>
+                  <span className="text-lg font-bold text-slate-900 dark:text-slate-100">
+                    {data.room.billAmountPaise === null
+                      ? PAYMENT_STATUS_LABELS[data.room.status]
+                      : formatPaise(data.room.billAmountPaise)}
+                  </span>
+                </div>
+                <div>
+                  <span className="block text-slate-500 dark:text-slate-400 text-xs">Total Collected</span>
+                  <span className="text-lg font-bold text-emerald-700 dark:text-emerald-400">
+                    {formatPaise(data.room.paidAmountPaise)}
+                  </span>
+                </div>
+                <div>
+                  <span className="block text-slate-500 dark:text-slate-400 text-xs">Outstanding</span>
+                  <span
+                    className={`text-lg font-bold ${
+                      data.room.remainingAmountPaise > 0
+                        ? 'text-orange-700 dark:text-orange-400'
+                        : 'text-slate-900 dark:text-slate-100'
+                    }`}
+                  >
+                    {data.room.billAmountPaise === null
+                      ? '—'
+                      : formatPaise(data.room.remainingAmountPaise)}
+                  </span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
           {isClosed && (
-            <div className="panel settlement-banner" role="status">
-              <strong>{formatLogicalMonth(month)} is closed.</strong>
-              <p>All meal records, bills, and payments are frozen. Reopen this month before making financial changes.</p>
+            <div
+              role="status"
+              className="settlement-banner rounded-lg border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200 flex items-start gap-2.5"
+            >
+              <AlertCircle className="h-4 w-4 shrink-0 text-amber-600 mt-0.5" />
+              <div>
+                <strong className="block font-semibold">{formatLogicalMonth(month)} is closed.</strong>
+                <span>All meal records, bills, and payments are frozen. Reopen this month before making financial changes.</span>
+              </div>
             </div>
           )}
 
-          <section className="payment-member-grid" aria-label={`Member payment status for ${formatLogicalMonth(month)}`}>
+          {/* Member Payment Cards Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {ROOMMATES.map((roommate) => (
               <MemberPaymentCard
                 key={roommate.id}
@@ -168,62 +385,153 @@ export function PaymentsPage() {
                 onPay={setPayingMember}
               />
             ))}
-          </section>
+          </div>
         </>
       )}
 
-      <section className="panel payment-history" aria-labelledby="payment-history-title">
-        <div className="section-heading section-heading--compact">
-          <span className="feature-icon" aria-hidden="true"><History size={22} /></span>
-          <div><h2 id="payment-history-title">Payment History</h2><p>Recorded and voided entries remain visible.</p></div>
-        </div>
-        {history.loading ? <LoadingState compact label="Loading payment history" /> : history.error ? (
-          <ErrorState compact title="History unavailable" message={!isOnline ? 'Payment history is unavailable while offline.' : history.error} actionLabel="Try again" onAction={history.refresh} />
-        ) : history.items.length === 0 ? (
-          <EmptyState title="No payment history" message={`No payments have been recorded for ${formatLogicalMonth(month)}.`} />
-        ) : (
-          <ol className="payment-history-list">
-            {history.items.map((payment) => {
-              const roommate = ROOMMATES.find(({ id }) => id === payment.memberId);
-              return (
-                <li key={payment.paymentId} className={payment.status === 'voided' ? 'is-voided' : ''}>
-                  <div className="payment-history-list__icon" aria-hidden="true"><CircleDollarSign size={20} /></div>
-                  <div className="payment-history-list__content">
-                    <time dateTime={payment.recordedAt}>{formatPaymentTime(payment.recordedAt)}</time>
-                    <strong>{roommate?.name ?? payment.memberId}</strong>
-                    <span>UPI · {payment.status === 'voided' ? 'Voided' : 'Recorded'}</span>
-                    {payment.upiReference && <span>Reference: {payment.upiReference}</span>}
-                    {payment.status === 'voided' && payment.voidReason && <span>Reason: {payment.voidReason}</span>}
-                  </div>
-                  <div className="payment-history-list__amount">
-                    <strong>{formatPaise(payment.amountPaise)}</strong>
-                    {auth.role === 'superadmin' && payment.status === 'recorded' && (
-                      <button
-                        className="text-button text-button--danger"
-                        type="button"
-                        disabled={!isOnline || isClosed}
-                        title={
-                          isClosed
-                            ? 'This month is closed. Reopen the month before voiding payments.'
-                            : !isOnline
-                              ? 'Voiding payments is unavailable while offline'
-                              : undefined
-                        }
-                        onClick={() => isOnline && !isClosed && setVoidingPayment(payment)}
-                      >
-                        Void payment
-                      </button>
-                    )}
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
-        )}
-      </section>
+      {/* Payment History Card */}
+      <Card className="border-slate-200/90 dark:border-slate-800">
+        <CardHeader className="flex flex-row items-center justify-between pb-3">
+          <div className="flex items-center gap-2">
+            <History className="h-4 w-4 text-slate-500" />
+            <CardTitle className="text-base font-semibold text-slate-900 dark:text-slate-100">
+              Payment history
+            </CardTitle>
+          </div>
+          <span className="text-xs text-slate-400">Auditable ledger</span>
+        </CardHeader>
 
-      {payingMember && <PaymentFlowDialog member={payingMember} month={month} onClose={() => setPayingMember(null)} onRecorded={handleRecorded} />}
-      {voidingPayment && <VoidPaymentDialog payment={voidingPayment} onClose={() => setVoidingPayment(null)} onVoided={handleVoided} />}
+        <CardContent>
+          {history.loading ? (
+            <div className="space-y-2">
+              <Skeleton className="h-12 w-full rounded-md" />
+              <Skeleton className="h-12 w-full rounded-md" />
+            </div>
+          ) : history.error ? (
+            <ErrorState
+              compact
+              title="History unavailable"
+              message={
+                !isOnline ? 'Payment history is unavailable while offline.' : history.error
+              }
+              actionLabel="Try again"
+              onAction={history.refresh}
+            />
+          ) : history.items.length === 0 ? (
+            <div className="flex flex-col items-center justify-center p-8 text-center rounded-lg border border-dashed border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30">
+              <CircleDollarSign className="h-8 w-8 text-slate-300 dark:text-slate-600 mb-2" />
+              <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                No payments recorded yet
+              </p>
+              <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">
+                Payments recorded for {formatLogicalMonth(month)} will appear here.
+              </p>
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-100 dark:divide-slate-800">
+              {history.items.map((payment) => {
+                const roommate = ROOMMATES.find(({ id }) => id === payment.memberId);
+                const isVoided = payment.status === 'voided';
+
+                return (
+                  <div
+                    key={payment.paymentId}
+                    className={`flex items-center justify-between py-3 ${
+                      isVoided ? 'opacity-60' : ''
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={`h-8 w-8 rounded-full flex items-center justify-center text-xs font-semibold ${
+                          isVoided
+                            ? 'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500'
+                            : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                        }`}
+                      >
+                        <CircleDollarSign className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                            {roommate?.name ?? payment.memberId}
+                          </span>
+                          <Badge
+                            variant={isVoided ? 'destructive' : 'taking'}
+                            className="text-[10px] py-0 px-1.5"
+                          >
+                            {isVoided ? 'Voided' : 'Recorded'}
+                          </Badge>
+                        </div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                          <time dateTime={payment.recordedAt}>
+                            {formatPaymentTime(payment.recordedAt)}
+                          </time>
+                          {payment.upiReference && (
+                            <span className="ml-2 font-mono text-[11px]">
+                              Ref: {payment.upiReference}
+                            </span>
+                          )}
+                          {isVoided && payment.voidReason && (
+                            <span className="ml-2 text-red-600 dark:text-red-400">
+                              Reason: {payment.voidReason}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <span
+                        className={`text-sm font-bold ${
+                          isVoided
+                            ? 'line-through text-slate-400'
+                            : 'text-slate-900 dark:text-slate-100'
+                        }`}
+                      >
+                        {formatPaise(payment.amountPaise)}
+                      </span>
+
+                      {auth.role === 'superadmin' && payment.status === 'recorded' && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={!isOnline || isClosed}
+                          title={
+                            isClosed
+                              ? 'This month is closed. Reopen the month before voiding payments.'
+                              : undefined
+                          }
+                          onClick={() => isOnline && !isClosed && setVoidingPayment(payment)}
+                          className="h-7 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/40"
+                        >
+                          Void
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {payingMember && (
+        <PaymentFlowDialog
+          member={payingMember}
+          month={month}
+          onClose={() => setPayingMember(null)}
+          onRecorded={handleRecorded}
+        />
+      )}
+
+      {voidingPayment && (
+        <VoidPaymentDialog
+          payment={voidingPayment}
+          onClose={() => setVoidingPayment(null)}
+          onVoided={handleVoided}
+        />
+      )}
     </div>
   );
 }

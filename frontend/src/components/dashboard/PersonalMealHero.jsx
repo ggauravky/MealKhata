@@ -1,6 +1,8 @@
-import { Check, Utensils, X } from 'lucide-react';
+import { Moon, SunMedium, Users } from 'lucide-react';
 import { formatPaise } from '../../lib/money.js';
 import { formatPlateFraction } from '../../lib/plates.js';
+import { Card, CardContent, CardHeader, CardTitle } from '../ui/card.jsx';
+import { Badge } from '../ui/badge.jsx';
 
 export function PersonalMealHero({ hero, isOnline = true, pendingRow = '', onChange }) {
   if (!hero) return null;
@@ -18,141 +20,190 @@ export function PersonalMealHero({ hero, isOnline = true, pendingRow = '', onCha
   } = hero;
 
   return (
-    <section className="panel personal-hero-card" aria-labelledby="personal-hero-title">
-      <div className="personal-hero-card__header">
-        <div>
-          <span className="section-eyebrow">YOUR MEALS TODAY</span>
-          <h2 id="personal-hero-title">Today&apos;s Meal Choice</h2>
-        </div>
-      </div>
+    <Card className="border-slate-200/90 dark:border-slate-800">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base font-semibold text-slate-900 dark:text-slate-100">
+          My meals today
+        </CardTitle>
+      </CardHeader>
 
-      <div className="personal-hero-grid">
-        {/* Morning Slot */}
-        <div className={`personal-slot personal-slot--${morning}`}>
-          <div className="personal-slot__info">
-            <div className="personal-slot__header-line">
-              <span className="personal-slot__meal">Morning Meal</span>
-              {isMorningShared && (
-                <span className="shared-pill shared-pill--compact" aria-label="Shared physical plate">
-                  <Utensils size={11} aria-hidden="true" /> Shared
+      <CardContent>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+          {/* Morning Slot */}
+          <div
+            className={`flex flex-col justify-between rounded-lg border p-4 transition-colors ${
+              morning === 'taking'
+                ? 'border-emerald-200/80 bg-emerald-50/40 dark:border-emerald-900/40 dark:bg-emerald-950/20'
+                : 'border-slate-200/80 bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900/40'
+            }`}
+          >
+            <div>
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-xs font-medium text-slate-700 dark:text-slate-300">
+                  <SunMedium className="h-4 w-4 text-amber-500" />
+                  <span>Morning</span>
                 </span>
+                {isMorningShared && (
+                  <Badge variant="shared" className="gap-1 text-[10px] py-0 px-1.5">
+                    <Users className="h-3 w-3" />
+                    <span>Shared</span>
+                  </Badge>
+                )}
+              </div>
+
+              <div className="mt-2.5 flex items-baseline gap-2">
+                <span
+                  className={`text-lg font-bold tracking-tight ${
+                    morning === 'taking'
+                      ? 'text-emerald-800 dark:text-emerald-300'
+                      : 'text-slate-500 dark:text-slate-400'
+                  }`}
+                >
+                  {morning === 'taking' ? 'Taking' : 'Skip'}
+                </span>
+              </div>
+
+              {morning === 'taking' && (
+                <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+                  {isMorningShared ? (
+                    <>
+                      <span>Share: <strong>{formatPlateFraction(morningShareUnits)} plate</strong></span>
+                      <span aria-hidden="true"> · </span>
+                      <span className="font-semibold text-slate-900 dark:text-slate-200">
+                        {formatPaise(morningCostPaise)}
+                      </span>
+                    </>
+                  ) : (
+                    <span>Cost: <strong>{formatPaise(morningCostPaise || 5000)}</strong></span>
+                  )}
+                </p>
               )}
             </div>
 
-            <strong className={`personal-slot__status status-text--${morning}`}>
-              {morning === 'taking' ? (
-                <>
-                  <Check size={16} aria-hidden="true" /> Taking
-                </>
-              ) : (
-                <>
-                  <X size={16} aria-hidden="true" /> Skip
-                </>
-              )}
-            </strong>
-
-            {morning === 'taking' && (
-              <p className="personal-slot__share-detail">
-                {isMorningShared ? (
-                  <>
-                    <span>Your share: <strong>{formatPlateFraction(morningShareUnits)} plate</strong></span>
-                    <span aria-hidden="true"> · </span>
-                    <span className="personal-slot__cost">{formatPaise(morningCostPaise)}</span>
-                  </>
-                ) : (
-                  <span>Cost: <strong>{formatPaise(morningCostPaise || 5000)}</strong></span>
-                )}
-              </p>
+            {canEdit && (
+              <div
+                className="mt-4 flex rounded-md bg-slate-200/60 p-0.5 dark:bg-slate-800/80"
+                role="group"
+                aria-label="Morning meal choice"
+              >
+                <button
+                  type="button"
+                  aria-pressed={morning === 'taking'}
+                  disabled={!isOnline || pendingRow === `morning:${hero.memberId}`}
+                  onClick={() => isOnline && onChange('morning', hero.memberId, 'taking')}
+                  className={`flex-1 rounded-sm py-1.5 text-xs font-medium transition-all ${
+                    morning === 'taking'
+                      ? 'bg-emerald-600 text-white shadow-xs font-semibold'
+                      : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
+                  }`}
+                >
+                  Taking
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={morning === 'skip'}
+                  disabled={!isOnline || pendingRow === `morning:${hero.memberId}`}
+                  onClick={() => isOnline && onChange('morning', hero.memberId, 'skip')}
+                  className={`flex-1 rounded-sm py-1.5 text-xs font-medium transition-all ${
+                    morning === 'skip'
+                      ? 'bg-slate-800 text-white dark:bg-slate-200 dark:text-slate-900 shadow-xs font-semibold'
+                      : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
+                  }`}
+                >
+                  Skip
+                </button>
+              </div>
             )}
           </div>
 
-          {canEdit && (
-            <div className="meal-switch" role="group" aria-label="Morning meal choice">
-              <button
-                type="button"
-                className={`meal-switch__btn ${morning === 'taking' ? 'is-active is-taking' : ''}`}
-                aria-pressed={morning === 'taking'}
-                disabled={!isOnline || pendingRow === `morning:${hero.memberId}`}
-                onClick={() => isOnline && onChange('morning', hero.memberId, 'taking')}
-              >
-                Taking
-              </button>
-              <button
-                type="button"
-                className={`meal-switch__btn ${morning === 'skip' ? 'is-active is-skip' : ''}`}
-                aria-pressed={morning === 'skip'}
-                disabled={!isOnline || pendingRow === `morning:${hero.memberId}`}
-                onClick={() => isOnline && onChange('morning', hero.memberId, 'skip')}
-              >
-                Skip
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Night Slot */}
-        <div className={`personal-slot personal-slot--${night}`}>
-          <div className="personal-slot__info">
-            <div className="personal-slot__header-line">
-              <span className="personal-slot__meal">Night Meal</span>
-              {isNightShared && (
-                <span className="shared-pill shared-pill--compact" aria-label="Shared physical plate">
-                  <Utensils size={11} aria-hidden="true" /> Shared
+          {/* Night Slot */}
+          <div
+            className={`flex flex-col justify-between rounded-lg border p-4 transition-colors ${
+              night === 'taking'
+                ? 'border-emerald-200/80 bg-emerald-50/40 dark:border-emerald-900/40 dark:bg-emerald-950/20'
+                : 'border-slate-200/80 bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900/40'
+            }`}
+          >
+            <div>
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-xs font-medium text-slate-700 dark:text-slate-300">
+                  <Moon className="h-4 w-4 text-indigo-500" />
+                  <span>Night</span>
                 </span>
+                {isNightShared && (
+                  <Badge variant="shared" className="gap-1 text-[10px] py-0 px-1.5">
+                    <Users className="h-3 w-3" />
+                    <span>Shared</span>
+                  </Badge>
+                )}
+              </div>
+
+              <div className="mt-2.5 flex items-baseline gap-2">
+                <span
+                  className={`text-lg font-bold tracking-tight ${
+                    night === 'taking'
+                      ? 'text-emerald-800 dark:text-emerald-300'
+                      : 'text-slate-500 dark:text-slate-400'
+                  }`}
+                >
+                  {night === 'taking' ? 'Taking' : 'Skip'}
+                </span>
+              </div>
+
+              {night === 'taking' && (
+                <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+                  {isNightShared ? (
+                    <>
+                      <span>Share: <strong>{formatPlateFraction(nightShareUnits)} plate</strong></span>
+                      <span aria-hidden="true"> · </span>
+                      <span className="font-semibold text-slate-900 dark:text-slate-200">
+                        {formatPaise(nightCostPaise)}
+                      </span>
+                    </>
+                  ) : (
+                    <span>Cost: <strong>{formatPaise(nightCostPaise || 7000)}</strong></span>
+                  )}
+                </p>
               )}
             </div>
 
-            <strong className={`personal-slot__status status-text--${night}`}>
-              {night === 'taking' ? (
-                <>
-                  <Check size={16} aria-hidden="true" /> Taking
-                </>
-              ) : (
-                <>
-                  <X size={16} aria-hidden="true" /> Skip
-                </>
-              )}
-            </strong>
-
-            {night === 'taking' && (
-              <p className="personal-slot__share-detail">
-                {isNightShared ? (
-                  <>
-                    <span>Your share: <strong>{formatPlateFraction(nightShareUnits)} plate</strong></span>
-                    <span aria-hidden="true"> · </span>
-                    <span className="personal-slot__cost">{formatPaise(nightCostPaise)}</span>
-                  </>
-                ) : (
-                  <span>Cost: <strong>{formatPaise(nightCostPaise || 7000)}</strong></span>
-                )}
-              </p>
+            {canEdit && (
+              <div
+                className="mt-4 flex rounded-md bg-slate-200/60 p-0.5 dark:bg-slate-800/80"
+                role="group"
+                aria-label="Night meal choice"
+              >
+                <button
+                  type="button"
+                  aria-pressed={night === 'taking'}
+                  disabled={!isOnline || pendingRow === `night:${hero.memberId}`}
+                  onClick={() => isOnline && onChange('night', hero.memberId, 'taking')}
+                  className={`flex-1 rounded-sm py-1.5 text-xs font-medium transition-all ${
+                    night === 'taking'
+                      ? 'bg-emerald-600 text-white shadow-xs font-semibold'
+                      : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
+                  }`}
+                >
+                  Taking
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={night === 'skip'}
+                  disabled={!isOnline || pendingRow === `night:${hero.memberId}`}
+                  onClick={() => isOnline && onChange('night', hero.memberId, 'skip')}
+                  className={`flex-1 rounded-sm py-1.5 text-xs font-medium transition-all ${
+                    night === 'skip'
+                      ? 'bg-slate-800 text-white dark:bg-slate-200 dark:text-slate-900 shadow-xs font-semibold'
+                      : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
+                  }`}
+                >
+                  Skip
+                </button>
+              </div>
             )}
           </div>
-
-          {canEdit && (
-            <div className="meal-switch" role="group" aria-label="Night meal choice">
-              <button
-                type="button"
-                className={`meal-switch__btn ${night === 'taking' ? 'is-active is-taking' : ''}`}
-                aria-pressed={night === 'taking'}
-                disabled={!isOnline || pendingRow === `night:${hero.memberId}`}
-                onClick={() => isOnline && onChange('night', hero.memberId, 'taking')}
-              >
-                Taking
-              </button>
-              <button
-                type="button"
-                className={`meal-switch__btn ${night === 'skip' ? 'is-active is-skip' : ''}`}
-                aria-pressed={night === 'skip'}
-                disabled={!isOnline || pendingRow === `night:${hero.memberId}`}
-                onClick={() => isOnline && onChange('night', hero.memberId, 'skip')}
-              >
-                Skip
-              </button>
-            </div>
-          )}
         </div>
-      </div>
-    </section>
+      </CardContent>
+    </Card>
   );
 }

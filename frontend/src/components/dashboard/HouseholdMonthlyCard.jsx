@@ -1,6 +1,8 @@
-import { ArrowRight, CreditCard, ReceiptText } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { formatPaise } from '../../lib/money.js';
+import { Card, CardContent, CardHeader, CardTitle } from '../ui/card.jsx';
+import { Button } from '../ui/button.jsx';
 
 export function HouseholdMonthlyCard({ household }) {
   if (!household) return null;
@@ -17,68 +19,86 @@ export function HouseholdMonthlyCard({ household }) {
     remainingAmountPaise,
   } = household;
 
+  const remaining = remainingAmountPaise || 0;
+
   return (
-    <section className="panel household-monthly-card" aria-labelledby="household-monthly-title">
-      <div className="household-monthly-card__header">
+    <Card className="border-slate-200/90 dark:border-slate-800">
+      <CardHeader className="flex flex-row items-center justify-between pb-3">
         <div>
-          <span className="section-eyebrow">HOUSEHOLD {monthLabel.toUpperCase()}</span>
-          <h2 id="household-monthly-title">Monthly Kitchen &amp; Expenses</h2>
+          <span className="text-[11px] font-medium uppercase tracking-wider text-slate-400 dark:text-slate-500">
+            Household overview
+          </span>
+          <CardTitle className="text-base font-semibold text-slate-900 dark:text-slate-100">
+            {monthLabel}
+          </CardTitle>
         </div>
-        <span className="badge-pill badge-pill--taking">
-          Fixed Pricing
-        </span>
-      </div>
+        <div className="flex items-center gap-1.5">
+          <Button variant="ghost" size="sm" asChild className="h-8 gap-1 text-xs text-teal-700 dark:text-teal-400 hover:text-teal-800">
+            <Link to={`/reports?month=${month}`}>
+              <span>Full Report</span>
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          </Button>
+          <Button variant="ghost" size="sm" asChild className="h-8 gap-1 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900">
+            <Link to={`/payments?month=${month}`}>
+              <span>Payment Ledger</span>
+            </Link>
+          </Button>
+        </div>
+      </CardHeader>
 
-      <div className="personal-monthly-stats">
-        <div className="monthly-stat-item">
-          <span className="monthly-stat-item__label">Morning Plates</span>
-          <strong className="monthly-stat-item__value">{morningCount}</strong>
+      <CardContent className="space-y-4">
+        {/* Compact plain typography summary */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-600 dark:text-slate-400">
+          <span>
+            Morning plates: <strong className="font-semibold text-slate-900 dark:text-slate-200">{morningCount}</strong>
+          </span>
+          <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">·</span>
+          <span>
+            Night plates: <strong className="font-semibold text-slate-900 dark:text-slate-200">{nightCount}</strong>
+          </span>
+          <span aria-hidden="true" className="text-slate-300 dark:text-slate-700">·</span>
+          <span>
+            Total physical: <strong className="font-semibold text-slate-900 dark:text-slate-200">{totalPlates}</strong>
+          </span>
         </div>
-        <div className="monthly-stat-item">
-          <span className="monthly-stat-item__label">Night Plates</span>
-          <strong className="monthly-stat-item__value">{nightCount}</strong>
-        </div>
-        <div className="monthly-stat-item">
-          <span className="monthly-stat-item__label">Total Physical</span>
-          <strong className="monthly-stat-item__value">{totalPlates}</strong>
-        </div>
-      </div>
 
-      <div className="personal-finance-grid">
-        <div className="finance-metric">
-          <span className="finance-metric__label">Room Bill to Date</span>
-          <strong className="finance-metric__value">
-            {billAmountPaise !== null ? formatPaise(billAmountPaise) : '—'}
-          </strong>
-        </div>
-        <div className="finance-metric">
-          <span className="finance-metric__label">Total Collected</span>
-          <strong className="finance-metric__value">{formatPaise(paidAmountPaise)}</strong>
-        </div>
-        <div className="finance-metric finance-metric--due">
-          <span className="finance-metric__label">Outstanding Total</span>
-          <strong className="finance-metric__value">
-            {remainingAmountPaise !== null ? formatPaise(remainingAmountPaise) : '—'}
-          </strong>
-        </div>
-      </div>
+        {/* Clean Financial Stats Row */}
+        <div className="grid grid-cols-3 gap-2.5 rounded-lg bg-slate-50 p-3.5 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800/80">
+          <div>
+            <span className="block text-[11px] text-slate-500 dark:text-slate-400">Room bill</span>
+            <span className="text-base font-semibold text-slate-900 dark:text-slate-100">
+              {billAmountPaise !== null ? formatPaise(billAmountPaise) : '—'}
+            </span>
+          </div>
 
-      {Number.isSafeInteger(projectedBillAmountPaise) && (
-        <p className="projection-note">
-          Projected full-month room bill: {formatPaise(projectedBillAmountPaise)}
-        </p>
-      )}
+          <div>
+            <span className="block text-[11px] text-slate-500 dark:text-slate-400">Collected</span>
+            <span className="text-base font-semibold text-emerald-700 dark:text-emerald-400">
+              {formatPaise(paidAmountPaise)}
+            </span>
+          </div>
 
-      <div className="household-card-actions">
-        <Link className="button button--secondary" to={`/reports?month=${month}`}>
-          <ReceiptText size={17} aria-hidden="true" />
-          Full Report <ArrowRight size={15} aria-hidden="true" />
-        </Link>
-        <Link className="button button--secondary" to={`/payments?month=${month}`}>
-          <CreditCard size={17} aria-hidden="true" />
-          Payment Ledger <ArrowRight size={15} aria-hidden="true" />
-        </Link>
-      </div>
-    </section>
+          <div>
+            <span className="block text-[11px] text-slate-500 dark:text-slate-400">Remaining</span>
+            <span
+              className={`text-base font-semibold ${
+                remaining > 0
+                  ? 'text-orange-700 dark:text-orange-400 font-bold'
+                  : 'text-slate-900 dark:text-slate-100'
+              }`}
+            >
+              {remainingAmountPaise !== null ? formatPaise(remainingAmountPaise) : '—'}
+            </span>
+          </div>
+        </div>
+
+        {Number.isSafeInteger(projectedBillAmountPaise) && (
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+            Projected full-month room bill: <span className="font-medium text-slate-700 dark:text-slate-300">{formatPaise(projectedBillAmountPaise)}</span>
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }

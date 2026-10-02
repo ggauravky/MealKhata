@@ -1,5 +1,5 @@
-/* MealKhata Production Service Worker - Phase 8 PWA */
-const CACHE_NAME = 'mealkhata-shell-v1';
+/* MealKhata Production Service Worker - Redesign v2 */
+const CACHE_NAME = 'mealkhata-shell-v2';
 
 const STATIC_PRECACHE = [
   '/',

@@ -1,4 +1,4 @@
-import { Check, Minus, Settings2, Utensils } from 'lucide-react';
+import { Check, Minus, Moon, Settings2, SunMedium, Users } from 'lucide-react';
 import { ROOMMATES } from '../../lib/constants.js';
 import {
   formatPlateCount,
@@ -6,6 +6,11 @@ import {
   formatPlateFractionAccessible,
   getMealPlateCount,
 } from '../../lib/plates.js';
+import { Card, CardContent, CardHeader, CardTitle } from '../ui/card.jsx';
+import { Button } from '../ui/button.jsx';
+import { Badge } from '../ui/badge.jsx';
+import { MemberAvatar } from '../ui/avatar.jsx';
+import { Separator } from '../ui/separator.jsx';
 
 const statusOptions = [
   { id: 'taking', label: 'Taking' },
@@ -50,94 +55,141 @@ export function MealCard({
     return meals[memberId] === 'taking' ? 6 : 0;
   };
 
+  const isMorning = mealType === 'morning';
+
   return (
-    <article className={`meal-card meal-card--${mealType}`}>
-      <header className="meal-card__header">
-        <div className="meal-card__header-main">
-          <div className="meal-card__title-row">
-            <h2>{title}</h2>
+    <Card className="border-slate-200/90 dark:border-slate-800">
+      <CardHeader className="flex flex-row items-start justify-between pb-3">
+        <div>
+          <div className="flex items-center gap-2">
+            {isMorning ? (
+              <SunMedium className="h-4 w-4 text-amber-500" />
+            ) : (
+              <Moon className="h-4 w-4 text-indigo-500" />
+            )}
+            <CardTitle className="text-base font-semibold text-slate-900 dark:text-slate-100">
+              {title}
+            </CardTitle>
             {isShared && (
-              <span className="shared-pill" aria-label="Shared physical plates">
-                <Utensils size={12} aria-hidden="true" />
-                Shared plate
-              </span>
+              <Badge variant="shared" className="gap-1 text-[11px] py-0 px-1.5">
+                <Users className="h-3 w-3" />
+                <span>Shared</span>
+              </Badge>
             )}
           </div>
-          <p>
-            <strong>{takingCount} taking</strong>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+            <strong className="font-semibold text-slate-800 dark:text-slate-200">{takingCount} taking</strong>
             <span aria-hidden="true"> · </span>
             <span>{formatPlateCount(physicalPlates)}</span>
+            <span aria-hidden="true"> · </span>
+            <span className="text-slate-400 dark:text-slate-500">
+              {isMorning ? '₹50 / plate' : '₹70 / plate'}
+            </span>
           </p>
         </div>
 
         {canConfigureSharing && onConfigureSharing && (
-          <button
+          <Button
+            variant="outline"
+            size="sm"
             type="button"
-            className="button button--quiet button--compact meal-card__share-btn"
             onClick={onConfigureSharing}
+            className="h-8 gap-1.5 text-xs text-slate-700 dark:text-slate-300"
             aria-label={`Configure ${title} plate sharing`}
           >
-            <Settings2 size={15} aria-hidden="true" />
-            Configure Sharing
-          </button>
+            <Settings2 className="h-3.5 w-3.5" />
+            <span>Sharing</span>
+          </Button>
         )}
-      </header>
+      </CardHeader>
 
-      <div className="meal-card__members">
-        {ROOMMATES.map((member) => {
-          const currentStatus = meals[member.id];
-          const rowId = `${mealType}:${member.id}`;
-          const pending = pendingRow === rowId;
-          const isRowEditable = Boolean(
-            onChange && (editableMemberIds ? editableMemberIds.includes(member.id) : editable),
-          );
+      <CardContent>
+        <div className="space-y-0">
+          {ROOMMATES.map((member, index) => {
+            const currentStatus = meals[member.id];
+            const rowId = `${mealType}:${member.id}`;
+            const pending = pendingRow === rowId;
+            const isRowEditable = Boolean(
+              onChange && (editableMemberIds ? editableMemberIds.includes(member.id) : editable),
+            );
 
-          const shareUnits = getMemberShareUnits(member.id);
-          const hasFractionalShare = isShared && shareUnits > 0 && shareUnits < 6;
+            const shareUnits = getMemberShareUnits(member.id);
+            const hasFractionalShare = isShared && shareUnits > 0 && shareUnits < 6;
 
-          return (
-            <div className="meal-member-row" key={member.id}>
-              <div className="meal-member-row__person">
-                <span className="roommate__avatar" aria-hidden="true">{member.initial}</span>
-                <div className="meal-member-row__name-block">
-                  <span>{member.name}</span>
-                  {hasFractionalShare && (
-                    <small
-                      className="meal-member-row__share-hint"
-                      aria-label={`${formatPlateFractionAccessible(shareUnits)}`}
+            return (
+              <div key={member.id}>
+                {index > 0 && <Separator className="my-2" />}
+                <div className="flex items-center justify-between gap-3 py-1">
+                  <div className="flex items-center gap-2.5 min-w-[100px]">
+                    <MemberAvatar
+                      memberId={member.id}
+                      name={member.name}
+                      size="sm"
+                    />
+                    <div>
+                      <span className="text-sm font-medium text-slate-800 dark:text-slate-200 block">
+                        {member.name}
+                      </span>
+                      {hasFractionalShare && (
+                        <span
+                          className="text-[11px] text-purple-700 dark:text-purple-400 font-medium"
+                          aria-label={formatPlateFractionAccessible(shareUnits)}
+                        >
+                          {formatPlateFraction(shareUnits)} plate
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {isRowEditable ? (
+                    <div
+                      className="flex rounded-md bg-slate-100 p-0.5 dark:bg-slate-800/80"
+                      role="group"
+                      aria-label={`${member.name} ${title} status`}
                     >
-                      {formatPlateFraction(shareUnits)} plate
-                    </small>
+                      {statusOptions.map((option) => (
+                        <button
+                          key={option.id}
+                          type="button"
+                          aria-pressed={currentStatus === option.id}
+                          disabled={pending}
+                          onClick={() => onChange(mealType, member.id, option.id)}
+                          className={`flex items-center gap-1 rounded-sm px-2.5 py-1 text-xs font-medium transition-all ${
+                            currentStatus === option.id
+                              ? option.id === 'taking'
+                                ? 'bg-emerald-600 text-white shadow-xs font-semibold'
+                                : 'bg-slate-800 text-white dark:bg-slate-200 dark:text-slate-900 shadow-xs font-semibold'
+                              : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
+                          }`}
+                        >
+                          {option.id === 'taking' ? (
+                            <Check className="h-3 w-3" />
+                          ) : (
+                            <Minus className="h-3 w-3" />
+                          )}
+                          <span>{pending && currentStatus !== option.id ? '...' : option.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <Badge
+                      variant={currentStatus === 'taking' ? 'taking' : 'skip'}
+                      className="gap-1 text-xs"
+                    >
+                      {currentStatus === 'taking' ? (
+                        <Check className="h-3 w-3" />
+                      ) : (
+                        <Minus className="h-3 w-3" />
+                      )}
+                      <span>{currentStatus === 'taking' ? 'Taking' : 'Skip'}</span>
+                    </Badge>
                   )}
                 </div>
               </div>
-
-              {isRowEditable ? (
-                <div className="meal-segmented" aria-label={`${member.name} ${title} status`}>
-                  {statusOptions.map((option) => (
-                    <button
-                      className={`meal-segmented__button is-${option.id}${currentStatus === option.id ? ' is-active' : ''}`}
-                      type="button"
-                      key={option.id}
-                      aria-pressed={currentStatus === option.id}
-                      disabled={pending}
-                      onClick={() => onChange(mealType, member.id, option.id)}
-                    >
-                      {option.id === 'taking' ? <Check size={16} aria-hidden="true" /> : <Minus size={16} aria-hidden="true" />}
-                      {pending && currentStatus !== option.id ? 'Saving' : option.label}
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <span className={`meal-status is-${currentStatus}`}>
-                  {currentStatus === 'taking' ? <Check size={16} aria-hidden="true" /> : <Minus size={16} aria-hidden="true" />}
-                  {currentStatus === 'taking' ? 'Taking' : 'Skip'}
-                </span>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </article>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
   );
 }

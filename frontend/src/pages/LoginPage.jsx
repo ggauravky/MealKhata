@@ -1,8 +1,9 @@
-import { ArrowLeft, Eye, EyeOff, LockKeyhole } from 'lucide-react';
+import { ArrowLeft, Eye, EyeOff } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { BrandMark } from '../components/layout/BrandMark.jsx';
-import { ErrorState } from '../components/ui/ErrorState.jsx';
+import { MealKhataLogo } from '../components/brand/MealKhataLogo.jsx';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card.jsx';
+import { Button } from '../components/ui/button.jsx';
 import { LoadingState } from '../components/ui/LoadingState.jsx';
 import { useAuth } from '../hooks/useAuth.js';
 import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
@@ -60,116 +61,154 @@ export function LoginPage() {
   };
 
   return (
-    <main className="login-page">
-      <div className="login-page__topbar">
-        <BrandMark compact />
-        <Link className="text-link text-link--with-icon" to="/">
-          <ArrowLeft size={17} strokeWidth={1.8} aria-hidden="true" />
-          Back home
-        </Link>
-      </div>
+    <main className="min-h-screen w-full flex flex-col justify-center items-center p-4 bg-slate-50 dark:bg-[#0f1115] relative">
+      {/* Subtle brand radial glow */}
+      <div
+        className="absolute inset-0 bg-[radial-gradient(ellipse_70%_70%_at_50%_0%,rgba(15,118,110,0.06),transparent)] dark:bg-[radial-gradient(ellipse_70%_70%_at_50%_0%,rgba(20,184,166,0.08),transparent)] pointer-events-none"
+        aria-hidden="true"
+      />
 
-      <section className="login-panel" aria-labelledby="login-title">
-        <span className="login-panel__icon" aria-hidden="true">
-          <LockKeyhole size={25} strokeWidth={1.7} />
-        </span>
+      <div className="w-full max-w-sm z-10 space-y-6">
+        <div className="flex items-center justify-between">
+          <Link
+            to="/"
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200 transition-colors"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            <span>Back to home</span>
+          </Link>
+        </div>
 
-        {auth.loading ? (
-          <LoadingState label="Restoring your session" />
-        ) : auth.authenticated ? (
-          <div className="signed-in-panel">
-            <div className="login-panel__heading">
-              <h1 id="login-title">You are already signed in</h1>
-              <p>Your current role is {auth.displayName ? `${auth.displayName} (${getRoleLabel(auth.role)})` : getRoleLabel(auth.role)}.</p>
+        <Card className="border-slate-200/90 dark:border-slate-800 shadow-md bg-white dark:bg-[#171a1f]">
+          <CardHeader className="text-center items-center pb-4 pt-6 space-y-2">
+            <MealKhataLogo variant="mark" size={36} />
+            <div>
+              <CardTitle className="text-xl font-bold text-slate-900 dark:text-slate-100">
+                Welcome back
+              </CardTitle>
+              <CardDescription className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                Sign in to manage your meals and bills.
+              </CardDescription>
             </div>
-            {error && <ErrorState title="Could not sign out" message={error} />}
-            <div className="login-panel__actions">
-              {(auth.role === 'admin' || auth.role === 'superadmin') ? (
-                <Link className="button button--primary button--full" to="/admin">
-                  Go to Admin
-                </Link>
-              ) : (
-                <Link className="button button--primary button--full" to="/">
-                  Go to Today&apos;s Meals
-                </Link>
-              )}
-              <button
-                className="button button--quiet button--full"
-                type="button"
-                onClick={handleLogout}
-                disabled={submitting}
-              >
-                {submitting ? 'Signing out' : 'Logout'}
-              </button>
-            </div>
-          </div>
-        ) : (
-          <>
-            <div className="login-panel__heading">
-              <h1 id="login-title">Sign in</h1>
-              <p>Sign in to your MealKhata account.</p>
-            </div>
+          </CardHeader>
 
-            <form className="login-form" onSubmit={handleSubmit}>
-              <div className="field">
-                <label htmlFor="email">Email</label>
-                <input
-                  id="email"
-                  name="email"
-                  type="email"
-                  autoComplete="username"
-                  placeholder="you@example.com"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  maxLength={254}
-                  disabled={submitting}
-                  required
-                />
-              </div>
-              <div className="field">
-                <label htmlFor="password">Password</label>
-                <div className="password-input">
-                  <input
-                    id="password"
-                    name="password"
-                    type={showPassword ? 'text' : 'password'}
-                    autoComplete="current-password"
-                    placeholder="Enter your password"
-                    value={password}
-                    onChange={(event) => setPassword(event.target.value)}
-                    maxLength={256}
-                    disabled={submitting}
-                    required
-                  />
-                  <button
-                    className="password-input__toggle"
-                    type="button"
-                    onClick={() => setShowPassword((visible) => !visible)}
-                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+          <CardContent className="space-y-4 pb-6">
+            {auth.loading ? (
+              <LoadingState label="Restoring your session..." />
+            ) : auth.authenticated ? (
+              <div className="space-y-4 text-center">
+                <div className="rounded-lg bg-slate-50 dark:bg-slate-900/60 p-3.5 text-xs text-slate-600 dark:text-slate-400 border border-slate-100 dark:border-slate-800">
+                  <span className="block font-medium text-slate-800 dark:text-slate-200 mb-0.5">
+                    Already signed in
+                  </span>
+                  <span>
+                    Current role: {auth.displayName ? `${auth.displayName} (${getRoleLabel(auth.role)})` : getRoleLabel(auth.role)}
+                  </span>
+                </div>
+
+                <div className="space-y-2">
+                  <Button variant="default" className="w-full" asChild>
+                    <Link to={auth.role === 'admin' || auth.role === 'superadmin' ? '/admin' : '/'}>
+                      Go to {auth.role === 'admin' || auth.role === 'superadmin' ? 'Admin' : 'Dashboard'}
+                    </Link>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="w-full"
+                    onClick={handleLogout}
                     disabled={submitting}
                   >
-                    {showPassword ? <EyeOff size={19} /> : <Eye size={19} />}
-                  </button>
+                    {submitting ? 'Signing out...' : 'Sign out'}
+                  </Button>
                 </div>
               </div>
+            ) : (
+              <form onSubmit={handleSubmit} className="space-y-3.5">
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="email"
+                    className="block text-xs font-semibold text-slate-700 dark:text-slate-300"
+                  >
+                    Email
+                  </label>
+                  <input
+                    id="email"
+                    name="email"
+                    type="email"
+                    autoComplete="username"
+                    placeholder="you@example.com"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    maxLength={254}
+                    disabled={submitting}
+                    required
+                    className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-600 focus:border-transparent dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100 transition-colors"
+                  />
+                </div>
 
-              {error && (
-                <ErrorState
-                  title={error === 'Invalid email or password.' ? 'Login failed' : 'Unable to log in'}
-                  message={error}
-                  compact
-                />
-              )}
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="password"
+                    className="block text-xs font-semibold text-slate-700 dark:text-slate-300"
+                  >
+                    Password
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="password"
+                      name="password"
+                      type={showPassword ? 'text' : 'password'}
+                      autoComplete="current-password"
+                      placeholder="Enter your password"
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      maxLength={256}
+                      disabled={submitting}
+                      required
+                      className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 pr-10 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-600 focus:border-transparent dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100 transition-colors"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((visible) => !visible)}
+                      disabled={submitting}
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+                    >
+                      {showPassword ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
+                    </button>
+                  </div>
+                </div>
 
-              <button className="button button--primary button--full" type="submit" disabled={submitting}>
-                {submitting ? 'Signing in' : 'Login'}
-              </button>
-            </form>
+                {error && (
+                  <div
+                    role="alert"
+                    className="rounded-md border border-red-200 bg-red-50 p-2.5 text-xs text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300"
+                  >
+                    {error}
+                  </div>
+                )}
 
-            <p className="login-panel__note">Your session stays in a secure HttpOnly cookie.</p>
-          </>
-        )}
-      </section>
+                <Button
+                  type="submit"
+                  variant="default"
+                  className="w-full font-semibold mt-2"
+                  disabled={submitting}
+                >
+                  {submitting ? 'Signing in...' : 'Sign in'}
+                </Button>
+              </form>
+            )}
+          </CardContent>
+        </Card>
+
+        <p className="text-center text-[11px] text-slate-400 dark:text-slate-500">
+          Your session stays securely encrypted in an HttpOnly cookie.
+        </p>
+      </div>
     </main>
   );
 }

@@ -10,7 +10,7 @@ import { QuickActionsCard } from '../components/dashboard/QuickActionsCard.jsx';
 import { LiveIndicator } from '../components/meals/LiveIndicator.jsx';
 import { MealCard } from '../components/meals/MealCard.jsx';
 import { ErrorState } from '../components/ui/ErrorState.jsx';
-import { LoadingState } from '../components/ui/LoadingState.jsx';
+import { Skeleton } from '../components/ui/skeleton.jsx';
 import { useAuth } from '../hooks/useAuth.js';
 import { useDashboard } from '../hooks/useDashboard.js';
 import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
@@ -71,27 +71,29 @@ export function DashboardPage() {
     }
   };
 
-  const pageDescription =
-    auth.role === 'member'
-      ? "Today's personalized meal schedule, monthly spending, and household overview."
-      : auth.role === 'admin'
-        ? "Today's household plate counts, monthly meal statistics, and kitchen management."
-        : auth.role === 'superadmin'
-          ? 'System overview, rate configurations, monthly settlement status, and household operations.'
-          : 'Public meal schedule and household plate counts.';
+  const isMember = auth.role === 'member';
+  const isAdminOrSuper = auth.role === 'admin' || auth.role === 'superadmin';
 
   return (
-    <div className="page-stack">
-      <div className="heading-with-status">
+    <div className="space-y-6 max-w-4xl mx-auto">
+      {/* Header section with live status indicator */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-200/80 dark:border-slate-800/80 pb-4">
         <PageHeader
-          eyebrow={data?.today ? formatLogicalDate(data.today) : 'India time'}
-          title={data?.greeting || 'Today'}
-          description={pageDescription}
+          eyebrow={data?.today ? formatLogicalDate(data.today) : 'Today'}
+          title={data?.greeting || 'Good day'}
         />
-        <LiveIndicator connected={dashboard.live} />
+        <div className="self-start sm:self-center">
+          <LiveIndicator connected={dashboard.live} />
+        </div>
       </div>
 
-      {dashboard.loading && !data && <LoadingState label="Loading personalized dashboard" />}
+      {dashboard.loading && !data && (
+        <div className="space-y-4">
+          <Skeleton className="h-44 w-full rounded-lg" />
+          <Skeleton className="h-60 w-full rounded-lg" />
+          <Skeleton className="h-40 w-full rounded-lg" />
+        </div>
+      )}
 
       {dashboard.error && !data && (
         <ErrorState
@@ -108,15 +110,27 @@ export function DashboardPage() {
 
       {data && (
         <>
-          {saveError && <ErrorState compact title="Change not saved" message={saveError} />}
-          {saveMessage && (
-            <p className="save-feedback" role="status" aria-live="polite">
-              {saveMessage}
-            </p>
+          {saveError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">
+              {saveError}
+            </div>
           )}
 
-          {/* 1. Member Hero: Personal Meals Today */}
-          {data.personalHero && (
+          {saveMessage && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-xs text-teal-800 dark:border-teal-900/50 dark:bg-teal-950/40 dark:text-teal-300"
+            >
+              {saveMessage}
+            </div>
+          )}
+
+          {/* Attention items if present */}
+          <AttentionSection items={data.attention} />
+
+          {/* Member view: 1. Personal Meals Today */}
+          {isMember && data.personalHero && (
             <PersonalMealHero
               hero={data.personalHero}
               isOnline={isOnline}
@@ -125,28 +139,17 @@ export function DashboardPage() {
             />
           )}
 
-          {/* 2. Attention Needed */}
-          <AttentionSection items={data.attention} />
-
-          {/* 3. Household Plate Summary */}
+          {/* 2. Today's Household Kitchen Plate Summary */}
           <HouseholdTodayCard
             household={data.householdToday}
             today={data.today}
             role={auth.role}
+            isDefaultSchedule={!data.meals?.saved}
           />
 
-          {/* 4. Monthly Cards: Personal or Household */}
-          {data.currentMonth?.personal && (
-            <PersonalMonthlyCard personal={data.currentMonth.personal} />
-          )}
-
-          {!data.currentMonth?.personal && data.currentMonth?.household && (
-            <HouseholdMonthlyCard household={data.currentMonth.household} />
-          )}
-
-          {/* 5. Detailed Household Meal Cards for Admin/SuperAdmin/Viewer */}
-          {(auth.role === 'admin' || auth.role === 'superadmin') && data.meals && (
-            <section id="today-meals" className="meal-card-grid" aria-label="Detailed today meals">
+          {/* Admin / SuperAdmin View: Detailed Meal Management */}
+          {isAdminOrSuper && data.meals && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <MealCard
                 mealType="morning"
                 title="Morning"
@@ -169,13 +172,24 @@ export function DashboardPage() {
                 pendingRow={pendingRow}
                 onChange={handleMealChange}
               />
-            </section>
+            </div>
           )}
 
-          {/* 6. Next Reminder */}
-          <NextReminderCard reminders={data.reminders} />
+          {/* Monthly financial summary */}
+          {data.currentMonth?.personal && (
+            <PersonalMonthlyCard personal={data.currentMonth.personal} />
+          )}
 
-          {/* 7. Quick Actions */}
+          {data.currentMonth?.household && (
+            <HouseholdMonthlyCard household={data.currentMonth.household} />
+          )}
+
+          {/* Reminder widget */}
+          {data.reminders && (
+            <NextReminderCard reminders={data.reminders} />
+          )}
+
+          {/* Quick Shortcuts */}
           <QuickActionsCard actions={data.quickActions} />
         </>
       )}
