@@ -36,20 +36,20 @@ This checklist must be executed prior to and following any production deployment
 ---
 
 ## 4. Environment Configuration
-Verify required environment variables are set in Render Web Service:
+Verify required environment variables:
+### Render Web Service (`meal-khata-api`)
 - [ ] `NODE_ENV=production`
 - [ ] `APP_TIMEZONE=Asia/Kolkata`
-- [ ] `APP_ORIGIN=https://<your-service>.onrender.com`
+- [ ] `APP_ORIGIN=https://<your-vercel-domain>.vercel.app`
 - [ ] `MONGODB_URI=<secured-mongodb-connection-string>`
-- [ ] `ADMIN_EMAIL=<admin-email>`
-- [ ] `ADMIN_PASSWORD_HASH=<bcrypt-cost-12-hash>`
-- [ ] `SUPERADMIN_EMAIL=<superadmin-email>`
-- [ ] `SUPERADMIN_PASSWORD_HASH=<bcrypt-cost-12-hash>`
 - [ ] `AUTH_JWT_SECRET=<high-entropy-jwt-secret>`
-Optional (if background Web Push reminders enabled):
+Optional (if background Web Push reminders enabled on Render):
 - [ ] `VAPID_PUBLIC_KEY`
 - [ ] `VAPID_PRIVATE_KEY`
 - [ ] `VAPID_SUBJECT=mailto:<admin-email>`
+
+### Vercel Project (Frontend)
+- [ ] `VITE_SOCKET_URL=https://<your-render-service>.onrender.com`
 
 ---
 
@@ -62,15 +62,16 @@ Optional (if background Web Push reminders enabled):
 
 ## 6. Deployment Procedure
 1. [ ] Push release commit to `main` branch: `git push origin main`.
-2. [ ] Trigger Render Web Service deployment or confirm auto-deploy execution.
-3. [ ] Monitor Render build logs for clean `npm ci --include=dev && npm run build`.
-4. [ ] Verify service transitions to active status and readiness check passes: `/api/ready` $\to 200$.
+2. [ ] Deploy Render backend web service (`npm ci --omit=dev` and `npm run start --workspace backend`).
+3. [ ] Verify backend readiness check passes: `/api/ready` $\to 200$.
+4. [ ] Deploy Vercel frontend project from repository root (`npm ci`, `npm run build --workspace frontend`, output `frontend/dist`).
+5. [ ] Ensure `vercel.json` rewrites `/api/*` to the Render HTTPS origin.
 
 ---
 
 ## 7. Post-Deploy Smoke Testing
-Execute `npm run release:smoke -- --url https://<your-service>.onrender.com` or verify manually:
-- [ ] `GET /api/health` returns status `ok`, version `1.0.0`, and uptime.
+Execute `npm run release:smoke -- --url https://<your-vercel-domain>.vercel.app` or verify manually:
+- [ ] `GET /api/health` returns status `ok`, version `1.0.0`, and uptime through Vercel proxy.
 - [ ] `GET /api/ready` returns status `ready`.
 - [ ] `GET /manifest.webmanifest` returns valid standalone manifest.
 - [ ] `GET /sw.js` returns valid service worker.

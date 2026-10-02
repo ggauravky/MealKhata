@@ -1,10 +1,10 @@
 services:
   - type: web
-    name: meal-khata
+    name: meal-khata-api
     runtime: node
     branch: main
-    buildCommand: npm ci --include=dev && npm run build
-    startCommand: npm start
+    buildCommand: npm ci --omit=dev
+    startCommand: npm run start --workspace backend
     healthCheckPath: /api/ready
     envVars:
       - key: NODE_ENV
@@ -13,16 +13,8 @@ services:
         value: Asia/Kolkata
       - key: MONGODB_URI
         sync: false
-      - key: ADMIN_EMAIL
-        sync: false
-      - key: ADMIN_PASSWORD_HASH
-        sync: false
-      - key: SUPERADMIN_EMAIL
-        sync: false
-      - key: SUPERADMIN_PASSWORD_HASH
-        sync: false
       - key: AUTH_JWT_SECRET
-        generateValue: true
+        sync: false
       - key: APP_ORIGIN
         sync: false
       - key: VAPID_PUBLIC_KEY
@@ -37,7 +29,7 @@ services:
     runtime: node
     branch: main
     schedule: "*/5 * * * *"
-    buildCommand: npm ci --include=dev
+    buildCommand: npm ci --omit=dev
     startCommand: npm run send-push-reminders
     envVars:
       - key: NODE_ENV

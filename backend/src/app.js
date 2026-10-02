@@ -4,8 +4,6 @@ import express from 'express';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import morgan from 'morgan';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { isDevelopment, isProduction } from './config/env.js';
 import { authenticateSession } from './middleware/authenticate.js';
 import { enforceTrustedOrigin } from './middleware/csrfProtection.js';
@@ -26,9 +24,6 @@ import { pushRouter } from './routes/push.routes.js';
 import { settlementRouter } from './routes/settlement.routes.js';
 import { dashboardRouter } from './routes/dashboard.routes.js';
 
-const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
-const frontendDistPath = path.resolve(currentDirectory, '../../frontend/dist');
-const frontendIndexPath = path.join(frontendDistPath, 'index.html');
 export const PRODUCTION_TRUST_PROXY_HOPS = 1;
 export const API_RATE_LIMIT = Object.freeze({
   windowMs: 15 * 60 * 1_000,
@@ -133,46 +128,9 @@ export function createApp({
 
   app.use('/api', apiNotFound);
 
-  if (isProduction) {
-    app.use('/assets', express.static(path.join(frontendDistPath, 'assets'), {
-      immutable: true,
-      index: false,
-      maxAge: '1y',
-      dotfiles: 'deny',
-    }));
-
-    app.use(express.static(frontendDistPath, {
-      index: false,
-      maxAge: 0,
-      dotfiles: 'deny',
-      setHeaders: (res, filePath) => {
-        if (filePath.endsWith('sw.js')) {
-          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-          res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
-        } else if (filePath.endsWith('manifest.webmanifest')) {
-          res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
-        }
-      },
-    }));
-
-    app.use((req, res, next) => {
-      // Disallow dotfiles, API, or socket.io routes from falling into SPA index.html
-      const isHiddenPath = req.path.startsWith('/.') || req.path.includes('/..');
-      const shouldServeApp =
-        req.method === 'GET' &&
-        req.accepts('html') &&
-        !isHiddenPath &&
-        !req.path.startsWith('/api') &&
-        !req.path.startsWith('/socket.io');
-
-      if (!shouldServeApp) {
-        return next();
-      }
-
-      res.set('Cache-Control', 'no-store');
-      return res.sendFile(frontendIndexPath);
-    });
-  }
+  app.get('/', (req, res) => {
+    res.json({ service: 'MealKhata API', status: 'running' });
+  });
 
   app.use(notFound);
   app.use(errorHandler);

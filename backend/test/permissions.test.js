@@ -137,5 +137,15 @@ describe('environment validation', () => {
       () => validateEnvironment({ ...production, mongoUri: 'https://database.example' }),
       /MONGODB_URI/,
     );
+
+    // Requirement 43: production service starts without legacy admin/superadmin environment variables
+    const productionWithoutLegacyBootstrap = {
+      ...production,
+      adminEmail: '',
+      adminPasswordHash: '',
+      superAdminEmail: '',
+      superAdminPasswordHash: '',
+    };
+    assert.doesNotThrow(() => validateEnvironment(productionWithoutLegacyBootstrap));
   });
 });

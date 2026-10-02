@@ -231,23 +231,45 @@ MealKhata includes non-destructive operational and maintenance scripts:
 
 ---
 
-## Deployment
+## Production Deployment Architecture
 
-MealKhata deploys as a single Web Service on Render using [`render.yaml`](./render.yaml).
+MealKhata uses a decoupled production deployment:
+- **Frontend / PWA**: Hosted on **Vercel** (`https://<vercel-domain>`)
+- **Backend API & Realtime**: Hosted on **Render** Web Service (`https://meal-khata-api.onrender.com`)
+- **Database**: **MongoDB Atlas**
+- **Browser REST Traffic**: Calls relative `/api/*`, transparently reverse-proxied by Vercel to Render, preserving secure same-origin `HttpOnly`, `Secure`, `SameSite=Lax` cookie authentication.
+- **Realtime Updates**: Socket.IO connects directly from the browser to Render (`VITE_SOCKET_URL`) with strict `APP_ORIGIN` CORS enforcement.
 
-### Required Production Environment Variables
+Users interact directly with the canonical frontend URL on Vercel:
+- **Frontend / PWA**: `https://<vercel-domain>`
+- **Backend API**: `https://meal-khata-api.onrender.com`
+
+### Vercel Project Settings (Frontend)
+- **Framework Preset**: Vite
+- **Root Directory**: Repository root
+- **Install Command**: `npm ci`
+- **Build Command**: `npm run build --workspace frontend`
+- **Output Directory**: `frontend/dist`
+- **Configuration**: Root [`vercel.json`](./vercel.json) handles `/api/*` rewrites to Render and SPA deep-link routing to `/index.html`.
+- **Environment Variables**:
+  - `VITE_SOCKET_URL=https://meal-khata-api.onrender.com`
+
+### Render Web Service Settings (Backend)
+Configured via [`render.yaml`](./render.yaml):
+- **Service Name**: `meal-khata-api`
+- **Runtime**: Node 24.x
+- **Build Command**: `npm ci --omit=dev`
+- **Start Command**: `npm run start --workspace backend`
+- **Health Check Path**: `/api/ready`
+
+#### Required Backend Environment Variables
 - `NODE_ENV=production`
-- `PORT=5000` (assigned automatically by host)
 - `APP_TIMEZONE=Asia/Kolkata`
-- `APP_ORIGIN=https://your-service.onrender.com`
 - `MONGODB_URI=mongodb+srv://...`
-- `ADMIN_EMAIL=admin@mealkhata.local`
-- `ADMIN_PASSWORD_HASH=$2b$12$...`
-- `SUPERADMIN_EMAIL=superadmin@mealkhata.local`
-- `SUPERADMIN_PASSWORD_HASH=$2b$12$...`
 - `AUTH_JWT_SECRET=<min-48-bytes-high-entropy-secret>`
+- `APP_ORIGIN=https://<your-vercel-domain>.vercel.app`
 
-### Optional Web Push Variables
+#### Optional Web Push Variables (Render)
 - `VAPID_PUBLIC_KEY`
 - `VAPID_PRIVATE_KEY`
 - `VAPID_SUBJECT=mailto:admin@your-domain.com`

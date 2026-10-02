@@ -10,6 +10,7 @@ export function createSocketServer(httpServer) {
     serveClient: false,
     cors: {
       origin: isProduction ? env.appOrigin : true,
+      methods: ['GET', 'POST'],
       credentials: true,
     },
   });

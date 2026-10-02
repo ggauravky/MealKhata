@@ -65,10 +65,6 @@ export function validateEnvironment(config = env) {
 
   const requiredValues = {
     MONGODB_URI: config.mongoUri,
-    ADMIN_EMAIL: config.adminEmail,
-    ADMIN_PASSWORD_HASH: config.adminPasswordHash,
-    SUPERADMIN_EMAIL: config.superAdminEmail,
-    SUPERADMIN_PASSWORD_HASH: config.superAdminPasswordHash,
     AUTH_JWT_SECRET: config.authJwtSecret,
     APP_ORIGIN: config.appOrigin,
   };
@@ -91,19 +87,26 @@ export function validateEnvironment(config = env) {
     throw new Error('PORT must be an integer from 1 to 65535');
   }
 
-  if (!emailPattern.test(config.adminEmail) || !emailPattern.test(config.superAdminEmail)) {
+  const hasAdminEmail = Boolean(config.adminEmail);
+  const hasSuperAdminEmail = Boolean(config.superAdminEmail);
+
+  if (hasAdminEmail && !emailPattern.test(config.adminEmail)) {
     throw new Error('ADMIN_EMAIL and SUPERADMIN_EMAIL must be valid email addresses');
   }
 
-  if (config.adminEmail === config.superAdminEmail) {
+  if (hasSuperAdminEmail && !emailPattern.test(config.superAdminEmail)) {
+    throw new Error('ADMIN_EMAIL and SUPERADMIN_EMAIL must be valid email addresses');
+  }
+
+  if (hasAdminEmail && hasSuperAdminEmail && config.adminEmail === config.superAdminEmail) {
     throw new Error('ADMIN_EMAIL and SUPERADMIN_EMAIL must be different');
   }
 
-  if (!hasRequiredBcryptCost(config.adminPasswordHash)) {
+  if (config.adminPasswordHash && !hasRequiredBcryptCost(config.adminPasswordHash)) {
     throw new Error('ADMIN_PASSWORD_HASH must be a valid bcrypt hash with cost 12');
   }
 
-  if (!hasRequiredBcryptCost(config.superAdminPasswordHash)) {
+  if (config.superAdminPasswordHash && !hasRequiredBcryptCost(config.superAdminPasswordHash)) {
     throw new Error('SUPERADMIN_PASSWORD_HASH must be a valid bcrypt hash with cost 12');
   }
 
