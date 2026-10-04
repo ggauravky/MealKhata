@@ -21,6 +21,7 @@
     "db:backup:verify": "node scripts/verifyBackup.js",
     "db:restore": "node scripts/restoreDatabase.js",
     "db:clear-sample": "node scripts/clearSampleData.js",
+    "db:clear-pre-october": "node scripts/clearPreOctoberDummyData.js",
     "perf:check": "node -e \"process.env.NODE_ENV='test'; import('./scripts/perfCheck.js')\"",
     "release:check": "node scripts/releaseCheck.js",
     "release:smoke": "node scripts/releaseSmoke.js"

@@ -7,7 +7,6 @@ import { createSessionToken, SESSION_COOKIE_NAME } from '../src/auth/token.servi
 import { createMonthlyRateService } from '../src/billing/monthlyRate.service.js';
 import { MonthlyMealRate } from '../src/billing/monthlyRate.model.js';
 import { createMonthMealService } from '../src/calendar/monthMeal.service.js';
-import { createDefaultMealDay } from '../src/meals/meal.defaults.js';
 import { createReportService } from '../src/reports/report.service.js';
 import { createBillingRouter } from '../src/routes/billing.routes.js';
 import { createCalendarRouter } from '../src/routes/calendar.routes.js';
@@ -66,13 +65,6 @@ async function putRate(role, body, month = MONTH) {
   }
 
   return call;
-}
-
-async function seedSkip(date, mealType, memberId) {
-  const day = createDefaultMealDay(date);
-  day.meals[mealType][memberId] = 'skip';
-  day.revision = 1;
-  await mealRepository.create(day);
 }
 
 beforeEach(() => {
@@ -167,14 +159,24 @@ describe('calendar monthly API', () => {
     assert.equal(mealRepository.count(), 0);
   });
 
-  test('missing dates are all Taking and saved overrides have correct counts', async () => {
-    await seedSkip('2026-09-10', 'night', 'nikhil');
+  test('missing dates are not_set with 0 eating and saved overrides have correct counts', async () => {
+    await mealRepository.create({
+      date: '2026-09-10',
+      saved: true,
+      revision: 1,
+      meals: {
+        morning: { gaurav: 'not_set', nikhil: 'not_set', devansh: 'not_set' },
+        night: { gaurav: 'taking', nikhil: 'skip', devansh: 'taking' },
+      },
+    });
     const response = await request(testApp).get(`/api/calendar/${MONTH}`).expect(200);
     const defaultDay = response.body.data.days[0];
     const savedDay = response.body.data.days[9];
     assert.equal(defaultDay.saved, false);
-    assert.equal(defaultDay.counts.morningTaking, 3);
-    assert.equal(defaultDay.counts.nightTaking, 3);
+    assert.equal(defaultDay.counts.morningTaking, 0);
+    assert.equal(defaultDay.counts.nightTaking, 0);
+    assert.equal(defaultDay.counts.morningNotSet, 3);
+    assert.equal(defaultDay.counts.nightNotSet, 3);
     assert.equal(savedDay.saved, true);
     assert.equal(savedDay.counts.nightTaking, 2);
     assert.equal(savedDay.meals.night.nikhil, 'skip');
@@ -197,38 +199,59 @@ describe('calendar monthly API', () => {
 });
 
 describe('derived monthly reports', () => {
-  test('untouched past 30-day month totals 60 meals per member and 180 for room without writes', async () => {
+  test('untouched past 30-day month totals 0 meals per member and 0 for room without writes', async () => {
     const report = await reportService.getMonthlyReport('2026-04');
     assert.equal(report.periodType, 'past');
-    assert.equal(report.toDate.members.gaurav.morningCount, 30);
-    assert.equal(report.toDate.members.gaurav.nightCount, 30);
-    assert.equal(report.toDate.members.gaurav.totalMeals, 60);
-    assert.equal(report.toDate.room.totalMeals, 180);
+    assert.equal(report.toDate.members.gaurav.morningCount, 0);
+    assert.equal(report.toDate.members.gaurav.nightCount, 0);
+    assert.equal(report.toDate.members.gaurav.totalMeals, 0);
+    assert.equal(report.toDate.room.totalMeals, 0);
+    assert.equal(report.toDate.room.totalPhysicalPlates, 0);
+    assert.equal(report.toDate.room.amountPaise, 0);
     assert.deepEqual(report.toDate, report.projection);
     assert.equal(mealRepository.count(), 0);
   });
 
-  test('current to-date includes Sep 1-10 and excludes future override while projection includes it', async () => {
-    await seedSkip('2026-09-05', 'night', 'nikhil');
-    await seedSkip('2026-09-25', 'night', 'nikhil');
+  test('current to-date includes saved dates up to today and excludes future dates while projection includes them', async () => {
+    await mealRepository.create({
+      date: '2026-09-05',
+      saved: true,
+      revision: 1,
+      meals: {
+        morning: { gaurav: 'not_set', nikhil: 'taking', devansh: 'not_set' },
+        night: { gaurav: 'not_set', nikhil: 'skip', devansh: 'not_set' },
+      },
+    });
+    await mealRepository.create({
+      date: '2026-09-25',
+      saved: true,
+      revision: 1,
+      meals: {
+        morning: { gaurav: 'not_set', nikhil: 'taking', devansh: 'not_set' },
+        night: { gaurav: 'not_set', nikhil: 'not_set', devansh: 'not_set' },
+      },
+    });
     const report = await reportService.getMonthlyReport(MONTH);
     assert.equal(report.periodType, 'current');
     assert.equal(report.toDate.endDate, TODAY);
-    assert.equal(report.toDate.members.nikhil.morningCount, 10);
-    assert.equal(report.toDate.members.nikhil.nightCount, 9);
-    assert.equal(report.toDate.members.nikhil.totalMeals, 19);
-    assert.equal(report.toDate.members.nikhil.amountPaise, 113_000);
-    assert.equal(report.projection.members.nikhil.nightCount, 28);
-    assert.equal(report.projection.members.nikhil.totalMeals, 58);
-    assert.equal(report.projection.members.nikhil.amountPaise, 346_000);
+    assert.equal(report.toDate.members.nikhil.morningCount, 1);
+    assert.equal(report.toDate.members.nikhil.nightCount, 0);
+    assert.equal(report.toDate.members.nikhil.totalMeals, 1);
+    assert.equal(report.toDate.members.nikhil.amountPaise, 5000);
+    assert.equal(report.projection.members.nikhil.morningCount, 2);
+    assert.equal(report.projection.members.nikhil.nightCount, 0);
+    assert.equal(report.projection.members.nikhil.totalMeals, 2);
+    assert.equal(report.projection.members.nikhil.amountPaise, 10000);
   });
 
-  test('future month has no to-date and projects the full month', async () => {
+  test('future month has no to-date and unsaved future dates project 0 meals', async () => {
     const report = await reportService.getMonthlyReport('2026-10');
     assert.equal(report.periodType, 'future');
     assert.equal(report.toDate, null);
     assert.equal(report.projection.endDate, '2026-10-31');
-    assert.equal(report.projection.room.totalMeals, 186);
+    assert.equal(report.projection.room.totalMeals, 0);
+    assert.equal(report.projection.room.totalPhysicalPlates, 0);
+    assert.equal(report.projection.room.amountPaise, 0);
   });
 
   test('past month uses full month for both total and projection', async () => {
@@ -239,14 +262,23 @@ describe('derived monthly reports', () => {
   });
 
   test('rates are permanently fixed at ₹50 for Morning and ₹70 for Night', async () => {
+    await mealRepository.create({
+      date: '2026-09-02',
+      saved: true,
+      revision: 1,
+      meals: {
+        morning: { gaurav: 'taking', nikhil: 'not_set', devansh: 'not_set' },
+        night: { gaurav: 'taking', nikhil: 'not_set', devansh: 'not_set' },
+      },
+    });
     const report = await reportService.getMonthlyReport(MONTH);
     assert.equal(report.rates.configured, true);
     assert.equal(report.rates.fixed, true);
     assert.equal(report.rates.morningPricePaise, 5000);
     assert.equal(report.rates.nightPricePaise, 7000);
     assert.equal(report.toDate.amountsAvailable, true);
-    assert.equal(report.toDate.members.gaurav.totalMeals, 20);
-    assert.equal(report.toDate.members.gaurav.amountPaise, 120_000);
+    assert.equal(report.toDate.members.gaurav.totalMeals, 2);
+    assert.equal(report.toDate.members.gaurav.amountPaise, 12_000);
   });
 
   test('report endpoint is public, safe, and uses one meal bulk query plus one rate lookup', async () => {

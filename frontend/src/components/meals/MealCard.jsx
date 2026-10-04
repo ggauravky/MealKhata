@@ -1,5 +1,6 @@
 import { Check, Minus, Moon, Settings2, SunMedium, Users } from 'lucide-react';
 import { ROOMMATES } from '../../lib/constants.js';
+import { formatPaise } from '../../lib/money.js';
 import {
   formatPlateCount,
   formatPlateFraction,
@@ -30,6 +31,7 @@ export function MealCard({
   canConfigureSharing = false,
   onConfigureSharing = null,
 }) {
+  const isMorning = mealType === 'morning';
   const takingCount = getMealPlateCount(meals);
 
   // Derive physical plates and shared status
@@ -45,17 +47,48 @@ export function MealCard({
   }
 
   // Calculate member share units if custom allocation
-  const getMemberShareUnits = (memberId) => {
+  const getMemberShareUnits = (memberId, status) => {
+    if (status !== 'taking') {
+      return 0;
+    }
     if (allocationDetails?.members?.[memberId]) {
       return allocationDetails.members[memberId].shareUnits ?? 0;
+    }
+    if (allocation?.cost?.members?.[memberId]) {
+      return allocation.cost.members[memberId].shareUnits ?? 0;
     }
     if (allocation && Array.isArray(allocation.plates)) {
       return allocation.plates.reduce((sum, p) => sum + (p.shares?.[memberId] ?? 0), 0);
     }
-    return meals[memberId] === 'taking' ? 6 : 0;
+    return 6;
   };
 
-  const isMorning = mealType === 'morning';
+  // Authoritative server-calculated cost or fallback to fixed price when taking
+  const getMemberCostPaise = (memberId, status) => {
+    if (status !== 'taking') {
+      return 0;
+    }
+    if (allocation?.cost?.members?.[memberId]?.amountPaise !== undefined) {
+      return allocation.cost.members[memberId].amountPaise;
+    }
+    if (allocationDetails?.members?.[memberId]?.amountPaise !== undefined) {
+      return allocationDetails.members[memberId].amountPaise;
+    }
+    return isMorning ? 5000 : 7000;
+  };
+
+  const getShareText = (status, shareUnits, hasFractional) => {
+    if (status === 'taking') {
+      if (hasFractional) {
+        return `${formatPlateFraction(shareUnits)} plate`;
+      }
+      return '1 plate';
+    }
+    if (status === 'skip') {
+      return 'No plate';
+    }
+    return 'No meal set';
+  };
 
   return (
     <Card className="border-slate-200/90 dark:border-slate-800">
@@ -78,7 +111,9 @@ export function MealCard({
             )}
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            <strong className="font-semibold text-slate-800 dark:text-slate-200">{takingCount} taking</strong>
+            <strong className="font-semibold text-slate-800 dark:text-slate-200">
+              {takingCount} taking
+            </strong>
             <span aria-hidden="true"> · </span>
             <span>{formatPlateCount(physicalPlates)}</span>
             <span aria-hidden="true"> · </span>
@@ -106,44 +141,54 @@ export function MealCard({
       <CardContent>
         <div className="space-y-0">
           {ROOMMATES.map((member, index) => {
-            const currentStatus = meals[member.id];
+            const rawStatus = meals[member.id];
+            const currentStatus = rawStatus === 'taking' || rawStatus === 'skip' ? rawStatus : 'not_set';
             const rowId = `${mealType}:${member.id}`;
             const pending = pendingRow === rowId;
             const isRowEditable = Boolean(
               onChange && (editableMemberIds ? editableMemberIds.includes(member.id) : editable),
             );
 
-            const shareUnits = getMemberShareUnits(member.id);
+            const shareUnits = getMemberShareUnits(member.id, currentStatus);
             const hasFractionalShare = isShared && shareUnits > 0 && shareUnits < 6;
+            const costPaise = getMemberCostPaise(member.id, currentStatus);
+            const shareText = getShareText(currentStatus, shareUnits, hasFractionalShare);
 
             return (
               <div key={member.id}>
                 {index > 0 && <Separator className="my-2" />}
                 <div className="flex items-center justify-between gap-3 py-1">
-                  <div className="flex items-center gap-2.5 min-w-[100px]">
+                  <div className="flex items-center gap-2.5 min-w-0">
                     <MemberAvatar
                       memberId={member.id}
                       name={member.name}
                       size="sm"
                     />
-                    <div>
-                      <span className="text-sm font-medium text-slate-800 dark:text-slate-200 block">
-                        {member.name}
-                      </span>
-                      {hasFractionalShare && (
-                        <span
-                          className="text-[11px] text-purple-700 dark:text-purple-400 font-medium"
-                          aria-label={formatPlateFractionAccessible(shareUnits)}
-                        >
-                          {formatPlateFraction(shareUnits)} plate
+                    <div className="min-w-0">
+                      <div className="flex items-baseline gap-1.5 flex-wrap">
+                        <span className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+                          {member.name}
                         </span>
-                      )}
+                        <span className="text-xs font-bold text-slate-900 dark:text-slate-200">
+                          {formatPaise(costPaise)}
+                        </span>
+                      </div>
+                      <span
+                        className={`text-[11px] block font-medium ${
+                          hasFractionalShare
+                            ? 'text-purple-700 dark:text-purple-400'
+                            : 'text-slate-500 dark:text-slate-400'
+                        }`}
+                        aria-label={hasFractionalShare ? formatPlateFractionAccessible(shareUnits) : undefined}
+                      >
+                        {shareText}
+                      </span>
                     </div>
                   </div>
 
                   {isRowEditable ? (
                     <div
-                      className="flex rounded-md bg-slate-100 p-0.5 dark:bg-slate-800/80"
+                      className="flex rounded-md bg-slate-100 p-0.5 dark:bg-slate-800/80 shrink-0"
                       role="group"
                       aria-label={`${member.name} ${title} status`}
                     >
@@ -172,17 +217,23 @@ export function MealCard({
                       ))}
                     </div>
                   ) : (
-                    <Badge
-                      variant={currentStatus === 'taking' ? 'taking' : 'skip'}
-                      className="gap-1 text-xs"
-                    >
+                    <div className="shrink-0">
                       {currentStatus === 'taking' ? (
-                        <Check className="h-3 w-3" />
+                        <Badge variant="taking" className="gap-1 text-xs font-semibold">
+                          <Check className="h-3 w-3" />
+                          <span>Taking</span>
+                        </Badge>
+                      ) : currentStatus === 'skip' ? (
+                        <Badge variant="skip" className="gap-1 text-xs">
+                          <Minus className="h-3 w-3" />
+                          <span>Skip</span>
+                        </Badge>
                       ) : (
-                        <Minus className="h-3 w-3" />
+                        <Badge variant="not_set" className="text-xs">
+                          <span>Not set</span>
+                        </Badge>
                       )}
-                      <span>{currentStatus === 'taking' ? 'Taking' : 'Skip'}</span>
-                    </Badge>
+                    </div>
                   )}
                 </div>
               </div>

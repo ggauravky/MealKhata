@@ -304,89 +304,124 @@ export function PaymentsPage() {
       )}
 
       {data && (
-        <>
-          {/* Room Total Card */}
-          <Card className="border-slate-200/90 dark:border-slate-800">
-            <CardHeader className="flex flex-row items-center justify-between pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="h-9 w-9 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-700 dark:text-slate-300">
-                  <WalletCards className="h-5 w-5" />
-                </div>
-                <div>
-                  <CardTitle className="text-base font-semibold text-slate-900 dark:text-slate-100">
-                    Room Total
-                  </CardTitle>
-                  <span className="text-xs text-slate-500 dark:text-slate-400">
-                    {periodLabels[data.periodType]}
-                  </span>
-                </div>
-              </div>
-            </CardHeader>
+        (() => {
+          const hasPaymentActivity =
+            isClosed ||
+            (data.room.billAmountPaise !== 0 && data.room.billAmountPaise !== null) ||
+            data.room.paidAmountPaise > 0 ||
+            (history.items && history.items.length > 0);
 
-            <CardContent>
-              <div className="grid grid-cols-3 gap-2.5 rounded-lg bg-slate-50 p-3.5 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800/80">
-                <div>
-                  <span className="block text-slate-500 dark:text-slate-400 text-xs">Total Bill</span>
-                  <span className="text-lg font-bold text-slate-900 dark:text-slate-100">
-                    {data.room.billAmountPaise === null
-                      ? PAYMENT_STATUS_LABELS[data.room.status]
-                      : formatPaise(data.room.billAmountPaise)}
-                  </span>
+          if (!hasPaymentActivity) {
+            return (
+              <Card className="border-slate-200/90 dark:border-slate-800 p-8 text-center">
+                <div className="flex flex-col items-center justify-center max-w-sm mx-auto space-y-2">
+                  <div className="h-12 w-12 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-500 mb-2">
+                    <WalletCards className="h-6 w-6" />
+                  </div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                    No payment activity
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    There are no meal charges or recorded payments for {formatLogicalMonth(month)}.
+                  </p>
+                  <div className="flex items-center gap-3 text-xs text-slate-600 dark:text-slate-400 pt-3 border-t border-slate-100 dark:border-slate-800 w-full justify-center font-medium">
+                    <span>Bill <strong>₹0</strong></span>
+                    <span>·</span>
+                    <span>Paid <strong>₹0</strong></span>
+                    <span>·</span>
+                    <span>Remaining <strong>₹0</strong></span>
+                  </div>
                 </div>
-                <div>
-                  <span className="block text-slate-500 dark:text-slate-400 text-xs">Total Collected</span>
-                  <span className="text-lg font-bold text-emerald-700 dark:text-emerald-400">
-                    {formatPaise(data.room.paidAmountPaise)}
-                  </span>
-                </div>
-                <div>
-                  <span className="block text-slate-500 dark:text-slate-400 text-xs">Outstanding</span>
-                  <span
-                    className={`text-lg font-bold ${
-                      data.room.remainingAmountPaise > 0
-                        ? 'text-orange-700 dark:text-orange-400'
-                        : 'text-slate-900 dark:text-slate-100'
-                    }`}
-                  >
-                    {data.room.billAmountPaise === null
-                      ? '—'
-                      : formatPaise(data.room.remainingAmountPaise)}
-                  </span>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+              </Card>
+            );
+          }
 
-          {isClosed && (
-            <div
-              role="status"
-              className="settlement-banner rounded-lg border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200 flex items-start gap-2.5"
-            >
-              <AlertCircle className="h-4 w-4 shrink-0 text-amber-600 mt-0.5" />
-              <div>
-                <strong className="block font-semibold">{formatLogicalMonth(month)} is closed.</strong>
-                <span>All meal records, bills, and payments are frozen. Reopen this month before making financial changes.</span>
-              </div>
-            </div>
-          )}
+          return (
+            <>
+              {/* Room Total Card */}
+              <Card className="border-slate-200/90 dark:border-slate-800">
+                <CardHeader className="flex flex-row items-center justify-between pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="h-9 w-9 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-700 dark:text-slate-300">
+                      <WalletCards className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                        Room Total
+                      </CardTitle>
+                      <span className="text-xs text-slate-500 dark:text-slate-400">
+                        {periodLabels[data.periodType]}
+                      </span>
+                    </div>
+                  </div>
+                </CardHeader>
 
-          {/* Member Payment Cards Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {ROOMMATES.map((roommate) => (
-              <MemberPaymentCard
-                key={roommate.id}
-                roommate={roommate}
-                member={data.members[roommate.id]}
-                periodType={data.periodType}
-                role={auth.role}
-                currentMemberId={auth.memberId}
-                isOnline={isOnline}
-                isClosed={isClosed}
-                onPay={setPayingMember}
-              />
-            ))}
-          </div>
-        </>
+                <CardContent>
+                  <div className="grid grid-cols-3 gap-2.5 rounded-lg bg-slate-50 p-3.5 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800/80">
+                    <div>
+                      <span className="block text-slate-500 dark:text-slate-400 text-xs">Total Bill</span>
+                      <span className="text-lg font-bold text-slate-900 dark:text-slate-100">
+                        {data.room.billAmountPaise === null
+                          ? PAYMENT_STATUS_LABELS[data.room.status]
+                          : formatPaise(data.room.billAmountPaise)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="block text-slate-500 dark:text-slate-400 text-xs">Total Collected</span>
+                      <span className="text-lg font-bold text-emerald-700 dark:text-emerald-400">
+                        {formatPaise(data.room.paidAmountPaise)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="block text-slate-500 dark:text-slate-400 text-xs">Outstanding</span>
+                      <span
+                        className={`text-lg font-bold ${
+                          data.room.remainingAmountPaise > 0
+                            ? 'text-orange-700 dark:text-orange-400'
+                            : 'text-slate-900 dark:text-slate-100'
+                        }`}
+                      >
+                        {data.room.billAmountPaise === null
+                          ? '—'
+                          : formatPaise(data.room.remainingAmountPaise)}
+                      </span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {isClosed && (
+                <div
+                  role="status"
+                  className="settlement-banner rounded-lg border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200 flex items-start gap-2.5"
+                >
+                  <AlertCircle className="h-4 w-4 shrink-0 text-amber-600 mt-0.5" />
+                  <div>
+                    <strong className="block font-semibold">{formatLogicalMonth(month)} is closed.</strong>
+                    <span>All meal records, bills, and payments are frozen. Reopen this month before making financial changes.</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Member Payment Cards Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {ROOMMATES.map((roommate) => (
+                  <MemberPaymentCard
+                    key={roommate.id}
+                    roommate={roommate}
+                    member={data.members[roommate.id]}
+                    periodType={data.periodType}
+                    role={auth.role}
+                    currentMemberId={auth.memberId}
+                    isOnline={isOnline}
+                    isClosed={isClosed}
+                    onPay={setPayingMember}
+                  />
+                ))}
+              </div>
+            </>
+          );
+        })()
       )}
 
       {/* Payment History Card */}

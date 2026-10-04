@@ -282,7 +282,7 @@ export function createMealService({
             changeType: 'clear',
             from: currentAllocation,
             to: null,
-            reason: 'Reset to default individual plates',
+            reason: 'Reset to individual plates',
           };
 
           const updated = await repository.clearAllocationIfCurrent({

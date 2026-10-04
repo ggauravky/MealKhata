@@ -47,10 +47,10 @@ async function patchMeal(role, date, body, app = testApp) {
   return call;
 }
 
-function assertAllTaking(data) {
+function assertAllNotSet(data) {
   for (const mealType of ['morning', 'night']) {
     for (const member of MEMBERS) {
-      assert.equal(data.meals[mealType][member.id], 'taking');
+      assert.equal(data.meals[mealType][member.id], 'not_set');
     }
   }
 }
@@ -73,9 +73,9 @@ describe('public meal reads', () => {
     assert.equal(response.body.data.date, DATES.yesterday);
   });
 
-  test('3. a missing day returns six Taking slots without writing', async () => {
+  test('3. a missing day returns six Not Set slots without writing', async () => {
     const response = await request(testApp).get(`/api/meals/${DATES.tomorrow}`).expect(200);
-    assertAllTaking(response.body.data);
+    assertAllNotSet(response.body.data);
     assert.equal(response.body.data.saved, false);
     assert.equal(response.body.data.revision, 0);
     assert.equal(repository.count(), 0);
@@ -163,7 +163,7 @@ describe('meal mutation authorization and validation', () => {
 });
 
 describe('revision, history, no-op, and concurrency behavior', () => {
-  test('18. Taking to Skip creates revision one and one history entry', async () => {
+  test('18. Not Set to Skip creates revision one and one history entry', async () => {
     const response = await patchMeal(ROLES.ADMIN, DATES.today, {
       mealType: 'morning', memberId: 'gaurav', status: 'skip',
     });
@@ -171,7 +171,7 @@ describe('revision, history, no-op, and concurrency behavior', () => {
     assert.equal(response.body.changed, true);
     assert.equal(response.body.data.revision, 1);
     assert.equal(history.items.length, 1);
-    assert.equal(history.items[0].from, 'taking');
+    assert.equal(history.items[0].from, 'not_set');
     assert.equal(history.items[0].to, 'skip');
   });
 
@@ -187,14 +187,14 @@ describe('revision, history, no-op, and concurrency behavior', () => {
     assert.equal(history.items[0].to, 'taking');
   });
 
-  test('20. Taking to Taking is an unsaved no-op', async () => {
-    const response = await patchMeal(ROLES.ADMIN, DATES.today, {
-      mealType: 'night', memberId: 'devansh', status: 'taking',
-    });
+  test('20. Taking to Taking is a saved no-op', async () => {
+    const change = { mealType: 'night', memberId: 'devansh', status: 'taking' };
+    await patchMeal(ROLES.ADMIN, DATES.today, change);
+    const response = await patchMeal(ROLES.ADMIN, DATES.today, change);
     assert.equal(response.body.changed, false);
-    assert.equal(response.body.data.saved, false);
-    assert.equal(response.body.data.revision, 0);
-    assert.equal(repository.count(), 0);
+    assert.equal(response.body.data.saved, true);
+    assert.equal(response.body.data.revision, 1);
+    assert.equal(repository.count(), 1);
   });
 
   test('21. Skip to Skip is a no-op with no revision or history increase', async () => {
@@ -272,9 +272,11 @@ describe('broadcast and model safety', () => {
   });
 
   test('27. a no-op mutation does not broadcast', async () => {
-    const response = await patchMeal(ROLES.ADMIN, DATES.today, {
-      mealType: 'night', memberId: 'nikhil', status: 'taking',
-    });
+    const change = { mealType: 'night', memberId: 'nikhil', status: 'taking' };
+    await patchMeal(ROLES.ADMIN, DATES.today, change);
+    broadcasts.length = 0;
+
+    const response = await patchMeal(ROLES.ADMIN, DATES.today, change);
     assert.equal(response.body.changed, false);
     assert.equal(broadcasts.length, 0);
   });

@@ -245,11 +245,15 @@ export function CalendarPage() {
                   month: 'long',
                 })}
               </h3>
-              {!activeDay.saved && (
+              {!activeDay.saved ? (
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Using default schedule
+                  Nothing entered yet
                 </p>
-              )}
+              ) : activeDay.counts?.morningTaking === 0 && activeDay.counts?.nightTaking === 0 && (activeDay.counts?.morningSkipping > 0 || activeDay.counts?.nightSkipping > 0) ? (
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  All meals skipped
+                </p>
+              ) : null}
             </div>
 
             {isMonthClosed ? (

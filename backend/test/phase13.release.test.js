@@ -140,15 +140,15 @@ describe('Phase 13: Final QA, Versioning & Release Contracts', () => {
     assert.ok(Array.isArray(d.quickActions));
   });
 
-  test('API Contract: GET /api/meals/today returns taking defaults for untouched date', async () => {
+  test('API Contract: GET /api/meals/today returns not_set defaults for untouched date', async () => {
     const { app } = buildTestFixtureApp();
     const res = await request(app).get('/api/meals/today').expect(200);
 
     assert.equal(res.body.success, true);
     assert.ok(res.body.data.date);
     assert.equal(res.body.data.saved, false);
-    assert.equal(res.body.data.meals.morning.gaurav, 'taking');
-    assert.equal(res.body.data.meals.night.gaurav, 'taking');
+    assert.equal(res.body.data.meals.morning.gaurav, 'not_set');
+    assert.equal(res.body.data.meals.night.gaurav, 'not_set');
   });
 
   test('API Contract: GET /api/reports/monthly/:month returns structured report model', async () => {
@@ -189,7 +189,7 @@ describe('Phase 13: Final QA, Versioning & Release Contracts', () => {
     assert.equal(res.body.success, true);
     const settlement = res.body.data;
     assert.equal(settlement.month, '2026-09');
-    assert.equal(settlement.state, 'not_ready');
+    assert.equal(settlement.state, 'ready_to_close');
     assert.ok(typeof settlement.canClose === 'boolean');
   });
 

@@ -475,7 +475,7 @@ describe('Phase 7: Meal Audit History', () => {
     assert.equal(entry.actorMemberId, 'gaurav');
     assert.equal(entry.memberId, 'gaurav');
     assert.equal(entry.mealType, 'night');
-    assert.equal(entry.from, 'taking');
+    assert.equal(entry.from, 'not_set');
     assert.equal(entry.to, 'skip');
   });
 

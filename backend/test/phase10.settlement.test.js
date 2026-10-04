@@ -104,6 +104,22 @@ async function cookieFor(role, memberId = null) {
   return `${SESSION_COOKIE_NAME}=${await createSessionToken(role, { memberId })}`;
 }
 
+async function seedFullPastMonthMeals() {
+  for (let day = 1; day <= 30; day++) {
+    const date = `2026-09-${String(day).padStart(2, '0')}`;
+    await mealRepository.create({
+      date,
+      saved: true,
+      revision: 1,
+      meals: {
+        morning: { gaurav: 'taking', nikhil: 'taking', devansh: 'taking' },
+        night: { gaurav: 'taking', nikhil: 'taking', devansh: 'taking' },
+      },
+      changes: [],
+    });
+  }
+}
+
 beforeEach(async () => {
   mealRepository.reset();
   rateRepository.reset();
@@ -206,12 +222,19 @@ describe('Phase 10: Settlement Status & Pre-Close Validation', () => {
   test('past month rates are permanently fixed at ₹50/₹70 and never missing', async () => {
     const res = await request(app).get(`/api/settlements/${PAST_MONTH}`).expect(200);
     assert.equal(res.body.success, true);
-    assert.equal(res.body.data.state, 'not_ready');
-    assert.equal(res.body.data.canClose, false);
     assert.ok(!res.body.data.blockers.some((b) => b.type === 'rates_missing'));
   });
 
   test('past month with remaining balances cannot be closed', async () => {
+    await mealRepository.create({
+      date: '2026-09-15',
+      saved: true,
+      revision: 1,
+      meals: {
+        morning: { gaurav: 'taking', nikhil: 'not_set', devansh: 'not_set' },
+        night: { gaurav: 'not_set', nikhil: 'not_set', devansh: 'not_set' },
+      },
+    });
     const res = await request(app).get(`/api/settlements/${PAST_MONTH}`).expect(200);
     assert.equal(res.body.success, true);
     assert.equal(res.body.data.state, 'not_ready');
@@ -239,7 +262,8 @@ describe('Phase 10: Settlement Status & Pre-Close Validation', () => {
   });
 
   test('past month with exact settlement returns ready_to_close', async () => {
-    // 30 days in September (2026-09-01 to 2026-09-30). Default meal day is taking both meals.
+    await seedFullPastMonthMeals();
+    // 30 days in September (2026-09-01 to 2026-09-30). Seeded taking both meals.
     // 30 morning * 50 = 1500; 30 night * 70 = 2100. Total per member = 3600 = 360000 paise.
     // Pay exact bill for all three members
     for (const memberId of MEMBER_IDS) {
@@ -265,6 +289,7 @@ describe('Phase 10: Settlement Status & Pre-Close Validation', () => {
 
 describe('Phase 10: Month Closing, Authorization & Snapshot Immutability', () => {
   beforeEach(async () => {
+    await seedFullPastMonthMeals();
     // Set up exact settlement for PAST_MONTH
     await rateRepository.create({
       month: PAST_MONTH,
@@ -382,6 +407,7 @@ describe('Phase 10: Month Closing, Authorization & Snapshot Immutability', () =>
 
 describe('Phase 10: Closed-Month Mutation Locks', () => {
   beforeEach(async () => {
+    await seedFullPastMonthMeals();
     await rateRepository.create({
       month: PAST_MONTH,
       morningPricePaise: 5000,
@@ -497,6 +523,7 @@ describe('Phase 10: Closed-Month Mutation Locks', () => {
 
 describe('Phase 10: Reopening, Corrections & Historical Versioning', () => {
   beforeEach(async () => {
+    await seedFullPastMonthMeals();
     for (const memberId of MEMBER_IDS) {
       await paymentRepository.create({
         paymentId: `pay-settle-${memberId}`,
@@ -620,6 +647,7 @@ describe('Phase 10: Reopening, Corrections & Historical Versioning', () => {
 
 describe('Phase 10: PDF & CSV Final Statement Exports', () => {
   beforeEach(async () => {
+    await seedFullPastMonthMeals();
     for (const memberId of MEMBER_IDS) {
       await paymentRepository.create({
         paymentId: `pay-settle-${memberId}`,

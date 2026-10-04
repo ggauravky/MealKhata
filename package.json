@@ -27,6 +27,7 @@
     "db:backup:verify": "npm run db:backup:verify --workspace backend",
     "db:restore": "npm run db:restore --workspace backend",
     "db:clear-sample": "npm run db:clear-sample --workspace backend",
+    "db:clear-pre-october": "npm run db:clear-pre-october --workspace backend",
     "perf:check": "npm run perf:check --workspace backend",
     "release:check": "npm run release:check --workspace backend",
     "release:smoke": "npm run release:smoke --workspace backend"

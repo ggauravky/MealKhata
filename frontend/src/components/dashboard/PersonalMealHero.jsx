@@ -56,14 +56,16 @@ export function PersonalMealHero({ hero, isOnline = true, pendingRow = '', onCha
                   className={`text-lg font-bold tracking-tight ${
                     morning === 'taking'
                       ? 'text-emerald-800 dark:text-emerald-300'
-                      : 'text-slate-500 dark:text-slate-400'
+                      : morning === 'skip'
+                        ? 'text-slate-600 dark:text-slate-400'
+                        : 'text-slate-400 dark:text-slate-500 font-medium'
                   }`}
                 >
-                  {morning === 'taking' ? 'Taking' : 'Skip'}
+                  {morning === 'taking' ? 'Taking' : morning === 'skip' ? 'Skip' : 'Not set'}
                 </span>
               </div>
 
-              {morning === 'taking' && (
+              {morning === 'taking' ? (
                 <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
                   {isMorningShared ? (
                     <>
@@ -76,6 +78,10 @@ export function PersonalMealHero({ hero, isOnline = true, pendingRow = '', onCha
                   ) : (
                     <span>Cost: <strong>{formatPaise(morningCostPaise || 5000)}</strong></span>
                   )}
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                  Cost: <strong>₹0</strong>
                 </p>
               )}
             </div>
@@ -143,14 +149,16 @@ export function PersonalMealHero({ hero, isOnline = true, pendingRow = '', onCha
                   className={`text-lg font-bold tracking-tight ${
                     night === 'taking'
                       ? 'text-emerald-800 dark:text-emerald-300'
-                      : 'text-slate-500 dark:text-slate-400'
+                      : night === 'skip'
+                        ? 'text-slate-600 dark:text-slate-400'
+                        : 'text-slate-400 dark:text-slate-500 font-medium'
                   }`}
                 >
-                  {night === 'taking' ? 'Taking' : 'Skip'}
+                  {night === 'taking' ? 'Taking' : night === 'skip' ? 'Skip' : 'Not set'}
                 </span>
               </div>
 
-              {night === 'taking' && (
+              {night === 'taking' ? (
                 <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
                   {isNightShared ? (
                     <>
@@ -163,6 +171,10 @@ export function PersonalMealHero({ hero, isOnline = true, pendingRow = '', onCha
                   ) : (
                     <span>Cost: <strong>{formatPaise(nightCostPaise || 7000)}</strong></span>
                   )}
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                  Cost: <strong>₹0</strong>
                 </p>
               )}
             </div>

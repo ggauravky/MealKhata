@@ -81,7 +81,7 @@ export function createDashboardService({
         errors.todayMeals = todayMealsResult.reason?.message || 'Failed to fetch meals';
       }
 
-      const defaultMealStatus = 'taking';
+      const defaultMealStatus = 'not_set';
       const morningMeals = todayDay?.meals?.morning || {
         gaurav: defaultMealStatus,
         nikhil: defaultMealStatus,

@@ -6,7 +6,7 @@ import { requireAdminOrAbove, requireAuthenticated } from '../middleware/authori
 import { authorizeLogicalDate } from '../middleware/dateAuthorization.js';
 import { authorizeMemberResource } from '../middleware/memberAuthorization.js';
 import { canEditDate, getLogicalDateInTimeZone, isValidLogicalDate } from '../utils/date.js';
-import { MEAL_STATUSES, MEAL_TYPES } from '../meals/meal.constants.js';
+import { MEAL_TYPES, WRITABLE_MEAL_STATUSES } from '../meals/meal.constants.js';
 import { mealService } from '../meals/meal.service.js';
 import { settlementService } from '../settlement/settlement.service.js';
 import { broadcastMealUpdated } from '../socket.js';
@@ -46,7 +46,7 @@ function validateMealChange(req, res, next) {
     return reject(res, 'Invalid member.');
   }
 
-  if (!MEAL_STATUSES.includes(body.status)) {
+  if (!WRITABLE_MEAL_STATUSES.includes(body.status)) {
     return reject(res, 'Invalid meal status.');
   }
 

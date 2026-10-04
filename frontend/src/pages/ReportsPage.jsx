@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Moon, SunMedium } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CookingPot, Moon, SunMedium } from 'lucide-react';
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/common/PageHeader.jsx';
@@ -202,16 +202,54 @@ export function ReportsPage() {
           )}
 
           {data.periodType === 'past' && (
-            <ReportSummary
-              title={`${monthLabel} total`}
-              description={
-                settlement.isClosed
-                  ? 'Frozen accounting statement'
-                  : 'Completed calendar month'
+            (() => {
+              const pastSummary = getPastSummary();
+              const hasActivity =
+                settlement.isClosed ||
+                Boolean(data.hasMealActivity) ||
+                Boolean(data.hasRecordedMeals) ||
+                (pastSummary?.room?.totalPhysicalPlates > 0) ||
+                (pastSummary?.room?.totalPlates > 0) ||
+                (pastSummary?.room?.amountPaise > 0);
+
+              if (!hasActivity) {
+                return (
+                  <Card className="border-slate-200/90 dark:border-slate-800 p-8 text-center">
+                    <div className="flex flex-col items-center justify-center max-w-sm mx-auto space-y-2">
+                      <div className="h-12 w-12 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-500 mb-2">
+                        <CookingPot className="h-6 w-6" />
+                      </div>
+                      <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                        No meal activity recorded
+                      </h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        No meals were recorded for {monthLabel}.
+                      </p>
+                      <div className="flex items-center gap-3 text-xs text-slate-600 dark:text-slate-400 pt-3 border-t border-slate-100 dark:border-slate-800 w-full justify-center font-medium">
+                        <span>Morning plates <strong>0</strong></span>
+                        <span>·</span>
+                        <span>Night plates <strong>0</strong></span>
+                        <span>·</span>
+                        <span>Room bill <strong>₹0</strong></span>
+                      </div>
+                    </div>
+                  </Card>
+                );
               }
-              summary={getPastSummary()}
-              isClosed={settlement.isClosed}
-            />
+
+              return (
+                <ReportSummary
+                  title={`${monthLabel} total`}
+                  description={
+                    settlement.isClosed
+                      ? 'Frozen accounting statement'
+                      : 'Completed calendar month'
+                  }
+                  summary={pastSummary}
+                  isClosed={settlement.isClosed}
+                />
+              );
+            })()
           )}
 
           {data.periodType === 'current' && (

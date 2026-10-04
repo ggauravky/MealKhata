@@ -45,12 +45,27 @@ export function createReportService({
           { startDate, endDate: periodType === 'current' ? today : endDate },
         );
 
+      const recordedDayCount = monthData.days.filter((day) => day.saved).length;
+      const hasRecordedMeals = monthData.days.some((day) =>
+        day.saved && (
+          Object.values(day.meals?.morning || {}).some((s) => s === 'taking') ||
+          Object.values(day.meals?.night || {}).some((s) => s === 'taking')
+        ),
+      );
+      const hasMealActivity = monthData.days.some((day) => day.saved && (day.hasMealActivity ?? true));
+      const hasFinancialActivity =
+        (projection?.room?.amountPaise ?? 0) > 0 || (toDate?.room?.amountPaise ?? 0) > 0;
+
       return {
         month,
         periodType,
         today,
         timezone,
         rates: rateData,
+        recordedDayCount,
+        hasRecordedMeals,
+        hasMealActivity,
+        hasFinancialActivity,
         toDate,
         projection,
       };

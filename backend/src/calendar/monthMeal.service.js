@@ -1,57 +1,53 @@
 import { MEMBER_IDS } from '../config/members.js';
 import { env } from '../config/env.js';
-import { createDefaultMealDay } from '../meals/meal.defaults.js';
 import { mealRepository } from '../meals/meal.repository.js';
-import { getEffectiveMealAllocation } from '../meals/plateAllocation.service.js';
+import { serializeMealDay } from '../meals/meal.serializer.js';
 import { HttpError } from '../utils/HttpError.js';
 import { firstDateOfMonth, lastDateOfMonth, listDatesInMonth } from '../utils/month.js';
 
-function getDayPlateStats(meals, allocations) {
-  const morningAlloc = getEffectiveMealAllocation({
-    statuses: meals.morning,
-    customAllocation: allocations?.morning,
-  });
-  const nightAlloc = getEffectiveMealAllocation({
-    statuses: meals.night,
-    customAllocation: allocations?.night,
-  });
+function serializeMonthDay(document, date, { timezone = env.appTimezone } = {}) {
+  const serialized = serializeMealDay(document, date, { timezone });
 
-  const morningTaking = MEMBER_IDS.filter((memberId) => meals.morning[memberId] === 'taking').length;
-  const nightTaking = MEMBER_IDS.filter((memberId) => meals.night[memberId] === 'taking').length;
+  const morningTaking = MEMBER_IDS.filter((memberId) => serialized.meals.morning[memberId] === 'taking').length;
+  const nightTaking = MEMBER_IDS.filter((memberId) => serialized.meals.night[memberId] === 'taking').length;
+  const morningSkipping = MEMBER_IDS.filter((memberId) => serialized.meals.morning[memberId] === 'skip').length;
+  const nightSkipping = MEMBER_IDS.filter((memberId) => serialized.meals.night[memberId] === 'skip').length;
+  const morningNotSet = MEMBER_IDS.filter((memberId) => (serialized.meals.morning[memberId] ?? 'not_set') === 'not_set').length;
+  const nightNotSet = MEMBER_IDS.filter((memberId) => (serialized.meals.night[memberId] ?? 'not_set') === 'not_set').length;
 
-  return {
-    morningTaking,
-    morningSkipping: MEMBER_IDS.length - morningTaking,
-    nightTaking,
-    nightSkipping: MEMBER_IDS.length - nightTaking,
-    morningPhysicalPlates: morningAlloc.plates.length,
-    nightPhysicalPlates: nightAlloc.plates.length,
-    totalPhysicalPlates: morningAlloc.plates.length + nightAlloc.plates.length,
-    isMorningCustom: morningAlloc.source === 'custom',
-    isNightCustom: nightAlloc.source === 'custom',
-  };
-}
+  const isMorningCustom = serialized.allocations.morning.source === 'custom';
+  const isNightCustom = serialized.allocations.night.source === 'custom';
+  const hasCustomAllocation = isMorningCustom || isNightCustom;
 
-function serializeMonthDay(document, date) {
-  const source = document ?? createDefaultMealDay(date);
-  const meals = {
-    morning: { ...source.meals.morning },
-    night: { ...source.meals.night },
-  };
-  const allocations = source.allocations
-    ? {
-        morning: source.allocations.morning ? { ...source.allocations.morning } : null,
-        night: source.allocations.night ? { ...source.allocations.night } : null,
-      }
-    : null;
+  const hasMealActivity = Boolean(
+    document && (
+      hasCustomAllocation ||
+      Object.values(serialized.meals.morning).some((s) => s === 'taking' || s === 'skip') ||
+      Object.values(serialized.meals.night).some((s) => s === 'taking' || s === 'skip')
+    ),
+  );
 
   return {
     date,
-    saved: Boolean(document),
-    revision: source.revision,
-    meals,
-    allocations,
-    counts: getDayPlateStats(meals, allocations),
+    saved: serialized.saved,
+    hasMealActivity,
+    hasCustomAllocation,
+    revision: serialized.revision,
+    meals: serialized.meals,
+    allocations: serialized.allocations,
+    counts: {
+      morningTaking,
+      morningSkipping,
+      morningNotSet,
+      nightTaking,
+      nightSkipping,
+      nightNotSet,
+      morningPhysicalPlates: serialized.plateCounts.morning,
+      nightPhysicalPlates: serialized.plateCounts.night,
+      totalPhysicalPlates: serialized.plateCounts.total,
+      isMorningCustom,
+      isNightCustom,
+    },
   };
 }
 
@@ -68,7 +64,9 @@ export function createMonthMealService({ repository = mealRepository, timezone =
         return {
           month,
           timezone,
-          days: listDatesInMonth(month).map((date) => serializeMonthDay(byDate.get(date), date)),
+          days: listDatesInMonth(month).map((date) =>
+            serializeMonthDay(byDate.get(date), date, { timezone }),
+          ),
         };
       } catch (error) {
         throw new HttpError(503, 'Monthly meal data is temporarily unavailable.', { cause: error });

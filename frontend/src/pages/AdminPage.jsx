@@ -198,7 +198,7 @@ export function AdminPage() {
 
           {!mealDay.data.saved && (
             <p className="text-xs text-slate-500 dark:text-slate-400 italic">
-              Using default schedule
+              Nothing entered yet
             </p>
           )}
 

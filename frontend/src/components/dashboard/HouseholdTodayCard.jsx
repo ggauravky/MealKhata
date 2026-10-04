@@ -39,7 +39,7 @@ export function HouseholdTodayCard({ household, today, role, isDefaultSchedule =
           </CardTitle>
           {isDefaultSchedule && (
             <Badge variant="secondary" className="text-[11px] font-normal py-0">
-              Default schedule
+              Nothing entered yet
             </Badge>
           )}
         </div>
@@ -160,9 +160,13 @@ export function HouseholdTodayCard({ household, today, role, isDefaultSchedule =
                             <span>M: Taking</span>
                           </Badge>
                         )
-                      ) : (
+                      ) : member.morning === 'skip' ? (
                         <Badge variant="skip" className="text-[11px] py-0">
                           M: Skip
+                        </Badge>
+                      ) : (
+                        <Badge variant="not_set" className="text-[11px] py-0">
+                          M: Not set
                         </Badge>
                       )}
 
@@ -179,9 +183,13 @@ export function HouseholdTodayCard({ household, today, role, isDefaultSchedule =
                             <span>N: Taking</span>
                           </Badge>
                         )
-                      ) : (
+                      ) : member.night === 'skip' ? (
                         <Badge variant="skip" className="text-[11px] py-0">
                           N: Skip
+                        </Badge>
+                      ) : (
+                        <Badge variant="not_set" className="text-[11px] py-0">
+                          N: Not set
                         </Badge>
                       )}
 

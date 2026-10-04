@@ -116,10 +116,10 @@ describe('Phase 11: Dashboard API - Viewer Experience', () => {
     assert.equal(data.personalHero, null);
     assert.equal(data.currentMonth.personal, null);
 
-    // Household today plate counts
-    assert.equal(data.householdToday.morningPlates, 3);
-    assert.equal(data.householdToday.nightPlates, 3);
-    assert.equal(data.householdToday.totalPlates, 6);
+    // Household today plate counts (untouched = 0)
+    assert.equal(data.householdToday.morningPlates, 0);
+    assert.equal(data.householdToday.nightPlates, 0);
+    assert.equal(data.householdToday.totalPlates, 0);
     assert.equal(data.householdToday.members.length, 3);
 
     // Quick actions for viewer
@@ -135,7 +135,7 @@ describe('Phase 11: Dashboard API - Viewer Experience', () => {
 });
 
 describe('Phase 11: Dashboard API - Member Personalization', () => {
-  test('Member Gaurav receives personal hero, personal month, and payment status', async () => {
+  test('Member Gaurav receives personal hero, personal month, and payment status for untouched month', async () => {
     const cookie = await cookieFor(ROLES.MEMBER, 'gaurav');
     const res = await request(testApp)
       .get('/api/dashboard')
@@ -150,29 +150,59 @@ describe('Phase 11: Dashboard API - Member Personalization', () => {
     assert.equal(data.identity.displayName, 'Gaurav');
     assert.match(data.greeting, /Gaurav/);
 
-    // Personal hero meals
+    // Personal hero meals (untouched = not_set)
     assert.ok(data.personalHero);
     assert.equal(data.personalHero.memberId, 'gaurav');
-    assert.equal(data.personalHero.morning, 'taking');
-    assert.equal(data.personalHero.night, 'taking');
+    assert.equal(data.personalHero.morning, 'not_set');
+    assert.equal(data.personalHero.night, 'not_set');
     assert.equal(data.personalHero.canEdit, true);
 
-    // Personal monthly financial stats
+    // Personal monthly financial stats (untouched = 0)
     assert.ok(data.currentMonth.personal);
     assert.equal(data.currentMonth.personal.memberId, 'gaurav');
-    // On Oct 1st, 1 morning (50) + 1 night (70) = 12000 paise (Rs 120)
+    assert.equal(data.currentMonth.personal.morningCount, 0);
+    assert.equal(data.currentMonth.personal.nightCount, 0);
+    assert.equal(data.currentMonth.personal.totalPlates, 0);
+    assert.equal(data.currentMonth.personal.billAmountPaise, 0);
+    assert.equal(data.currentMonth.personal.paidAmountPaise, 0);
+    assert.equal(data.currentMonth.personal.remainingAmountPaise, 0);
+    assert.equal(data.currentMonth.personal.status, 'no_due');
+
+    // No payment due attention item when untouched / 0 remaining
+    assert.ok(!data.attention.some((att) => att.id === 'payment_due'));
+  });
+
+  test('Member Gaurav with explicit taking meals receives calculated personal hero and month bill', async () => {
+    mealRepo.documents.set('2026-10-01', {
+      date: '2026-10-01',
+      saved: true,
+      revision: 1,
+      meals: {
+        morning: { gaurav: 'taking', nikhil: 'not_set', devansh: 'not_set' },
+        night: { gaurav: 'taking', nikhil: 'not_set', devansh: 'not_set' },
+      },
+      changes: [],
+    });
+
+    const cookie = await cookieFor(ROLES.MEMBER, 'gaurav');
+    const res = await request(testApp)
+      .get('/api/dashboard')
+      .set('Origin', ORIGIN)
+      .set('Cookie', cookie)
+      .expect(200);
+
+    const data = res.body.data;
+    assert.equal(data.personalHero.morning, 'taking');
+    assert.equal(data.personalHero.night, 'taking');
     assert.equal(data.currentMonth.personal.morningCount, 1);
     assert.equal(data.currentMonth.personal.nightCount, 1);
     assert.equal(data.currentMonth.personal.totalPlates, 2);
     assert.equal(data.currentMonth.personal.billAmountPaise, 12000);
-    assert.equal(data.currentMonth.personal.paidAmountPaise, 0);
     assert.equal(data.currentMonth.personal.remainingAmountPaise, 12000);
-
-    // Attention item for outstanding balance
     assert.ok(data.attention.some((att) => att.id === 'payment_due'));
-    const dueAtt = data.attention.find((att) => att.id === 'payment_due');
-    assert.match(dueAtt.message, /120/);
-    assert.equal(dueAtt.link, '/payments?month=2026-10');
+
+    // Clean up
+    mealRepo.documents.delete('2026-10-01');
   });
 
   test('Member Nikhil receives Nikhil personalization independently', async () => {
@@ -208,7 +238,7 @@ describe('Phase 11: Dashboard API - Member Personalization', () => {
       .expect(200);
 
     const personal = res.body.data.currentMonth.personal;
-    assert.equal(personal.billAmountPaise, 12000);
+    assert.equal(personal.billAmountPaise, 0);
     assert.notEqual(personal.status, 'rates_missing');
     assert.ok(!res.body.data.attention.some((att) => att.id === 'rates_missing'));
   });
@@ -316,15 +346,44 @@ describe('Phase 11: Dashboard API - Error Resilience', () => {
       .set('Origin', ORIGIN)
       .expect(200);
 
-    // Core today meals and household data still present
+    // Core today meals and household data still present (untouched = 0 plates)
     assert.equal(res.body.success, true);
     assert.equal(res.body.data.today, '2026-10-01');
-    assert.equal(res.body.data.householdToday.totalPlates, 6);
+    assert.equal(res.body.data.householdToday.totalPlates, 0);
     // Error recorded safely
     assert.ok(res.body.data.errors?.paymentSummary);
   });
 
-  test('Requirement 5 Regression: default taking yields 3 eating and 3 plates for morning and night', async () => {
+  test('Untouched today yields 0 eating and 0 plates for morning and night', async () => {
+    const customApp = createApp({
+      dashboard: createDashboardRouter({ service: dashboardService }),
+    });
+
+    const res = await request(customApp)
+      .get('/api/dashboard')
+      .set('Origin', ORIGIN)
+      .expect(200);
+
+    const ht = res.body.data.householdToday;
+    assert.equal(ht.morningEating, 0);
+    assert.equal(ht.morningPlates, 0);
+    assert.equal(ht.nightEating, 0);
+    assert.equal(ht.nightPlates, 0);
+    assert.equal(ht.totalEating, 0);
+    assert.equal(ht.totalPlates, 0);
+  });
+
+  test('Explicit taking yields 3 eating and 3 plates for morning and night', async () => {
+    mealRepo.documents.set('2026-10-01', {
+      date: '2026-10-01',
+      saved: true,
+      revision: 1,
+      meals: {
+        morning: { gaurav: 'taking', nikhil: 'taking', devansh: 'taking' },
+        night: { gaurav: 'taking', nikhil: 'taking', devansh: 'taking' },
+      },
+    });
+
     const customApp = createApp({
       dashboard: createDashboardRouter({ service: dashboardService }),
     });
