@@ -76,9 +76,14 @@ export function createViewerAuth() {
   };
 }
 
-export function createAuthenticatedSession(role, { memberId = null, displayName = null } = {}) {
+export function createAuthenticatedSession(role, { memberId = null, displayName = null, expiresAt = null } = {}) {
   const member = memberId ? MEMBERS.find((item) => item.id === memberId) : null;
-  const resolvedDisplayName = displayName || (member ? member.name : null);
+  const defaultDisplayName = role === ROLES.ADMIN
+    ? 'Household Admin'
+    : role === ROLES.SUPERADMIN
+    ? 'Super Admin'
+    : (member ? member.name : null);
+  const resolvedDisplayName = displayName || defaultDisplayName;
 
   return {
     authenticated: true,
@@ -88,6 +93,7 @@ export function createAuthenticatedSession(role, { memberId = null, displayName 
       : resolvedDisplayName
       ? { displayName: resolvedDisplayName }
       : {}),
+    ...(expiresAt ? { expiresAt } : {}),
     capabilities: getRoleCapabilities(role),
   };
 }

@@ -6,8 +6,10 @@ import {
 } from '../auth/permissions.js';
 import {
   createSessionToken,
+  decodeTokenClaims,
   getClearSessionCookieOptions,
   getSessionCookieOptions,
+  getSessionDurationSeconds,
   SESSION_COOKIE_NAME,
 } from '../auth/token.service.js';
 import { loginLimiter } from '../middleware/rateLimiters.js';
@@ -21,20 +23,35 @@ export function createAuthRouter({ service = { authenticateCredentials } } = {})
 
     try {
       const auth = await service.authenticateCredentials(credentials);
+      const sessionDurationSeconds = getSessionDurationSeconds(auth.role);
       const token = await createSessionToken(auth.role, {
         memberId: auth.memberId,
         userId: auth.userId,
         sessionVersion: auth.sessionVersion,
+        expiresIn: `${sessionDurationSeconds}s`,
       });
 
-      res.cookie(SESSION_COOKIE_NAME, token, getSessionCookieOptions());
+      res.cookie(
+        SESSION_COOKIE_NAME,
+        token,
+        getSessionCookieOptions({
+          maxAgeSeconds: sessionDurationSeconds,
+          role: auth.role,
+        }),
+      );
       logger.info('Authentication succeeded', { role: auth.role, memberId: auth.memberId });
+
+      const claims = await decodeTokenClaims(token);
+      const expiresAt = typeof claims.exp === 'number'
+        ? new Date(claims.exp * 1000).toISOString()
+        : null;
 
       return res.json({
         success: true,
         session: createAuthenticatedSession(auth.role, {
           memberId: auth.memberId,
           displayName: auth.displayName,
+          expiresAt,
         }),
       });
     } catch (error) {
@@ -51,6 +68,7 @@ export function createAuthRouter({ service = { authenticateCredentials } } = {})
       ? createAuthenticatedSession(req.auth.role, {
           memberId: req.auth.memberId,
           displayName: req.auth.displayName,
+          expiresAt: req.auth.expiresAt,
         })
       : createViewerSession();
 

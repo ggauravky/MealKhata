@@ -5,7 +5,22 @@ import { ROLES, getPrincipalForRole, isAuthenticatedRole } from './permissions.j
 import { userAccountRepository } from './userAccount.repository.js';
 
 export const SESSION_COOKIE_NAME = 'mk_session';
-export const SESSION_DURATION_SECONDS = 12 * 60 * 60;
+
+export const MEMBER_SESSION_DURATION_SECONDS = 12 * 60 * 60; // 12 hours = 43,200 seconds
+export const ADMIN_SESSION_DURATION_SECONDS = 7 * 24 * 60 * 60; // 7 days = 604,800 seconds
+export const SUPERADMIN_SESSION_DURATION_SECONDS = 7 * 24 * 60 * 60; // 7 days = 604,800 seconds
+export const DEFAULT_SESSION_DURATION_SECONDS = MEMBER_SESSION_DURATION_SECONDS;
+export const SESSION_DURATION_SECONDS = ADMIN_SESSION_DURATION_SECONDS;
+
+export const SESSION_DURATIONS = Object.freeze({
+  [ROLES.MEMBER]: MEMBER_SESSION_DURATION_SECONDS,
+  [ROLES.ADMIN]: ADMIN_SESSION_DURATION_SECONDS,
+  [ROLES.SUPERADMIN]: SUPERADMIN_SESSION_DURATION_SECONDS,
+});
+
+export function getSessionDurationSeconds(role) {
+  return SESSION_DURATIONS[role] ?? DEFAULT_SESSION_DURATION_SECONDS;
+}
 
 const ALGORITHM = 'HS256';
 const ISSUER = 'meal-khata';
@@ -15,20 +30,37 @@ function getSecretKey() {
   return new TextEncoder().encode(env.authJwtSecret);
 }
 
-export function getSessionCookieOptions({ production = isProduction } = {}) {
+export async function decodeTokenClaims(token) {
+  const { payload } = await jwtVerify(token, getSecretKey(), {
+    algorithms: [ALGORITHM],
+    issuer: ISSUER,
+    audience: AUDIENCE,
+  });
+  return payload;
+}
+
+export function getSessionCookieOptions({
+  production = isProduction,
+  maxAgeSeconds = null,
+  role = null,
+} = {}) {
+  const duration = maxAgeSeconds ?? (role ? getSessionDurationSeconds(role) : ADMIN_SESSION_DURATION_SECONDS);
   return {
     httpOnly: true,
     secure: production,
     sameSite: 'lax',
     path: '/',
-    maxAge: SESSION_DURATION_SECONDS * 1_000,
+    maxAge: duration * 1_000,
   };
 }
 
 export function getClearSessionCookieOptions({ production = isProduction } = {}) {
-  const { maxAge, ...options } = getSessionCookieOptions({ production });
-  void maxAge;
-  return options;
+  return {
+    httpOnly: true,
+    secure: production,
+    sameSite: 'lax',
+    path: '/',
+  };
 }
 
 export async function createSessionToken(
@@ -37,7 +69,7 @@ export async function createSessionToken(
     memberId = null,
     userId = null,
     sessionVersion = 0,
-    expiresIn = `${SESSION_DURATION_SECONDS}s`,
+    expiresIn = null,
   } = {},
 ) {
   if (role === ROLES.MEMBER && (!memberId || !MEMBER_IDS.includes(memberId))) {
@@ -58,13 +90,16 @@ export async function createSessionToken(
     payload.memberId = memberId;
   }
 
+  const durationSeconds = getSessionDurationSeconds(role);
+  const expiration = expiresIn ?? `${durationSeconds}s`;
+
   return new SignJWT(payload)
     .setProtectedHeader({ alg: ALGORITHM, typ: 'JWT' })
     .setSubject(principal)
     .setIssuedAt()
     .setIssuer(ISSUER)
     .setAudience(AUDIENCE)
-    .setExpirationTime(expiresIn)
+    .setExpirationTime(expiration)
     .sign(getSecretKey());
 }
 
@@ -78,6 +113,10 @@ export async function verifySessionToken(token, { accounts = userAccountReposito
   if (!isAuthenticatedRole(payload.role)) {
     throw new Error('Unsupported session role');
   }
+
+  const expiresAt = typeof payload.exp === 'number'
+    ? new Date(payload.exp * 1000).toISOString()
+    : null;
 
   // If userId is in token and account repository is provided, verify against DB
   if (payload.userId && accounts) {
@@ -101,6 +140,7 @@ export async function verifySessionToken(token, { accounts = userAccountReposito
       displayName: user.displayName,
       sessionVersion: user.sessionVersion,
       principal,
+      expiresAt,
     };
   }
 
@@ -121,6 +161,7 @@ export async function verifySessionToken(token, { accounts = userAccountReposito
       role: ROLES.MEMBER,
       memberId,
       principal: expectedPrincipal,
+      expiresAt,
     };
   }
 
@@ -135,6 +176,7 @@ export async function verifySessionToken(token, { accounts = userAccountReposito
     role: payload.role,
     memberId: null,
     principal,
+    expiresAt,
   };
 }
 

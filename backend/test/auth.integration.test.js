@@ -74,7 +74,7 @@ describe('authentication API', () => {
     assert.match(cookie, /^mk_session=/);
     assert.match(cookie, /HttpOnly/i);
     assert.match(cookie, /SameSite=Lax/i);
-    assert.match(cookie, /Max-Age=43200/i);
+    assert.match(cookie, /Max-Age=604800/i);
   });
 
   test('Super Admin login returns the server-determined role and full date capabilities', async () => {
@@ -89,14 +89,16 @@ describe('authentication API', () => {
     assert.equal(response.body.session.role, ROLES.SUPERADMIN);
   });
 
-  test('production session cookie configuration is Secure and HttpOnly', () => {
-    const options = getSessionCookieOptions({ production: true });
+  test('production session cookie configuration is Secure and HttpOnly with 7-day Admin policy', () => {
+    const adminOptions = getSessionCookieOptions({ production: true, role: ROLES.ADMIN });
+    assert.equal(adminOptions.secure, true);
+    assert.equal(adminOptions.httpOnly, true);
+    assert.equal(adminOptions.sameSite, 'lax');
+    assert.equal(adminOptions.path, '/');
+    assert.equal(adminOptions.maxAge, 604_800_000);
 
-    assert.equal(options.secure, true);
-    assert.equal(options.httpOnly, true);
-    assert.equal(options.sameSite, 'lax');
-    assert.equal(options.path, '/');
-    assert.equal(options.maxAge, 43_200_000);
+    const memberOptions = getSessionCookieOptions({ production: true, role: ROLES.MEMBER });
+    assert.equal(memberOptions.maxAge, 43_200_000);
   });
 
   test('session endpoint restores viewer, Admin, and Super Admin states', async () => {

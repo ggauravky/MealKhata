@@ -58,6 +58,7 @@ export function createHelmetOptions({ production = isProduction } = {}) {
 
 export function createApp({
   auth = authRouter,
+  authenticate = authenticateSession,
   meals = mealRouter,
   billing = billingRouter,
   calendar = calendarRouter,
@@ -109,7 +110,7 @@ export function createApp({
     next();
   });
   app.use('/api', apiLimiter);
-  app.use('/api', authenticateSession);
+  app.use('/api', authenticate);
   app.use('/api', enforceTrustedOrigin);
   app.use('/api', health);
   app.use('/api/auth', auth);

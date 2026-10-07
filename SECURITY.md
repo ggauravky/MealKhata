@@ -37,8 +37,12 @@ INTERNET
 ## 1. Authentication & Session Security
 
 - **Session Tokens**: Stateless JSON Web Tokens (JWT) signed with `AUTH_JWT_SECRET` (minimum 48 bytes in production).
-- **Storage**: Delivered via `HttpOnly`, `Secure` (production), `SameSite=Lax`, `Path=/` session cookie named `mealkhata_session`.
-- **JWT Claims**: Issuer (`mealkhata-api`), Audience (`mealkhata-client`), subject, role, memberId, and a bounded 12-hour expiration. Algorithms are restricted to prevent `alg=none` vulnerabilities.
+- **Session Duration Policy**:
+  - **Admin & Super Admin**: Absolute 7-day persistent session (`604,800` seconds).
+  - **Member**: 12-hour operational session (`43,200` seconds).
+- **Storage & Cookie Hardening**: Delivered via host-only `HttpOnly`, `Secure` (production), `SameSite=Lax`, `Path=/` session cookie named `mk_session` with explicit `Max-Age` matching the role's JWT lifetime. Sessions persist across tab/browser closures and PWA restarts.
+- **Revocation Invariants**: Sessions remain strictly subject to database account status (`active === true`), immediate `sessionVersion` invalidation on credentials change, and `AUTH_JWT_SECRET` rotation.
+- **JWT Claims**: Issuer (`meal-khata`), Audience (`meal-khata-web`), subject, role, memberId, userId, sessionVersion, and matching expiration claim. Algorithms are restricted strictly to `HS256`.
 - **Passwords**: Hashed with `bcryptjs` cost factor 12. Password hashes are never returned by APIs or logged.
 - **Timing Attacks**: Authentication uses dummy hash evaluations on unknown emails to prevent timing-based user enumeration. Error responses remain generic: `"Invalid email or password."`.
 

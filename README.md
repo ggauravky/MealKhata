@@ -40,7 +40,7 @@ MealKhata simplifies daily household meal coordination and monthly shared-expens
 3. **Reports (`/reports?month=YYYY-MM`)**: Monthly financial report detailing breakfast/dinner plate counts, current rates, total bill, paid amounts, and projected month-end totals.
 4. **Payments (`/payments?month=YYYY-MM`)**: Financial ledger page. Members prepare and confirm personal payments via UPI deep links or copy-and-pay details; Super Admin can void mistaken entries with an audit reason.
 5. **Admin Panel (`/admin`)**: Administrative controls for configuring monthly rates, managing payment receiver details, setting reminder schedules, and closing/reopening monthly settlements.
-6. **Login (`/login`)**: Secure role-aware authentication for Members, Admin, and Super Admin.
+6. **Login (`/login`)**: Secure role-aware authentication with 7-day persistent HttpOnly sessions for Admin and Super Admin, and 12-hour sessions for Members. Sessions persist across browser closures while remaining subject to active account status and session version revocation.
 
 ---
 
