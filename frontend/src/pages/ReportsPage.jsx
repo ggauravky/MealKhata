@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, CookingPot, Moon, SunMedium } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CookingPot, Download, Loader2, Moon, SunMedium } from 'lucide-react';
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/common/PageHeader.jsx';
@@ -17,6 +17,7 @@ import { formatLogicalDate } from '../lib/logicalDate.js';
 import { addLogicalMonths, formatLogicalMonth, isValidLogicalMonth } from '../lib/logicalMonth.js';
 import { formatPaise } from '../lib/money.js';
 import { MORNING_PRICE_PAISE, NIGHT_PRICE_PAISE } from '../lib/plates.js';
+import { downloadMonthlyReport } from '../lib/reportDownload.js';
 
 const periodLabels = {
   past: 'Past month',
@@ -31,6 +32,8 @@ export function ReportsPage() {
   const [searchParams] = useSearchParams();
   const queryMonth = searchParams.get('month');
   const [selectedMonth, setSelectedMonth] = useState('');
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState(null);
   const month =
     selectedMonth ||
     (isValidLogicalMonth(queryMonth) ? queryMonth : serverToday.date.slice(0, 7));
@@ -40,6 +43,23 @@ export function ReportsPage() {
   const moveMonth = (amount) => {
     if (month) {
       setSelectedMonth(addLogicalMonths(month, amount));
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    if (!month || isDownloading) return;
+    if (!auth.authenticated) {
+      setDownloadError('Please sign in to download monthly reports.');
+      return;
+    }
+    setDownloadError(null);
+    setIsDownloading(true);
+    try {
+      await downloadMonthlyReport(month);
+    } catch (err) {
+      setDownloadError(err.message || 'Failed to download monthly report.');
+    } finally {
+      setIsDownloading(false);
     }
   };
 
@@ -139,9 +159,49 @@ export function ReportsPage() {
                 className="h-8 rounded-sm border border-slate-200 bg-white px-2 text-xs text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 ml-1 cursor-pointer"
                 aria-label="Jump to report month"
               />
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 px-2.5 text-xs font-medium gap-1.5 border-teal-600/30 text-teal-800 hover:bg-teal-50 dark:border-teal-500/30 dark:text-teal-300 dark:hover:bg-teal-950/40 ml-auto sm:ml-1"
+                onClick={handleDownloadPdf}
+                disabled={isDownloading || !navigator.onLine}
+                aria-label={`Download ${monthLabel} monthly report as PDF`}
+                aria-busy={isDownloading}
+                title={!auth.authenticated ? 'Sign in to download monthly report as PDF' : `Download ${monthLabel} report as PDF`}
+              >
+                {isDownloading ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span className="hidden sm:inline">Preparing PDF…</span>
+                    <span className="sm:hidden">Preparing…</span>
+                  </>
+                ) : (
+                  <>
+                    <Download className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">Download PDF</span>
+                    <span className="sm:hidden">PDF</span>
+                  </>
+                )}
+              </Button>
             </div>
           </CardHeader>
         </Card>
+      )}
+
+      {downloadError && (
+        <div
+          role="status"
+          className="flex items-center justify-between rounded-md border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800 dark:border-rose-900/50 dark:bg-rose-950/40 dark:text-rose-300"
+        >
+          <span>{downloadError}</span>
+          <button
+            type="button"
+            onClick={() => setDownloadError(null)}
+            className="ml-2 font-semibold text-rose-900 hover:underline dark:text-rose-200 cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
       )}
 
       {/* Fixed Price Reference Banner */}
