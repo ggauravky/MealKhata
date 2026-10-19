@@ -56,12 +56,29 @@ export function createReportService({
       const hasFinancialActivity =
         (projection?.room?.amountPaise ?? 0) > 0 || (toDate?.room?.amountPaise ?? 0) > 0;
 
+      const pricingAdjustments = [];
+      for (const day of monthData.days) {
+        for (const mealType of ['morning', 'night']) {
+          const pricingInfo = day.pricing?.[mealType];
+          if (pricingInfo?.isOverridden) {
+            pricingAdjustments.push({
+              date: day.date,
+              mealType,
+              defaultPricePaise: pricingInfo.defaultPricePaise,
+              effectivePricePaise: pricingInfo.effectivePricePaise,
+              reason: pricingInfo.reason ?? null,
+            });
+          }
+        }
+      }
+
       return {
         month,
         periodType,
         today,
         timezone,
         rates: rateData,
+        pricingAdjustments,
         recordedDayCount,
         hasRecordedMeals,
         hasMealActivity,

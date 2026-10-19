@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/common/PageHeader.jsx';
 import { LiveIndicator } from '../components/meals/LiveIndicator.jsx';
 import { MealCard } from '../components/meals/MealCard.jsx';
+import { MealPriceDialog } from '../components/meals/MealPriceDialog.jsx';
 import { PlateSharingDialog } from '../components/meals/PlateSharingDialog.jsx';
 import { PlateSummary } from '../components/meals/PlateSummary.jsx';
 import { ReminderSettingsPanel } from '../components/reminders/ReminderSettingsPanel.jsx';
@@ -21,6 +22,7 @@ import { api } from '../lib/api.js';
 import { getRoleLabel } from '../lib/constants.js';
 import { addLogicalDays, formatIndiaTime, formatLogicalDate, isValidLogicalDate } from '../lib/logicalDate.js';
 import { formatLogicalMonth } from '../lib/logicalMonth.js';
+import { formatPaise } from '../lib/money.js';
 
 export function AdminPage() {
   useDocumentTitle('Admin');
@@ -35,6 +37,7 @@ export function AdminPage() {
   const [saveMessage, setSaveMessage] = useState('');
   const [saveError, setSaveError] = useState('');
   const [sharingMealType, setSharingMealType] = useState(null);
+  const [pricingMealType, setPricingMealType] = useState(null);
 
   const mealDay = useMealDay(requestedDate);
   const displayedDate = mealDay.data?.date ?? '';
@@ -98,6 +101,9 @@ export function AdminPage() {
 
   const canConfigureSharing = Boolean(
     mealDay.data?.permissions?.canConfigureAllocation && isOnline && !isMonthClosed,
+  );
+  const canConfigurePrice = Boolean(
+    mealDay.data?.permissions?.canConfigurePrice && isOnline && !isMonthClosed,
   );
 
   return (
@@ -236,12 +242,15 @@ export function AdminPage() {
               meals={mealDay.data.meals.morning}
               allocation={mealDay.data.allocations?.morning}
               allocationDetails={mealDay.data.allocationDetails?.morning}
+              pricing={mealDay.data.pricing?.morning}
               editable={Boolean(mealDay.data.permissions.canEdit) && isOnline && !isMonthClosed}
               editableMemberIds={mealDay.data.permissions?.editableMemberIds}
               pendingRow={pendingRow}
               onChange={handleMealChange}
               canConfigureSharing={canConfigureSharing}
               onConfigureSharing={() => setSharingMealType('morning')}
+              canConfigurePrice={canConfigurePrice}
+              onConfigurePrice={() => setPricingMealType('morning')}
             />
             <MealCard
               mealType="night"
@@ -249,12 +258,15 @@ export function AdminPage() {
               meals={mealDay.data.meals.night}
               allocation={mealDay.data.allocations?.night}
               allocationDetails={mealDay.data.allocationDetails?.night}
+              pricing={mealDay.data.pricing?.night}
               editable={Boolean(mealDay.data.permissions.canEdit) && isOnline && !isMonthClosed}
               editableMemberIds={mealDay.data.permissions?.editableMemberIds}
               pendingRow={pendingRow}
               onChange={handleMealChange}
               canConfigureSharing={canConfigureSharing}
               onConfigureSharing={() => setSharingMealType('night')}
+              canConfigurePrice={canConfigurePrice}
+              onConfigurePrice={() => setPricingMealType('night')}
             />
           </div>
 
@@ -278,6 +290,37 @@ export function AdminPage() {
           onSaved={(updatedMealDay) => {
             mealDay.applyServerData(updatedMealDay);
             setSaveMessage('Plate sharing allocation saved.');
+            history.refresh();
+          }}
+        />
+      )}
+
+      {pricingMealType && mealDay.data && (
+        <MealPriceDialog
+          open={Boolean(pricingMealType)}
+          onOpenChange={(open) => {
+            if (!open) setPricingMealType(null);
+          }}
+          date={displayedDate}
+          mealType={pricingMealType}
+          pricing={mealDay.data.pricing?.[pricingMealType]}
+          onSavePrice={async ({ date, mealType, pricePaise, reason }) => {
+            const response = await api.put(`/api/meals/${date}/${mealType}/price`, {
+              pricePaise,
+              reason,
+            });
+            mealDay.applyServerData(response.data);
+            const mealLabel = mealType === 'morning' ? 'Morning' : 'Night';
+            setSaveMessage(
+              `${mealLabel} price updated to ${formatPaise(pricePaise)} for ${formatLogicalDate(date, { day: 'numeric', month: 'short' })}.`,
+            );
+            history.refresh();
+          }}
+          onResetPrice={async ({ date, mealType }) => {
+            const response = await api.delete(`/api/meals/${date}/${mealType}/price`);
+            mealDay.applyServerData(response.data);
+            const mealLabel = mealType === 'morning' ? 'Morning' : 'Night';
+            setSaveMessage(`${mealLabel} price reset to default.`);
             history.refresh();
           }}
         />
@@ -336,6 +379,42 @@ export function AdminPage() {
                   return (
                     <div
                       key={`${item.changedAt}-alloc-${index}`}
+                      className="py-2.5 flex items-start justify-between gap-3"
+                    >
+                      <div>
+                        <strong className="font-semibold text-slate-900 dark:text-slate-100 block">
+                          {title}
+                        </strong>
+                        <span className="text-slate-500 dark:text-slate-400">{subtitle}</span>
+                      </div>
+                      <time className="text-slate-400 shrink-0 text-[11px]" dateTime={item.changedAt}>
+                        {formatIndiaTime(item.changedAt)}
+                      </time>
+                    </div>
+                  );
+                }
+
+                if (item.type === 'price') {
+                  const mealLabel = item.mealType === 'morning' ? 'Morning' : 'Night';
+                  const actorLabel = getRoleLabel(item.actorRole);
+                  let title;
+                  let subtitle;
+
+                  if (item.changeType === 'clear') {
+                    title = `${mealLabel} price reset to default`;
+                    subtitle = `Reset from ${formatPaise(item.fromPricePaise)} to standard default`;
+                  } else {
+                    title = `${actorLabel} adjusted ${mealLabel} price`;
+                    const fromText = formatPaise(item.fromPricePaise);
+                    const toText = formatPaise(item.toPricePaise);
+                    subtitle = item.reason
+                      ? `${fromText} → ${toText} · ${item.reason}`
+                      : `${fromText} → ${toText}`;
+                  }
+
+                  return (
+                    <div
+                      key={`${item.changedAt}-price-${index}`}
                       className="py-2.5 flex items-start justify-between gap-3"
                     >
                       <div>

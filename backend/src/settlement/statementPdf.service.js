@@ -81,15 +81,32 @@ export function generateSettlementPdf(settlement) {
         .fillColor('#0f172a')
         .text('Approved Meal Rates:');
 
+      const adjustments = snapshot.pricingAdjustments || [];
+      const adjCountText = adjustments.length > 0
+        ? `   |   Date Adjustments: ${adjustments.length}`
+        : '';
+
       doc
         .fontSize(10)
         .font('Helvetica')
         .fillColor('#334155')
         .text(
-          `Morning Meal: ${formatRupees(rates.morningPricePaise)} / physical plate   |   Night Meal: ${formatRupees(rates.nightPricePaise)} / physical plate`,
+          `Morning Meal: ${formatRupees(rates.morningPricePaise)} / physical plate   |   Night Meal: ${formatRupees(rates.nightPricePaise)} / physical plate${adjCountText}`,
         );
 
-      doc.moveDown(1);
+      if (adjustments.length > 0) {
+        doc.moveDown(0.2);
+        doc.fontSize(8).font('Helvetica-Oblique').fillColor('#64748b');
+        for (const adj of adjustments.slice(0, 3)) {
+          const reasonStr = adj.reason ? ` (${adj.reason})` : '';
+          doc.text(`• ${adj.date} ${adj.mealType === 'morning' ? 'Morning' : 'Night'}: ${formatRupees(adj.defaultPricePaise)} → ${formatRupees(adj.effectivePricePaise)}${reasonStr}`);
+        }
+        if (adjustments.length > 3) {
+          doc.text(`• ... and ${adjustments.length - 3} more adjustments.`);
+        }
+      }
+
+      doc.moveDown(0.8);
 
       // Member Settlement Table Header
       // Layout (50 to 545 = 495):

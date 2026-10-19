@@ -14,8 +14,18 @@ export function createDefaultMealDay(date) {
   return {
     date,
     meals: createDefaultMeals(),
+    allocations: {
+      morning: null,
+      night: null,
+    },
+    priceOverrides: {
+      morning: null,
+      night: null,
+    },
     revision: 0,
     changes: [],
+    allocationChanges: [],
+    priceChanges: [],
   };
 }
 

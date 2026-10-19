@@ -28,9 +28,12 @@ export function useMealHistory(date) {
       .then((response) => {
         const items = response.data?.items || [];
         const allocationChanges = response.data?.allocationChanges || [];
-        const allChanges = [...items, ...allocationChanges].sort((a, b) => {
-          return new Date(b.changedAt).getTime() - new Date(a.changedAt).getTime();
-        });
+        const priceChanges = response.data?.priceChanges || [];
+        const allChanges = items.length > 0 && items.some((i) => i.type === 'price' || i.type === 'allocation')
+          ? items
+          : [...items, ...allocationChanges, ...priceChanges].sort((a, b) => {
+              return new Date(b.changedAt).getTime() - new Date(a.changedAt).getTime();
+            });
 
         setState({
           date,
@@ -38,6 +41,7 @@ export function useMealHistory(date) {
           error: '',
           items,
           allocationChanges,
+          priceChanges,
           allChanges,
         });
       })

@@ -42,6 +42,17 @@ const ratesSnapshotSchema = new mongoose.Schema(
   { _id: false },
 );
 
+const pricingAdjustmentSnapshotSchema = new mongoose.Schema(
+  {
+    date: { type: String, required: true },
+    mealType: { type: String, required: true, enum: ['morning', 'night'] },
+    defaultPricePaise: { type: Number, required: true, min: 0 },
+    effectivePricePaise: { type: Number, required: true, min: 0 },
+    reason: { type: String, default: null },
+  },
+  { _id: false },
+);
+
 const settlementSnapshotSchema = new mongoose.Schema(
   {
     rates: { type: ratesSnapshotSchema, required: true },
@@ -51,6 +62,11 @@ const settlementSnapshotSchema = new mongoose.Schema(
       devansh: { type: memberSnapshotSchema, required: true },
     },
     room: { type: roomSnapshotSchema, required: true },
+    pricingAdjustments: {
+      type: [pricingAdjustmentSnapshotSchema],
+      required: false,
+      default: () => [],
+    },
   },
   { _id: false },
 );

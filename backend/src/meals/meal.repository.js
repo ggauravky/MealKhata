@@ -11,7 +11,7 @@ export const mealRepository = Object.freeze({
 
   async findInDateRange(startDate, endDate) {
     return MealDay.find({ date: { $gte: startDate, $lte: endDate } })
-      .select({ date: 1, meals: 1, allocations: 1, revision: 1, updatedAt: 1, _id: 0 })
+      .select({ date: 1, meals: 1, allocations: 1, priceOverrides: 1, revision: 1, updatedAt: 1, _id: 0 })
       .lean()
       .exec();
   },
@@ -105,6 +105,34 @@ export const mealRepository = Object.freeze({
         $set: { [`allocations.${mealType}`]: null },
         $inc: { revision: 1 },
         $push: { allocationChanges: allocationChange },
+      },
+      { returnDocument: 'after', runValidators: true },
+    )
+      .lean()
+      .exec();
+  },
+
+  async updatePriceOverrideIfCurrent({ date, mealType, priceOverride, revision, priceChange }) {
+    return MealDay.findOneAndUpdate(
+      { date, revision },
+      {
+        $set: { [`priceOverrides.${mealType}`]: priceOverride },
+        $inc: { revision: 1 },
+        $push: { priceChanges: priceChange },
+      },
+      { returnDocument: 'after', runValidators: true },
+    )
+      .lean()
+      .exec();
+  },
+
+  async clearPriceOverrideIfCurrent({ date, mealType, revision, priceChange }) {
+    return MealDay.findOneAndUpdate(
+      { date, revision },
+      {
+        $set: { [`priceOverrides.${mealType}`]: null },
+        $inc: { revision: 1 },
+        $push: { priceChanges: priceChange },
       },
       { returnDocument: 'after', runValidators: true },
     )

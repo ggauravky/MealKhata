@@ -5,6 +5,7 @@ import { mealService as defaultMealService } from '../meals/meal.service.js';
 import {
   calculateMemberShareUnits,
   getEffectiveMealAllocation,
+  resolveMealPricePaise,
   splitMealCost,
 } from '../meals/plateAllocation.service.js';
 import { MEAL_PRICES } from '../meals/plateAllocation.constants.js';
@@ -106,18 +107,29 @@ export function createDashboardService({
       const morningUnits = calculateMemberShareUnits(morningAllocation);
       const nightUnits = calculateMemberShareUnits(nightAllocation);
 
+      const morningPrice = resolveMealPricePaise({
+        day: todayDay,
+        mealType: 'morning',
+        fallbackPricePaise: MEAL_PRICES.morning,
+      });
+      const nightPrice = resolveMealPricePaise({
+        day: todayDay,
+        mealType: 'night',
+        fallbackPricePaise: MEAL_PRICES.night,
+      });
+
       const morningCost = splitMealCost({
         date: today,
         mealType: 'morning',
         effectiveAllocation: morningAllocation,
-        pricePaise: MEAL_PRICES.morning,
+        pricePaise: morningPrice,
       });
 
       const nightCost = splitMealCost({
         date: today,
         mealType: 'night',
         effectiveAllocation: nightAllocation,
-        pricePaise: MEAL_PRICES.night,
+        pricePaise: nightPrice,
       });
 
       const morningEating = MEMBERS.filter((m) => morningMeals[m.id] === 'taking').length;
@@ -458,11 +470,27 @@ export function createDashboardService({
             canEdit,
             editableMemberIds,
           },
+          pricing: {
+            morning: {
+              defaultPricePaise: MEAL_PRICES.morning,
+              effectivePricePaise: morningPrice,
+              isOverridden: morningPrice !== MEAL_PRICES.morning,
+            },
+            night: {
+              defaultPricePaise: MEAL_PRICES.night,
+              effectivePricePaise: nightPrice,
+              isOverridden: nightPrice !== MEAL_PRICES.night,
+            },
+          },
         },
         householdToday: {
           morningPlates,
           nightPlates,
           totalPlates: totalPlatesToday,
+          morningPricePaise: morningPrice,
+          nightPricePaise: nightPrice,
+          isMorningPriceOverridden: morningPrice !== MEAL_PRICES.morning,
+          isNightPriceOverridden: nightPrice !== MEAL_PRICES.night,
           morningEating,
           nightEating,
           totalEating: morningEating + nightEating,

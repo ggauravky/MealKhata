@@ -175,6 +175,11 @@ export function createMonthlyReportPdfService({ exportService = monthlyReportExp
             .text(`Timezone: ${data.timezone}`, MARGIN + 220, metaY + 29);
 
           // Col 3: Approved Meal Prices
+          const adjCount = data.pricingAdjustments?.length || 0;
+          const nightPriceSub = adjCount > 0
+            ? `Night: ${formatPdfRupees(data.prices.nightPricePaise)} / plate (${adjCount} adj)`
+            : `Night: ${formatPdfRupees(data.prices.nightPricePaise)} / plate`;
+
           doc
             .fontSize(8)
             .font('Helvetica-Bold')
@@ -183,7 +188,7 @@ export function createMonthlyReportPdfService({ exportService = monthlyReportExp
             .font('Helvetica')
             .fillColor(COLORS.textMuted)
             .text(`Morning: ${formatPdfRupees(data.prices.morningPricePaise)} / plate`, MARGIN + 420, metaY + 18)
-            .text(`Night: ${formatPdfRupees(data.prices.nightPricePaise)} / plate`, MARGIN + 420, metaY + 29);
+            .text(nightPriceSub, MARGIN + 420, metaY + 29);
 
           // Col 4: Settlement Record (if applicable)
           const isClosed = data.settlement.isClosed;
@@ -549,11 +554,21 @@ export function createMonthlyReportPdfService({ exportService = monthlyReportExp
               .fillColor(day.morning.eaters > 0 ? COLORS.textDark : COLORS.textMuted)
               .text(day.morning.eaters > 0 ? String(day.morning.eaters) : '—', dhX[2], y + 3, { width: dhWidths[2] - 6, align: 'right' })
               .text(day.morning.physicalPlates > 0 ? String(day.morning.physicalPlates) : '—', dhX[3], y + 3, { width: dhWidths[3] - 6, align: 'right' })
-              .text(formatPdfRupees(day.morning.amountPaise), dhX[4], y + 3, { width: dhWidths[4] - 6, align: 'right' })
+              .text(
+                formatPdfRupees(day.morning.amountPaise) + (day.morning.isPriceOverridden ? '*' : ''),
+                dhX[4],
+                y + 3,
+                { width: dhWidths[4] - 6, align: 'right' },
+              )
               .fillColor(day.night.eaters > 0 ? COLORS.textDark : COLORS.textMuted)
               .text(day.night.eaters > 0 ? String(day.night.eaters) : '—', dhX[5], y + 3, { width: dhWidths[5] - 6, align: 'right' })
               .text(day.night.physicalPlates > 0 ? String(day.night.physicalPlates) : '—', dhX[6], y + 3, { width: dhWidths[6] - 6, align: 'right' })
-              .text(formatPdfRupees(day.night.amountPaise), dhX[7], y + 3, { width: dhWidths[7] - 6, align: 'right' })
+              .text(
+                formatPdfRupees(day.night.amountPaise) + (day.night.isPriceOverridden ? '*' : ''),
+                dhX[7],
+                y + 3,
+                { width: dhWidths[7] - 6, align: 'right' },
+              )
               .font(day.dailyTotalPaise > 0 ? 'Helvetica-Bold' : 'Helvetica')
               .fillColor(day.dailyTotalPaise > 0 ? COLORS.primary : COLORS.textMuted)
               .text(formatPdfRupees(day.dailyTotalPaise), dhX[8], y + 3, { width: dhWidths[8] - 6, align: 'right' })
@@ -583,6 +598,15 @@ export function createMonthlyReportPdfService({ exportService = monthlyReportExp
             .text(formatPdfRupees(data.summary.nightAmountPaise), dhX[7], dhTotalY + 4, { width: dhWidths[7] - 6, align: 'right' })
             .text(formatPdfRupees(data.summary.roomAmountPaise), dhX[8], dhTotalY + 4, { width: dhWidths[8] - 6, align: 'right' })
             .text('—', dhX[9], dhTotalY + 4, { width: dhWidths[9] - 6, align: 'center' });
+
+          if (data.pricingAdjustments?.length > 0) {
+            doc.y = dhTotalY + 22;
+            doc
+              .fontSize(6.5)
+              .font('Helvetica-Oblique')
+              .fillColor(COLORS.textMuted)
+              .text('* Marked meal amounts reflect an approved date-specific meal price override.', MARGIN, doc.y);
+          }
 
           // -------------------------------------------------------------
           // PAGE 3+: Detailed Member Daily Meal Ledger
@@ -805,6 +829,76 @@ export function createMonthlyReportPdfService({ exportService = monthlyReportExp
                 .text(formatPdfRupees(sDay.dailyTotalPaise), MARGIN + 560, sY + 3, { width: 190, align: 'right' });
 
               doc.y = sY + 14;
+            });
+
+            doc.moveDown(0.8);
+          }
+
+          // -------------------------------------------------------------
+          // PRICE ADJUSTMENTS SECTION (If any date-specific price overrides exist)
+          // -------------------------------------------------------------
+          if (data.pricingAdjustments && data.pricingAdjustments.length > 0) {
+            checkPageSpace(doc, 90, () => {});
+
+            doc.moveDown(0.8);
+            doc
+              .fontSize(11)
+              .font('Helvetica-Bold')
+              .fillColor(COLORS.textDark)
+              .text('Date-Specific Meal Price Adjustments', MARGIN, doc.y);
+
+            doc
+              .fontSize(7.5)
+              .font('Helvetica')
+              .fillColor(COLORS.textMuted)
+              .text(
+                'The following meals used an approved date-specific price override instead of standard rates.',
+                MARGIN,
+                doc.y + 2,
+              );
+
+            const adjHeaderY = doc.y + 12;
+            const adjWidths = [100, 80, 90, 90, 400];
+            const adjX = [MARGIN];
+            for (let i = 0; i < adjWidths.length - 1; i++) {
+              adjX.push(adjX[i] + adjWidths[i]);
+            }
+
+            doc.rect(MARGIN, adjHeaderY, 760, 18).fill('#fef3c7');
+            doc
+              .fontSize(7.5)
+              .font('Helvetica-Bold')
+              .fillColor('#92400e')
+              .text('Date', adjX[0] + 6, adjHeaderY + 4, { width: adjWidths[0] - 10, align: 'left' })
+              .text('Meal', adjX[1], adjHeaderY + 4, { width: adjWidths[1] - 6, align: 'left' })
+              .text('Standard Price', adjX[2], adjHeaderY + 4, { width: adjWidths[2] - 6, align: 'right' })
+              .text('Applied Price', adjX[3], adjHeaderY + 4, { width: adjWidths[3] - 6, align: 'right' })
+              .text('Reason / Note', adjX[4], adjHeaderY + 4, { width: adjWidths[4] - 6, align: 'left' });
+
+            doc.y = adjHeaderY + 18;
+
+            data.pricingAdjustments.forEach((adj, adjIdx) => {
+              checkPageSpace(doc, 15, () => {});
+              const aY = doc.y;
+              if (adjIdx % 2 === 1) doc.rect(MARGIN, aY, 760, 14).fill(COLORS.rowAlt);
+              doc.strokeColor(COLORS.borderLight).lineWidth(0.3).moveTo(MARGIN, aY + 14).lineTo(PAGE_WIDTH - MARGIN, aY + 14).stroke();
+
+              doc
+                .fontSize(7.5)
+                .font('Helvetica-Bold')
+                .fillColor(COLORS.textDark)
+                .text(adj.date, adjX[0] + 6, aY + 3, { width: adjWidths[0] - 10, align: 'left' })
+                .font('Helvetica')
+                .text(adj.mealType === 'morning' ? 'Morning' : 'Night', adjX[1], aY + 3, { width: adjWidths[1] - 6, align: 'left' })
+                .text(formatPdfRupees(adj.defaultPricePaise), adjX[2], aY + 3, { width: adjWidths[2] - 6, align: 'right' })
+                .font('Helvetica-Bold')
+                .fillColor(COLORS.primary)
+                .text(formatPdfRupees(adj.effectivePricePaise), adjX[3], aY + 3, { width: adjWidths[3] - 6, align: 'right' })
+                .font('Helvetica')
+                .fillColor(COLORS.textMuted)
+                .text(adj.reason || 'No reason specified', adjX[4], aY + 3, { width: adjWidths[4] - 6, align: 'left' });
+
+              doc.y = aY + 14;
             });
 
             doc.moveDown(0.8);

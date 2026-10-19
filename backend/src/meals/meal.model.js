@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { AUTHENTICATED_ROLES } from '../auth/permissions.js';
+import { isValidPricePaise } from '../billing/monthlyRate.constants.js';
 import { MEMBER_IDS } from '../config/members.js';
 import { isValidLogicalDate } from '../utils/date.js';
 import { DEFAULT_MEAL_STATUS, MEAL_STATUSES, MEAL_TYPES } from './meal.constants.js';
@@ -84,6 +85,44 @@ const allocationChangeSchema = new mongoose.Schema(
   { _id: false, strict: 'throw' },
 );
 
+const mealPriceOverrideSchema = new mongoose.Schema(
+  {
+    pricePaise: {
+      type: Number,
+      required: true,
+      validate: {
+        validator: isValidPricePaise,
+        message: 'pricePaise must be a non-negative integer within allowed limits',
+      },
+    },
+    reason: {
+      type: String,
+      trim: true,
+      maxlength: 200,
+      default: null,
+    },
+  },
+  { _id: false, strict: 'throw' },
+);
+
+const priceChangeSchema = new mongoose.Schema(
+  {
+    changedAt: { type: Date, required: true },
+    actorRole: { type: String, enum: AUTHENTICATED_ROLES, required: true },
+    actorMemberId: { type: String, enum: [...MEMBER_IDS, null], required: false, default: null },
+    mealType: { type: String, enum: MEAL_TYPES, required: true },
+    changeType: {
+      type: String,
+      enum: ['set', 'clear'],
+      required: true,
+    },
+    fromOverridePricePaise: { type: Number, required: false, default: null },
+    toOverridePricePaise: { type: Number, required: false, default: null },
+    reason: { type: String, required: false, default: null },
+  },
+  { _id: false, strict: 'throw' },
+);
+
 const mealDaySchema = new mongoose.Schema(
   {
     date: {
@@ -104,6 +143,10 @@ const mealDaySchema = new mongoose.Schema(
       morning: { type: mealAllocationSchema, required: false, default: null },
       night: { type: mealAllocationSchema, required: false, default: null },
     },
+    priceOverrides: {
+      morning: { type: mealPriceOverrideSchema, required: false, default: null },
+      night: { type: mealPriceOverrideSchema, required: false, default: null },
+    },
     revision: {
       type: Number,
       required: true,
@@ -113,6 +156,7 @@ const mealDaySchema = new mongoose.Schema(
     },
     changes: { type: [changeSchema], required: true, default: () => [] },
     allocationChanges: { type: [allocationChangeSchema], required: true, default: () => [] },
+    priceChanges: { type: [priceChangeSchema], required: true, default: () => [] },
   },
   {
     collection: 'meal_days',

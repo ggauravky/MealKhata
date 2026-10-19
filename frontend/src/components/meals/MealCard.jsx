@@ -1,4 +1,4 @@
-import { Check, Minus, Moon, Settings2, SunMedium, Users } from 'lucide-react';
+import { Check, Minus, Moon, Settings2, SunMedium, Tag, Users } from 'lucide-react';
 import { ROOMMATES } from '../../lib/constants.js';
 import { formatPaise } from '../../lib/money.js';
 import {
@@ -6,6 +6,7 @@ import {
   formatPlateFraction,
   formatPlateFractionAccessible,
   getMealPlateCount,
+  MEAL_PRICES,
 } from '../../lib/plates.js';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card.jsx';
 import { Button } from '../ui/button.jsx';
@@ -24,15 +25,25 @@ export function MealCard({
   meals = {},
   allocation = null,
   allocationDetails = null,
+  pricing = null,
   editable = false,
   editableMemberIds = null,
   pendingRow,
   onChange,
   canConfigureSharing = false,
   onConfigureSharing = null,
+  canConfigurePrice = false,
+  onConfigurePrice = null,
 }) {
   const isMorning = mealType === 'morning';
   const takingCount = getMealPlateCount(meals);
+
+  const defaultPricePaise = pricing?.defaultPricePaise ?? MEAL_PRICES[mealType] ?? 5000;
+  const effectivePricePaise =
+    pricing?.effectivePricePaise ??
+    allocation?.cost?.pricePaise ??
+    defaultPricePaise;
+  const isPriceOverridden = Boolean(pricing?.isOverridden);
 
   // Derive physical plates and shared status
   let physicalPlates = takingCount;
@@ -63,7 +74,7 @@ export function MealCard({
     return 6;
   };
 
-  // Authoritative server-calculated cost or fallback to fixed price when taking
+  // Authoritative server-calculated cost or fallback to effective price when taking
   const getMemberCostPaise = (memberId, status) => {
     if (status !== 'taking') {
       return 0;
@@ -74,7 +85,7 @@ export function MealCard({
     if (allocationDetails?.members?.[memberId]?.amountPaise !== undefined) {
       return allocationDetails.members[memberId].amountPaise;
     }
-    return isMorning ? 5000 : 7000;
+    return effectivePricePaise;
   };
 
   const getShareText = (status, shareUnits, hasFractional) => {
@@ -110,32 +121,78 @@ export function MealCard({
               </Badge>
             )}
           </div>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex items-center gap-1 flex-wrap">
             <strong className="font-semibold text-slate-800 dark:text-slate-200">
               {takingCount} taking
             </strong>
             <span aria-hidden="true"> · </span>
             <span>{formatPlateCount(physicalPlates)}</span>
             <span aria-hidden="true"> · </span>
-            <span className="text-slate-400 dark:text-slate-500">
-              {isMorning ? '₹50 / plate' : '₹70 / plate'}
+            <span
+              className={
+                isPriceOverridden
+                  ? 'font-semibold text-teal-700 dark:text-teal-400'
+                  : 'text-slate-400 dark:text-slate-500'
+              }
+            >
+              {formatPaise(effectivePricePaise)} / plate
             </span>
+            {isPriceOverridden && (
+              <>
+                <Badge
+                  variant="outline"
+                  className="text-[10px] py-0 px-1.5 border-teal-300 dark:border-teal-700 bg-teal-50 dark:bg-teal-950/40 text-teal-800 dark:text-teal-300 font-medium"
+                  title={
+                    pricing.reason ? `Reason: ${pricing.reason}` : 'Date-specific price adjustment'
+                  }
+                >
+                  Adjusted
+                </Badge>
+                <span className="text-[11px] text-slate-400 dark:text-slate-500">
+                  (Reg {formatPaise(defaultPricePaise)})
+                </span>
+              </>
+            )}
           </p>
+          {isPriceOverridden && pricing?.reason && (
+            <p
+              className="text-[11px] text-teal-700/80 dark:text-teal-400/80 mt-0.5 truncate max-w-xs"
+              title={pricing.reason}
+            >
+              Note: {pricing.reason}
+            </p>
+          )}
         </div>
 
-        {canConfigureSharing && onConfigureSharing && (
-          <Button
-            variant="outline"
-            size="sm"
-            type="button"
-            onClick={onConfigureSharing}
-            className="h-8 gap-1.5 text-xs text-slate-700 dark:text-slate-300"
-            aria-label={`Configure ${title} plate sharing`}
-          >
-            <Settings2 className="h-3.5 w-3.5" />
-            <span>Sharing</span>
-          </Button>
-        )}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {canConfigurePrice && onConfigurePrice && (
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              onClick={onConfigurePrice}
+              className="h-8 gap-1.5 text-xs text-slate-700 dark:text-slate-300"
+              aria-label={`Adjust ${title} meal price`}
+            >
+              <Tag className="h-3.5 w-3.5 text-slate-500" />
+              <span>Price</span>
+            </Button>
+          )}
+
+          {canConfigureSharing && onConfigureSharing && (
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              onClick={onConfigureSharing}
+              className="h-8 gap-1.5 text-xs text-slate-700 dark:text-slate-300"
+              aria-label={`Configure ${title} plate sharing`}
+            >
+              <Settings2 className="h-3.5 w-3.5" />
+              <span>Sharing</span>
+            </Button>
+          )}
+        </div>
       </CardHeader>
 
       <CardContent>

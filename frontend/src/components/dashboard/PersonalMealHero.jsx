@@ -76,7 +76,7 @@ export function PersonalMealHero({ hero, isOnline = true, pendingRow = '', onCha
                       </span>
                     </>
                   ) : (
-                    <span>Cost: <strong>{formatPaise(morningCostPaise || 5000)}</strong></span>
+                    <span>Cost: <strong>{formatPaise(morningCostPaise ?? 5000)}</strong></span>
                   )}
                 </p>
               ) : (
@@ -169,7 +169,7 @@ export function PersonalMealHero({ hero, isOnline = true, pendingRow = '', onCha
                       </span>
                     </>
                   ) : (
-                    <span>Cost: <strong>{formatPaise(nightCostPaise || 7000)}</strong></span>
+                    <span>Cost: <strong>{formatPaise(nightCostPaise ?? 7000)}</strong></span>
                   )}
                 </p>
               ) : (

@@ -7,6 +7,7 @@ import { authorizeLogicalDate } from '../middleware/dateAuthorization.js';
 import { authorizeMemberResource } from '../middleware/memberAuthorization.js';
 import { canEditDate, getLogicalDateInTimeZone, isValidLogicalDate } from '../utils/date.js';
 import { MEAL_TYPES, WRITABLE_MEAL_STATUSES } from '../meals/meal.constants.js';
+import { isValidPricePaise } from '../billing/monthlyRate.constants.js';
 import { mealService } from '../meals/meal.service.js';
 import { settlementService } from '../settlement/settlement.service.js';
 import { broadcastMealUpdated } from '../socket.js';
@@ -94,6 +95,7 @@ function withPermissions(data, req, now, timezone) {
     permissions: {
       canEdit: isDateEditable && editableMemberIds.length > 0,
       canConfigureAllocation: isDateEditable && (req.auth?.role === ROLES.SUPERADMIN || req.auth?.role === ROLES.ADMIN),
+      canConfigurePrice: isDateEditable && (req.auth?.role === ROLES.SUPERADMIN || req.auth?.role === ROLES.ADMIN),
       editableMemberIds,
     },
   };
@@ -200,6 +202,110 @@ export function createMealRouter({
             date: result.data.date,
             mealType: req.params.mealType,
             allocationChanged: true,
+            revision: result.data.revision,
+            updatedAt: result.data.updatedAt,
+          });
+        }
+
+        return res.json({
+          success: true,
+          changed: result.changed,
+          data: withPermissions(result.data, req, now(), timezone),
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.put(
+    '/:date/:mealType/price',
+    requireAdminOrAbove,
+    validateDate,
+    validateMealType,
+    authorizeLogicalDate({ source: 'params', now, timeZone: timezone }),
+    async (req, res, next) => {
+      try {
+        const month = req.params.date.slice(0, 7);
+        if (settlements && (await settlements.isMonthClosed(month))) {
+          return res.status(409).json({
+            success: false,
+            message: 'This month is closed. Reopen the month before changing meal prices.',
+          });
+        }
+
+        const { pricePaise, reason } = req.body || {};
+
+        if (!isValidPricePaise(pricePaise)) {
+          return reject(res, 'Price must be a valid non-negative integer paise within allowed limits.');
+        }
+
+        if (reason !== undefined && reason !== null && typeof reason !== 'string') {
+          return reject(res, 'Reason must be a string.');
+        }
+
+        if (typeof reason === 'string' && reason.trim().length > 200) {
+          return reject(res, 'Reason must be at most 200 characters.');
+        }
+
+        const result = await service.setPriceOverride({
+          date: req.logicalDate,
+          mealType: req.params.mealType,
+          pricePaise,
+          reason,
+          actorRole: req.auth.role,
+          actorMemberId: req.auth.role === ROLES.MEMBER ? req.auth.memberId : null,
+        });
+
+        if (result.changed) {
+          broadcast({
+            date: result.data.date,
+            mealType: req.params.mealType,
+            priceChanged: true,
+            revision: result.data.revision,
+            updatedAt: result.data.updatedAt,
+          });
+        }
+
+        return res.json({
+          success: true,
+          changed: result.changed,
+          data: withPermissions(result.data, req, now(), timezone),
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.delete(
+    '/:date/:mealType/price',
+    requireAdminOrAbove,
+    validateDate,
+    validateMealType,
+    authorizeLogicalDate({ source: 'params', now, timeZone: timezone }),
+    async (req, res, next) => {
+      try {
+        const month = req.params.date.slice(0, 7);
+        if (settlements && (await settlements.isMonthClosed(month))) {
+          return res.status(409).json({
+            success: false,
+            message: 'This month is closed. Reopen the month before changing meal prices.',
+          });
+        }
+
+        const result = await service.clearPriceOverride({
+          date: req.logicalDate,
+          mealType: req.params.mealType,
+          actorRole: req.auth.role,
+          actorMemberId: req.auth.role === ROLES.MEMBER ? req.auth.memberId : null,
+        });
+
+        if (result.changed) {
+          broadcast({
+            date: result.data.date,
+            mealType: req.params.mealType,
+            priceChanged: true,
             revision: result.data.revision,
             updatedAt: result.data.updatedAt,
           });

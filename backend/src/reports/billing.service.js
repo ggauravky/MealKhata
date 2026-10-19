@@ -1,6 +1,7 @@
 import { MEMBER_IDS } from '../config/members.js';
 import {
   getEffectiveMealAllocation,
+  resolveMealPricePaise,
   splitMealCost,
 } from '../meals/plateAllocation.service.js';
 import { MEAL_PRICES } from '../meals/plateAllocation.constants.js';
@@ -42,18 +43,30 @@ export function calculateBillingSummary(days, rates = {}, { startDate, endDate }
       customAllocation: day.allocations?.night,
     });
 
+    const morningPriceForDay = resolveMealPricePaise({
+      day,
+      mealType: 'morning',
+      fallbackPricePaise: morningPrice,
+    });
+
+    const nightPriceForDay = resolveMealPricePaise({
+      day,
+      mealType: 'night',
+      fallbackPricePaise: nightPrice,
+    });
+
     const morningSplit = splitMealCost({
       date: day.date,
       mealType: 'morning',
       effectiveAllocation: morningAllocation,
-      pricePaise: morningPrice,
+      pricePaise: morningPriceForDay,
     });
 
     const nightSplit = splitMealCost({
       date: day.date,
       mealType: 'night',
       effectiveAllocation: nightAllocation,
-      pricePaise: nightPrice,
+      pricePaise: nightPriceForDay,
     });
 
     roomMorningPlates += morningSplit.physicalPlates;

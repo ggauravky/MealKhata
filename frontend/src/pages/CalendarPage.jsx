@@ -2,6 +2,7 @@ import { ChevronLeft, ChevronRight, Moon, SunMedium, Users } from 'lucide-react'
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/common/PageHeader.jsx';
+import { DailyCostSummary } from '../components/calendar/DailyCostSummary.jsx';
 import { MealCard } from '../components/meals/MealCard.jsx';
 import { PlateSummary } from '../components/meals/PlateSummary.jsx';
 import { Card, CardContent, CardHeader } from '../components/ui/card.jsx';
@@ -281,14 +282,20 @@ export function CalendarPage() {
                 title="Morning"
                 meals={activeDay.meals.morning}
                 allocation={activeDay.allocations?.morning}
+                pricing={activeDay.pricing?.morning}
               />
               <MealCard
                 mealType="night"
                 title="Night"
                 meals={activeDay.meals.night}
                 allocation={activeDay.allocations?.night}
+                pricing={activeDay.pricing?.night}
               />
             </div>
+            <DailyCostSummary
+              summary={activeDay.dailyCostSummary}
+              counts={activeDay.counts}
+            />
           </CardContent>
         </Card>
       )}

@@ -35,6 +35,9 @@ function serializeMonthDay(document, date, { timezone = env.appTimezone } = {}) 
     revision: serialized.revision,
     meals: serialized.meals,
     allocations: serialized.allocations,
+    pricing: serialized.pricing,
+    dailyCostSummary: serialized.dailyCostSummary,
+    priceOverrides: document?.priceOverrides ?? null,
     counts: {
       morningTaking,
       morningSkipping,

@@ -188,6 +188,42 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
             }
           }
         }
+
+        // Price overrides validation
+        const override = md.priceOverrides?.[mealType];
+        if (override !== undefined && override !== null) {
+          if (typeof override !== 'object') {
+            issues.push(`[meal_days] Invalid price override structure on ${md.date} (${mealType})`);
+            mealIssues++;
+          } else {
+            if (!isValidPricePaise(override.pricePaise)) {
+              issues.push(`[meal_days] Invalid price override paise on ${md.date} (${mealType}): ${override.pricePaise}`);
+              mealIssues++;
+            }
+            if (
+              override.reason !== null &&
+              override.reason !== undefined &&
+              (typeof override.reason !== 'string' || override.reason.length > 200)
+            ) {
+              issues.push(`[meal_days] Price override reason exceeds 200 chars or invalid on ${md.date} (${mealType})`);
+              mealIssues++;
+            }
+          }
+        }
+      }
+
+      // Price change audit validation
+      if (Array.isArray(md.priceChanges)) {
+        for (const pc of md.priceChanges) {
+          if (!['morning', 'night'].includes(pc.mealType)) {
+            issues.push(`[meal_days] Invalid priceChange mealType on ${md.date}: ${pc.mealType}`);
+            mealIssues++;
+          }
+          if (!['set', 'clear'].includes(pc.changeType)) {
+            issues.push(`[meal_days] Invalid priceChange changeType on ${md.date}: ${pc.changeType}`);
+            mealIssues++;
+          }
+        }
       }
     }
 

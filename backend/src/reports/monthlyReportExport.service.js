@@ -8,6 +8,7 @@ import { settlementService } from '../settlement/settlement.service.js';
 import { monthlyRateService } from '../billing/monthlyRate.service.js';
 import {
   getEffectiveMealAllocation,
+  resolveMealPricePaise,
   splitMealCost,
 } from '../meals/plateAllocation.service.js';
 import { MEAL_PRICES } from '../meals/plateAllocation.constants.js';
@@ -259,18 +260,29 @@ export function createMonthlyReportExportService({
           customAllocation: day.allocations?.night,
         });
 
+        const dayMorningPrice = resolveMealPricePaise({
+          day,
+          mealType: 'morning',
+          fallbackPricePaise: morningPricePaise,
+        });
+        const dayNightPrice = resolveMealPricePaise({
+          day,
+          mealType: 'night',
+          fallbackPricePaise: nightPricePaise,
+        });
+
         const morningSplit = splitMealCost({
           date: day.date,
           mealType: 'morning',
           effectiveAllocation: morningAlloc,
-          pricePaise: morningPricePaise,
+          pricePaise: dayMorningPrice,
         });
 
         const nightSplit = splitMealCost({
           date: day.date,
           mealType: 'night',
           effectiveAllocation: nightAlloc,
-          pricePaise: nightPricePaise,
+          pricePaise: dayNightPrice,
         });
 
         const dateParts = formatReportDate(day.date);
@@ -325,11 +337,15 @@ export function createMonthlyReportExportService({
             eaters: morningEating,
             physicalPlates: morningSplit.physicalPlates,
             amountPaise: morningSplit.roomAmountPaise,
+            pricePaise: dayMorningPrice,
+            isPriceOverridden: dayMorningPrice !== morningPricePaise,
           },
           night: {
             eaters: nightEating,
             physicalPlates: nightSplit.physicalPlates,
             amountPaise: nightSplit.roomAmountPaise,
+            pricePaise: dayNightPrice,
+            isPriceOverridden: dayNightPrice !== nightPricePaise,
           },
           dailyTotalPaise: morningSplit.roomAmountPaise + nightSplit.roomAmountPaise,
           members: memberData,
@@ -595,6 +611,7 @@ export function createMonthlyReportExportService({
         recordedActivityDays,
         scheduledFutureDays,
         payments: formattedPayments,
+        pricingAdjustments: monthlyReport.pricingAdjustments || [],
       };
     },
   });

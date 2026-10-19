@@ -1,6 +1,7 @@
 import { Check, CookingPot, Moon, SunMedium, Users, UtensilsCrossed } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { formatPlateCount, formatPlateFraction } from '../../lib/plates.js';
+import { formatPaise } from '../../lib/money.js';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card.jsx';
 import { Button } from '../ui/button.jsx';
 import { Badge } from '../ui/badge.jsx';
@@ -64,7 +65,8 @@ export function HouseholdTodayCard({ household, today, role, isDefaultSchedule =
                 <span>Morning</span>
               </span>
               <span className="text-[11px] text-amber-700/80 dark:text-amber-400/80">
-                ₹50 / plate
+                {formatPaise(household.morningPricePaise ?? 5000)} / plate
+                {household.isMorningPriceOverridden && ' (Adjusted)'}
               </span>
             </div>
             <div className="mt-2.5 flex items-baseline justify-between">
@@ -85,7 +87,8 @@ export function HouseholdTodayCard({ household, today, role, isDefaultSchedule =
                 <span>Night</span>
               </span>
               <span className="text-[11px] text-indigo-700/80 dark:text-indigo-400/80">
-                ₹70 / plate
+                {formatPaise(household.nightPricePaise ?? 7000)} / plate
+                {household.isNightPriceOverridden && ' (Adjusted)'}
               </span>
             </div>
             <div className="mt-2.5 flex items-baseline justify-between">

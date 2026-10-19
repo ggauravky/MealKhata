@@ -1,6 +1,8 @@
 import { env } from '../config/env.js';
+import { isValidPricePaise } from '../billing/monthlyRate.constants.js';
+import { isValidLogicalDate } from '../utils/date.js';
 import { HttpError } from '../utils/HttpError.js';
-import { DEFAULT_MEAL_STATUS, getMealPath } from './meal.constants.js';
+import { DEFAULT_MEAL_STATUS, getMealPath, MEAL_TYPES } from './meal.constants.js';
 import { createDefaultMealDay } from './meal.defaults.js';
 import { mealRepository } from './meal.repository.js';
 import { serializeHistory, serializeMealDay } from './meal.serializer.js';
@@ -307,6 +309,191 @@ export function createMealService({
         }
 
         throw new HttpError(503, error.message || 'Unable to reset plate allocation. Please try again.', {
+          cause: error,
+        });
+      }
+    },
+
+    async setPriceOverride({
+      date,
+      mealType,
+      pricePaise,
+      reason = null,
+      actorRole,
+      actorMemberId = null,
+      changedAt = new Date(),
+    }) {
+      if (!isValidLogicalDate(date)) {
+        throw new HttpError(400, 'Date must be a valid calendar date in YYYY-MM-DD format.');
+      }
+
+      if (!MEAL_TYPES.includes(mealType)) {
+        throw new HttpError(400, 'Invalid meal type.');
+      }
+
+      if (!isValidPricePaise(pricePaise)) {
+        throw new HttpError(400, 'Price must be a valid non-negative integer paise within allowed limits.');
+      }
+
+      if (reason !== undefined && reason !== null && typeof reason !== 'string') {
+        throw new HttpError(400, 'Reason must be a string.');
+      }
+
+      if (typeof reason === 'string' && reason.trim().length > 200) {
+        throw new HttpError(400, 'Reason must be at most 200 characters.');
+      }
+
+      if (settlements && (await settlements.isMonthClosed(date.slice(0, 7)))) {
+        throw new HttpError(409, 'This month is closed. Reopen the month before changing meal prices.');
+      }
+
+      const normalizedReason =
+        typeof reason === 'string' && reason.trim()
+          ? reason.trim().replace(/\s+/g, ' ').slice(0, 200)
+          : null;
+
+      try {
+        for (let attempt = 0; attempt < MAX_CONCURRENT_RETRIES; attempt += 1) {
+          const currentDocument = await repository.findByDate(date);
+          const currentOverride = currentDocument?.priceOverrides?.[mealType] ?? null;
+          const currentPrice = currentOverride?.pricePaise ?? null;
+          const currentReason = currentOverride?.reason ?? null;
+
+          if (currentPrice === pricePaise && currentReason === normalizedReason) {
+            return {
+              changed: false,
+              data: serializeMealDay(currentDocument, date, { timezone }),
+            };
+          }
+
+          const priceChange = {
+            changedAt,
+            actorRole,
+            actorMemberId: actorMemberId ?? null,
+            mealType,
+            changeType: 'set',
+            fromOverridePricePaise: currentPrice,
+            toOverridePricePaise: pricePaise,
+            reason: normalizedReason,
+          };
+
+          const newOverride = {
+            pricePaise,
+            reason: normalizedReason,
+          };
+
+          if (!currentDocument) {
+            const newDocument = createDefaultMealDay(date);
+            newDocument.priceOverrides[mealType] = newOverride;
+            newDocument.revision = 1;
+            newDocument.priceChanges.push(priceChange);
+
+            try {
+              const created = await repository.create(newDocument);
+              return {
+                changed: true,
+                data: serializeMealDay(created, date, { timezone }),
+              };
+            } catch (error) {
+              if (isDuplicateKeyError(error)) {
+                continue;
+              }
+              throw error;
+            }
+          }
+
+          const updated = await repository.updatePriceOverrideIfCurrent({
+            date,
+            mealType,
+            priceOverride: newOverride,
+            revision: currentDocument.revision,
+            priceChange,
+          });
+
+          if (updated) {
+            return {
+              changed: true,
+              data: serializeMealDay(updated, date, { timezone }),
+            };
+          }
+        }
+
+        throw new Error('Concurrent price updates did not settle');
+      } catch (error) {
+        if (error instanceof HttpError) {
+          throw error;
+        }
+
+        throw new HttpError(503, error.message || 'Unable to save price override. Please try again.', {
+          cause: error,
+        });
+      }
+    },
+
+    async clearPriceOverride({
+      date,
+      mealType,
+      actorRole,
+      actorMemberId = null,
+      changedAt = new Date(),
+    }) {
+      if (!isValidLogicalDate(date)) {
+        throw new HttpError(400, 'Date must be a valid calendar date in YYYY-MM-DD format.');
+      }
+
+      if (!MEAL_TYPES.includes(mealType)) {
+        throw new HttpError(400, 'Invalid meal type.');
+      }
+
+      if (settlements && (await settlements.isMonthClosed(date.slice(0, 7)))) {
+        throw new HttpError(409, 'This month is closed. Reopen the month before changing meal prices.');
+      }
+
+      try {
+        for (let attempt = 0; attempt < MAX_CONCURRENT_RETRIES; attempt += 1) {
+          const currentDocument = await repository.findByDate(date);
+          const currentOverride = currentDocument?.priceOverrides?.[mealType] ?? null;
+
+          if (!currentOverride) {
+            return {
+              changed: false,
+              data: serializeMealDay(currentDocument, date, { timezone }),
+            };
+          }
+
+          const priceChange = {
+            changedAt,
+            actorRole,
+            actorMemberId: actorMemberId ?? null,
+            mealType,
+            changeType: 'clear',
+            fromOverridePricePaise: currentOverride.pricePaise,
+            toOverridePricePaise: null,
+            reason: 'Reset to standard price',
+          };
+
+          const updated = await repository.clearPriceOverrideIfCurrent({
+            date,
+            mealType,
+            revision: currentDocument.revision,
+            priceChange,
+          });
+
+          if (updated) {
+            return {
+              changed: true,
+              data: serializeMealDay(updated, date, { timezone }),
+            };
+          }
+        }
+
+        throw new Error('Concurrent price clears did not settle');
+      } catch (error) {
+        if (error instanceof HttpError) {
+          throw error;
+        }
+
+        throw new HttpError(503, error.message || 'Unable to reset meal price. Please try again.', {
           cause: error,
         });
       }

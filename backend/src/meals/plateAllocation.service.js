@@ -147,6 +147,24 @@ function getDeterministicRotation(date, mealType) {
   return [...MEMBER_IDS.slice(offset), ...MEMBER_IDS.slice(0, offset)];
 }
 
+export function resolveMealPricePaise({ day, mealType, fallbackPricePaise }) {
+  const override = day?.priceOverrides?.[mealType];
+  if (
+    override &&
+    typeof override.pricePaise === 'number' &&
+    Number.isInteger(override.pricePaise) &&
+    override.pricePaise >= 0
+  ) {
+    return override.pricePaise;
+  }
+  if (day?.pricing?.[mealType]?.isOverridden && typeof day.pricing[mealType].overridePricePaise === 'number') {
+    return day.pricing[mealType].overridePricePaise;
+  }
+  return fallbackPricePaise ?? MEAL_PRICES[mealType] ?? 0;
+}
+
+export const getEffectiveMealPricePaise = resolveMealPricePaise;
+
 export function splitMealCost({
   date = '',
   mealType = 'morning',

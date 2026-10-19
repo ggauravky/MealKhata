@@ -186,6 +186,55 @@ export class InMemoryMealRepository {
     return clone(document);
   }
 
+  async updatePriceOverrideIfCurrent({ date, mealType, priceOverride, revision, priceChange }) {
+    if (this.failWrites) {
+      throw new Error('simulated database outage');
+    }
+
+    const document = this.documents.get(date);
+    if (!document || document.revision !== revision) {
+      return null;
+    }
+
+    if (!document.priceOverrides) {
+      document.priceOverrides = { morning: null, night: null };
+    }
+    document.priceOverrides[mealType] = clone(priceOverride);
+
+    if (!document.priceChanges) {
+      document.priceChanges = [];
+    }
+    document.priceChanges.push(clone(priceChange));
+
+    document.revision += 1;
+    document.updatedAt = new Date();
+    return clone(document);
+  }
+
+  async clearPriceOverrideIfCurrent({ date, mealType, revision, priceChange }) {
+    if (this.failWrites) {
+      throw new Error('simulated database outage');
+    }
+
+    const document = this.documents.get(date);
+    if (!document || document.revision !== revision) {
+      return null;
+    }
+
+    if (document.priceOverrides) {
+      document.priceOverrides[mealType] = null;
+    }
+
+    if (!document.priceChanges) {
+      document.priceChanges = [];
+    }
+    document.priceChanges.push(clone(priceChange));
+
+    document.revision += 1;
+    document.updatedAt = new Date();
+    return clone(document);
+  }
+
   count() {
     return this.documents.size;
   }

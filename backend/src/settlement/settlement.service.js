@@ -188,6 +188,7 @@ export function createSettlementService({
         },
         members,
         room,
+        pricingAdjustments: report.pricingAdjustments || [],
       };
 
       const latest = await repository.findLatestByMonth(month);

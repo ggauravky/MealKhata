@@ -1,3 +1,4 @@
+import { MEMBER_IDS } from '../config/members.js';
 import { env } from '../config/env.js';
 import { createDefaultMealDay } from './meal.defaults.js';
 import {
@@ -31,18 +32,40 @@ export function serializeMealDay(document, date, { timezone = env.appTimezone } 
   const morningUnits = calculateMemberShareUnits(morningAllocation);
   const nightUnits = calculateMemberShareUnits(nightAllocation);
 
+  const defaultMorningPrice = MEAL_PRICES.morning;
+  const defaultNightPrice = MEAL_PRICES.night;
+
+  const morningOverride = source.priceOverrides?.morning ?? null;
+  const nightOverride = source.priceOverrides?.night ?? null;
+
+  const isMorningOverridden = Boolean(
+    morningOverride &&
+    typeof morningOverride.pricePaise === 'number' &&
+    Number.isInteger(morningOverride.pricePaise) &&
+    morningOverride.pricePaise >= 0,
+  );
+  const isNightOverridden = Boolean(
+    nightOverride &&
+    typeof nightOverride.pricePaise === 'number' &&
+    Number.isInteger(nightOverride.pricePaise) &&
+    nightOverride.pricePaise >= 0,
+  );
+
+  const effectiveMorningPrice = isMorningOverridden ? morningOverride.pricePaise : defaultMorningPrice;
+  const effectiveNightPrice = isNightOverridden ? nightOverride.pricePaise : defaultNightPrice;
+
   const morningCost = splitMealCost({
     date,
     mealType: 'morning',
     effectiveAllocation: morningAllocation,
-    pricePaise: MEAL_PRICES.morning,
+    pricePaise: effectiveMorningPrice,
   });
 
   const nightCost = splitMealCost({
     date,
     mealType: 'night',
     effectiveAllocation: nightAllocation,
-    pricePaise: MEAL_PRICES.night,
+    pricePaise: effectiveNightPrice,
   });
 
   return {
@@ -72,6 +95,39 @@ export function serializeMealDay(document, date, { timezone = env.appTimezone } 
         cost: nightCost,
       },
     },
+    pricing: {
+      morning: {
+        defaultPricePaise: defaultMorningPrice,
+        effectivePricePaise: effectiveMorningPrice,
+        overridePricePaise: isMorningOverridden ? morningOverride.pricePaise : null,
+        isOverridden: isMorningOverridden,
+        reason: isMorningOverridden ? morningOverride.reason ?? null : null,
+      },
+      night: {
+        defaultPricePaise: defaultNightPrice,
+        effectivePricePaise: effectiveNightPrice,
+        overridePricePaise: isNightOverridden ? nightOverride.pricePaise : null,
+        isOverridden: isNightOverridden,
+        reason: isNightOverridden ? nightOverride.reason ?? null : null,
+      },
+    },
+    dailyCostSummary: {
+      members: Object.fromEntries(
+        MEMBER_IDS.map((id) => [
+          id,
+          {
+            morningAmountPaise: morningCost.members[id].amountPaise,
+            nightAmountPaise: nightCost.members[id].amountPaise,
+            totalAmountPaise: morningCost.members[id].amountPaise + nightCost.members[id].amountPaise,
+          },
+        ]),
+      ),
+      room: {
+        morningAmountPaise: morningCost.roomAmountPaise,
+        nightAmountPaise: nightCost.roomAmountPaise,
+        totalAmountPaise: morningCost.roomAmountPaise + nightCost.roomAmountPaise,
+      },
+    },
     plateCounts: {
       morning: morningAllocation.plates.length,
       night: nightAllocation.plates.length,
@@ -84,39 +140,60 @@ export function serializeMealDay(document, date, { timezone = env.appTimezone } 
 export function serializeHistory(document, date, limit) {
   const changes = document?.changes ?? [];
   const allocationChanges = document?.allocationChanges ?? [];
+  const priceChanges = document?.priceChanges ?? [];
 
-  const items = changes
-    .slice(Math.max(0, changes.length - limit))
-    .reverse()
-    .map((change) => ({
-      changedAt: serializeDate(change.changedAt),
-      actorRole: change.actorRole,
-      actorMemberId: change.actorMemberId ?? null,
-      mealType: change.mealType,
-      memberId: change.memberId,
-      from: change.from,
-      to: change.to,
-      type: 'status',
-    }));
+  const serializedStatus = changes.map((change) => ({
+    changedAt: serializeDate(change.changedAt),
+    actorRole: change.actorRole,
+    actorMemberId: change.actorMemberId ?? null,
+    mealType: change.mealType,
+    memberId: change.memberId,
+    from: change.from,
+    to: change.to,
+    type: 'status',
+  }));
 
-  const serializedAllocations = allocationChanges
-    .slice(Math.max(0, allocationChanges.length - limit))
-    .reverse()
-    .map((change) => ({
-      changedAt: serializeDate(change.changedAt),
-      actorRole: change.actorRole,
-      actorMemberId: change.actorMemberId ?? null,
-      mealType: change.mealType,
-      changeType: change.changeType,
-      from: change.from,
-      to: change.to,
-      reason: change.reason ?? null,
-      type: 'allocation',
-    }));
+  const serializedAllocations = allocationChanges.map((change) => ({
+    changedAt: serializeDate(change.changedAt),
+    actorRole: change.actorRole,
+    actorMemberId: change.actorMemberId ?? null,
+    mealType: change.mealType,
+    changeType: change.changeType,
+    from: change.from,
+    to: change.to,
+    reason: change.reason ?? null,
+    type: 'allocation',
+  }));
+
+  const serializedPriceChanges = priceChanges.map((change) => ({
+    changedAt: serializeDate(change.changedAt),
+    actorRole: change.actorRole,
+    actorMemberId: change.actorMemberId ?? null,
+    mealType: change.mealType,
+    changeType: change.changeType,
+    fromPricePaise: change.fromOverridePricePaise ?? MEAL_PRICES[change.mealType] ?? null,
+    toPricePaise:
+      change.toOverridePricePaise ??
+      (change.changeType === 'clear' ? (MEAL_PRICES[change.mealType] ?? null) : null),
+    reason: change.reason ?? null,
+    type: 'price',
+  }));
+
+  // Merge all events chronologically (newest first)
+  const allMerged = [...serializedStatus, ...serializedAllocations, ...serializedPriceChanges].sort(
+    (a, b) => new Date(b.changedAt).getTime() - new Date(a.changedAt).getTime(),
+  );
+
+  const items = allMerged.slice(0, limit);
 
   return {
     date,
     items,
-    allocationChanges: serializedAllocations,
+    allocationChanges: serializedAllocations
+      .slice(Math.max(0, serializedAllocations.length - limit))
+      .reverse(),
+    priceChanges: serializedPriceChanges
+      .slice(Math.max(0, serializedPriceChanges.length - limit))
+      .reverse(),
   };
 }
