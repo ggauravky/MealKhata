@@ -5,6 +5,7 @@
  */
 
 import { getLogicalDateInTimeZone } from '../utils/date.js';
+import { lastDateOfMonth } from '../utils/month.js';
 import { stayRepository as defaultStayRepository } from './stay.repository.js';
 import { financialOverviewService as defaultFinancialOverviewService } from '../finance/financialOverview.service.js';
 import { depositService as defaultDepositService } from './deposit.service.js';
@@ -13,6 +14,7 @@ import { defaultExpenseRepository } from '../expenses/expense.repository.js';
 import { roomFeeService as defaultRoomFeeService } from '../roomFees/roomFee.service.js';
 import { roomRepository as defaultRoomFeeRepository } from '../roomFees/room.repository.js';
 import { mealRepository as defaultMealRepository } from '../meals/meal.repository.js';
+import { STAY_STATUSES } from './stay.constants.js';
 
 export function getMonthsRange(startMonth, endMonth) {
   const months = [];
@@ -64,7 +66,9 @@ export function createStayAttributionService({
 
       // Check if this member has other stays that overlap with any of these months
       const allMemberStays = await stayRepo.findStaysByMember(memberId, { session });
-      const otherStays = (allMemberStays || []).filter((s) => s.stayId !== stayId);
+      const otherStays = (allMemberStays || []).filter(
+        (s) => s.stayId !== stayId && s.status !== STAY_STATUSES.CANCELLED,
+      );
 
       // Check if any month in the range intersects another stay of the same member
       const isMultiStayMonth = (month) => {
@@ -77,6 +81,15 @@ export function createStayAttributionService({
 
       const monthlySummaries = [];
       const outstandingObligations = [];
+      const attributionWarnings = [];
+      const warningKeys = new Set();
+      const addWarning = (warning) => {
+        const key = `${warning.domain}:${warning.month}:${warning.code}`;
+        if (!warningKeys.has(key)) {
+          warningKeys.add(key);
+          attributionWarnings.push(warning);
+        }
+      };
 
       let totalMessBilledPaise = 0;
       let totalMessPaidPaise = 0;
@@ -106,6 +119,10 @@ export function createStayAttributionService({
         }
 
         const multiStay = isMultiStayMonth(month);
+        const monthStart = `${month}-01`;
+        const monthEnd = lastDateOfMonth(month);
+        const partialStayMonth = stay.joinedOn > monthStart
+          || Boolean(stay.actualLeftOn && stay.actualLeftOn < monthEnd);
 
         let monthMessBilled = overview.mess?.billPaise || 0;
         let monthMessPaid = overview.mess?.paidPaise || 0;
@@ -121,6 +138,30 @@ export function createStayAttributionService({
         let monthExpenseReceivable = overview.expenses?.owedToMePaise || 0;
         let monthDebtsOwed = overview.expenses?.debtsOwed || [];
         let monthReceivables = overview.expenses?.receivables || [];
+
+        if (
+          (multiStay || partialStayMonth)
+          && (monthMessBilled !== 0 || monthMessPaid !== 0 || monthMessRemaining !== 0)
+        ) {
+          addWarning({
+            domain: 'MESS',
+            month,
+            code: multiStay ? 'MULTIPLE_STAYS_IN_MONTH' : 'PARTIAL_MONTH_WITHOUT_STAY_REFERENCE',
+            message: 'Mess bills and payments are stored by member and month without a Stay reference, so exact ownership requires review.',
+          });
+        }
+
+        if (
+          multiStay
+          && (monthRoomBilled !== 0 || monthRoomPaid !== 0 || monthRoomRemaining !== 0)
+        ) {
+          addWarning({
+            domain: 'ROOM_FEES',
+            month,
+            code: 'MULTIPLE_STAYS_IN_MONTH',
+            message: 'Room charges and payments are stored by member and month without a Stay reference, so exact ownership requires review.',
+          });
+        }
 
         // If this month contains multiple stays for this member, isolate by exact stay dates!
         if (multiStay) {
@@ -196,8 +237,6 @@ export function createStayAttributionService({
             return aFrom <= (stay.actualLeftOn || '9999-99-99') && aUntil >= stay.joinedOn;
           });
 
-          const monthStart = `${month}-01`;
-          const monthEnd = `${month}-31`;
           if (stay.actualLeftOn && stay.actualLeftOn < monthStart) {
             monthRoomBilled = 0;
             monthRoomPaid = 0;
@@ -300,7 +339,9 @@ export function createStayAttributionService({
         totalMessRemainingPaise + totalRoomRemainingPaise + totalExpenseOwedPaise;
 
       const isEligibleForNoDues =
-        totalOutstandingPayablePaise === 0 && depositHeldPaise === 0;
+        totalOutstandingPayablePaise === 0
+        && depositHeldPaise === 0
+        && attributionWarnings.length === 0;
 
       return {
         stay,
@@ -320,6 +361,8 @@ export function createStayAttributionService({
         totalExpenseOwedPaise,
         totalExpenseReceivablePaise,
         totalOutstandingPayablePaise,
+        attributionWarnings,
+        isAttributionComplete: attributionWarnings.length === 0,
         isEligibleForNoDues,
       };
     },

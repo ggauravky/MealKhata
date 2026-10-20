@@ -141,6 +141,8 @@ export function createLifetimeReportService({
           },
         },
         depositOverview: attr.depositOverview,
+        attributionWarnings: attr.attributionWarnings || [],
+        isAttributionComplete: attr.isAttributionComplete !== false,
         clearances,
         monthlySummaries: attr.monthlySummaries,
         generatedAt: new Date().toISOString(),

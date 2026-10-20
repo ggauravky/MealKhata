@@ -1,11 +1,8 @@
 import {
-  CalendarDays,
   ChevronDown,
   ChevronUp,
   Download,
-  FileSpreadsheet,
-  Receipt,
-  ShieldCheck,
+  AlertTriangle,
   TrendingUp,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -34,6 +31,7 @@ export function LifetimeFinancialOverview({
     expenses = {},
     deposit = {},
     monthlyBreakdown = [],
+    attributionWarnings = [],
   } = lifetimeSummary;
 
   const handleDownload = async () => {
@@ -77,6 +75,17 @@ export function LifetimeFinancialOverview({
         {downloadError && (
           <div className="p-2.5 rounded-md bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300 text-xs">
             {downloadError}
+          </div>
+        )}
+
+        {attributionWarnings.length > 0 && (
+          <div role="alert" className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+            <div className="flex items-center gap-2 font-semibold"><AlertTriangle className="h-4 w-4" /> Financial attribution needs review</div>
+            <ul className="mt-1.5 list-disc space-y-1 pl-5">
+              {attributionWarnings.map((warning, index) => (
+                <li key={`${warning.domain}-${warning.month}-${index}`}>{warning.month ? `${warning.month}: ` : ''}{warning.message}</li>
+              ))}
+            </ul>
           </div>
         )}
 

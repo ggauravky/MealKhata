@@ -156,6 +156,10 @@ export async function verifySessionToken(token, { accounts = userAccountReposito
       throw new Error('Session principal does not match member');
     }
 
+    if (accounts && await accounts.findByMemberId(memberId)) {
+      throw new Error('Legacy member session has been revoked');
+    }
+
     return {
       authenticated: true,
       role: ROLES.MEMBER,

@@ -9,10 +9,11 @@ export class ApiError extends Error {
 async function request(path, options = {}) {
   const hasBody = options.body !== undefined;
   const isFormData = options.body instanceof FormData;
+  const { preserveSessionOnUnauthorized = false, ...fetchOptions } = options;
 
   try {
     const response = await fetch(path, {
-      ...options,
+      ...fetchOptions,
       credentials: 'same-origin',
       headers: {
         Accept: 'application/json',
@@ -27,7 +28,7 @@ async function request(path, options = {}) {
       : null;
 
     if (!response.ok) {
-      if (response.status === 401 && typeof window !== 'undefined') {
+      if (response.status === 401 && !preserveSessionOnUnauthorized && typeof window !== 'undefined') {
         window.dispatchEvent(new Event('mk:auth-expired'));
       }
       throw new ApiError(payload?.message || 'The request could not be completed.', response.status);

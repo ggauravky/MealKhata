@@ -67,9 +67,9 @@ export function RoomTransferDialog({
     try {
       const newMonthlyRentPaise = newRentRupees ? rupeesToPaise(newRentRupees) : undefined;
       await onSubmitTransfer(stay.stayId, {
-        destinationRoomId,
+        newRoomId: destinationRoomId,
         effectiveDate,
-        newMonthlyRentPaise,
+        newMonthlyRatePaise: newMonthlyRentPaise,
         reason: reason.trim() || undefined,
       });
       onOpenChange(false);
@@ -104,7 +104,7 @@ export function RoomTransferDialog({
           <div className="p-2.5 rounded-md bg-slate-50 dark:bg-slate-800 text-xs text-slate-600 dark:text-slate-300 flex justify-between">
             <span>Current Room:</span>
             <span className="font-semibold text-slate-900 dark:text-slate-100">
-              Room {stay?.initialRoomId || 'Assigned Room'}
+              Room {stay?.currentRoomId || stay?.initialRoomId || 'Assigned Room'}
             </span>
           </div>
 

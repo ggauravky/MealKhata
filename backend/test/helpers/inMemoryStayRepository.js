@@ -95,6 +95,25 @@ export class InMemoryStayRepository {
     return JSON.parse(JSON.stringify(this.stays[index]));
   }
 
+  async cancelStay(stayId, { reason, actorRole, expectedRevision, cancelledAt }) {
+    const stay = this.stays.find((item) => item.stayId === stayId && item.revision === expectedRevision);
+    if (!stay) return null;
+    stay.status = STAY_STATUSES.CANCELLED;
+    stay.currentRoomId = null;
+    stay.cancelledAt = cancelledAt;
+    stay.cancelledByRole = actorRole;
+    stay.cancelReason = reason;
+    stay.revision += 1;
+    stay.history.push({
+      event: 'STAY_CANCELLED',
+      timestamp: cancelledAt,
+      actorRole,
+      note: reason,
+      details: { expectedRevision },
+    });
+    return JSON.parse(JSON.stringify(stay));
+  }
+
   async deleteStay(stayId) {
     const idx = this.stays.findIndex((s) => s.stayId === stayId);
     if (idx === -1) return null;

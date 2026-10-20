@@ -12,6 +12,7 @@ import {
   Receipt,
   ShieldCheck,
   Sun,
+  Users,
 } from 'lucide-react';
 import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
@@ -143,6 +144,13 @@ export function MobileNav() {
             {/* Admin Panel */}
             {canAccessAdmin && (
               <>
+                <DropdownMenuItem
+                  onClick={() => navigate('/admin/members')}
+                  className="flex items-center gap-2.5 cursor-pointer text-xs font-medium"
+                >
+                  <Users className="h-4 w-4 text-teal-600 dark:text-teal-400" />
+                  <span>Member Management</span>
+                </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={() => navigate('/admin/stays')}
                   className="flex items-center gap-2.5 cursor-pointer text-xs font-medium"

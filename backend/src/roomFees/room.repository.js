@@ -7,6 +7,7 @@ import { RoomCharge } from './roomCharge.model.js';
 import { RoomPayment } from './roomPayment.model.js';
 import { RoomPaymentSettings } from './roomPaymentSettings.model.js';
 import { ROOM_SETTINGS_KEY } from './roomFee.constants.js';
+import { selectAssignmentForDate, selectAssignmentForMonth } from './assignmentResolution.js';
 
 export const roomRepository = {
   // Rooms
@@ -47,8 +48,10 @@ export const roomRepository = {
     return RoomAssignment.create(data);
   },
 
-  async findAssignmentById(assignmentId) {
-    return RoomAssignment.findOne({ assignmentId }).lean();
+  async findAssignmentById(assignmentId, { session } = {}) {
+    const q = RoomAssignment.findOne({ assignmentId });
+    if (session) q.session(session);
+    return q.lean();
   },
 
   async findAssignmentsForMember(memberId, { session } = {}) {
@@ -67,12 +70,18 @@ export const roomRepository = {
     return RoomAssignment.find({}).sort({ effectiveFromMonth: -1 }).lean();
   },
 
-  async findActiveAssignment(memberId, month) {
-    return RoomAssignment.findOne({
-      memberId,
-      effectiveFromMonth: { $lte: month },
-      $or: [{ effectiveUntilMonth: null }, { effectiveUntilMonth: { $gte: month } }],
-    }).lean();
+  async findActiveAssignment(memberId, month, { session } = {}) {
+    const q = RoomAssignment.find({ memberId });
+    if (session) q.session(session);
+    const assignments = await q.lean();
+    return selectAssignmentForMonth(assignments, memberId, month);
+  },
+
+  async findAssignmentOnDate(memberId, date, { session } = {}) {
+    const q = RoomAssignment.find({ memberId });
+    if (session) q.session(session);
+    const assignments = await q.lean();
+    return selectAssignmentForDate(assignments, memberId, date);
   },
 
   async deleteAssignment(assignmentId) {
@@ -94,8 +103,10 @@ export const roomRepository = {
     return RoomFeePlan.create(data);
   },
 
-  async findFeePlanById(feePlanId) {
-    return RoomFeePlan.findOne({ feePlanId }).lean();
+  async findFeePlanById(feePlanId, { session } = {}) {
+    const q = RoomFeePlan.findOne({ feePlanId });
+    if (session) q.session(session);
+    return q.lean();
   },
 
   async findFeePlansForMember(memberId, { session } = {}) {

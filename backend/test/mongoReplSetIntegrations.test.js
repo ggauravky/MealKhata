@@ -25,6 +25,9 @@ import { RoomPaymentSettings } from '../src/roomFees/roomPaymentSettings.model.j
 import { Expense } from '../src/expenses/expense.model.js';
 import { ExpenseReimbursement } from '../src/expenses/expenseReimbursement.model.js';
 import { MealDay } from '../src/meals/meal.model.js';
+import { UserAccount } from '../src/auth/userAccount.model.js';
+import { MemberAccount } from '../src/auth/memberAccount.model.js';
+import { MemberAccountAudit } from '../src/members/memberAccountAudit.model.js';
 
 import { createStayService, stayService } from '../src/stays/stay.service.js';
 import { depositService } from '../src/stays/deposit.service.js';
@@ -34,6 +37,7 @@ import { stayRepository } from '../src/stays/stay.repository.js';
 import { roomRepository } from '../src/roomFees/room.repository.js';
 import { defaultExpenseRepository } from '../src/expenses/expense.repository.js';
 import { computeChargeFinancials } from '../src/roomFees/roomFee.serializer.js';
+import { createMemberAccountService } from '../src/members/memberAccount.service.js';
 
 let replSet;
 
@@ -69,6 +73,9 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
       Expense.init(),
       ExpenseReimbursement.init(),
       MealDay.init(),
+      UserAccount.init(),
+      MemberAccount.init(),
+      MemberAccountAudit.init(),
     ]);
   });
 
@@ -510,6 +517,103 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
         $or: [{ effectiveUntilDate: null }, { effectiveUntilDate: { $gte: '2026-10-15' } }],
       });
       assert.equal(assignments.length, 1, 'Occupancy cannot exceed capacity 1 on transfer date');
+    });
+  });
+
+  describe('Stay cancellation and admission correction transactions', () => {
+    it('cancels an empty Stay atomically, releases capacity, and permits a valid re-admission', async () => {
+      const room = await ensureRoom('399', 1);
+      const erroneous = await stayService.createStay({
+        memberId: 'devansh',
+        joinedOn: '2026-10-20',
+        initialRoomId: room.roomId,
+        expectedDepositPaise: 0,
+        actorRole: 'superadmin',
+      });
+
+      const cancelled = await stayService.cancelIncorrectStay({
+        stayId: erroneous.stayId,
+        reason: 'Verified accidental admission',
+        expectedRevision: erroneous.revision,
+        actorRole: 'superadmin',
+      });
+      assert.equal(cancelled.status, 'CANCELLED');
+
+      const cancelledAssignment = await RoomAssignment.findOne({ assignmentId: erroneous.admissionAssignmentId }).lean();
+      const depositAccount = await HostelDepositAccount.findOne({ stayId: erroneous.stayId }).lean();
+      assert.ok(cancelledAssignment.cancelledAt);
+      assert.equal(depositAccount.status, 'SETTLED');
+
+      const replacement = await stayService.createStay({
+        memberId: 'devansh',
+        joinedOn: '2026-10-20',
+        initialRoomId: room.roomId,
+        expectedDepositPaise: 0,
+        actorRole: 'superadmin',
+      });
+      assert.equal(replacement.status, 'ACTIVE');
+      assert.notEqual(replacement.stayId, erroneous.stayId);
+    });
+
+    it('corrects admission date and room in one transaction when no finance exists', async () => {
+      const originalRoom = await ensureRoom('397', 1);
+      const correctedRoom = await ensureRoom('398', 1);
+      const stay = await stayService.createStay({
+        memberId: 'nikhil',
+        joinedOn: '2026-10-20',
+        initialRoomId: originalRoom.roomId,
+        expectedDepositPaise: 0,
+        actorRole: 'superadmin',
+      });
+
+      const corrected = await stayService.correctAdmissionDetails({
+        stayId: stay.stayId,
+        joinedOn: '2026-10-10',
+        roomId: correctedRoom.roomId,
+        reason: 'Verified source record correction',
+        expectedRevision: stay.revision,
+        actorRole: 'superadmin',
+      });
+      assert.equal(corrected.joinedOn, '2026-10-10');
+      assert.equal(corrected.initialRoomId, correctedRoom.roomId);
+      assert.equal(corrected.currentRoomId, correctedRoom.roomId);
+
+      const assignment = await RoomAssignment.findOne({ assignmentId: stay.admissionAssignmentId }).lean();
+      const persisted = await HostelStay.findOne({ stayId: stay.stayId }).lean();
+      assert.equal(assignment.roomId, correctedRoom.roomId);
+      assert.equal(assignment.effectiveFromDate, '2026-10-10');
+      assert.equal(persisted.history.at(-1).event, 'ADMISSION_CORRECTED');
+    });
+  });
+
+  describe('Canonical member-account persistence', () => {
+    it('concurrent provisioning cannot create duplicate identities and audit rolls back with the loser', async () => {
+      const accounts = createMemberAccountService({
+        verifyActorPassword: async () => {},
+        now: () => new Date('2026-10-21T06:30:00.000Z'),
+      });
+      const actor = { role: 'superadmin', userId: 'root-1' };
+      const results = await Promise.allSettled([
+        accounts.provisionAccount({
+          memberId: 'gaurav',
+          email: 'gaurav.one@example.com',
+          newPassword: 'FirstStrong!234',
+          currentPassword: 'verified',
+          actor,
+        }),
+        accounts.provisionAccount({
+          memberId: 'gaurav',
+          email: 'gaurav.two@example.com',
+          newPassword: 'SecondStrong!234',
+          currentPassword: 'verified',
+          actor,
+        }),
+      ]);
+
+      assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+      assert.equal(results.filter((result) => result.status === 'rejected').length, 1);
+      assert.equal(await UserAccount.countDocuments({ memberId: 'gaurav' }), 1);
+      assert.equal(await MemberAccountAudit.countDocuments({ memberId: 'gaurav' }), 1);
     });
   });
 

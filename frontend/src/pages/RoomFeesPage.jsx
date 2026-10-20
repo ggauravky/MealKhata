@@ -19,13 +19,14 @@ import { useServerToday } from '../hooks/useServerToday.js';
 import { addLogicalMonths, formatLogicalMonth, isValidLogicalMonth } from '../lib/logicalMonth.js';
 
 import { getIndiaCurrentLogicalMonth } from '../lib/logicalDate.js';
+import { ROOMMATES } from '../lib/constants.js';
 
 export function RoomFeesPage() {
   useDocumentTitle('Room Fees');
   const auth = useAuth();
   const { isOnline } = usePwa();
   const serverToday = useServerToday();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const queryMonth = searchParams.get('month');
   const [selectedMonth, setSelectedMonth] = useState('');
@@ -35,11 +36,20 @@ export function RoomFeesPage() {
     selectedMonth ||
     (isValidLogicalMonth(queryMonth) ? queryMonth : currentLogicalMonth);
 
-  const { loading: feeLoading, error: feeError, data: feeData, refresh: refreshFee } = useMyRoomFees(month);
-  const { loading: historyLoading, error: historyError, data: historyData, refresh: refreshHistory } = useMyRoomFeeHistory();
+  const canAccessAdmin = auth.role === 'admin' || auth.role === 'superadmin';
+  const requestedMemberId = searchParams.get('memberId');
+  const selectedMemberId = canAccessAdmin && ROOMMATES.some((member) => member.id === requestedMemberId)
+    ? requestedMemberId
+    : canAccessAdmin ? ROOMMATES[0].id : null;
+  const { loading: feeLoading, error: feeError, data: feeData, refresh: refreshFee } = useMyRoomFees(month, selectedMemberId);
+  const { loading: historyLoading, error: historyError, data: historyData, refresh: refreshHistory } = useMyRoomFeeHistory(selectedMemberId);
   const { settings } = useRoomPaymentSettings();
 
-  const canAccessAdmin = auth.role === 'admin' || auth.role === 'superadmin';
+  const selectMember = (memberId) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('memberId', memberId);
+    setSearchParams(next);
+  };
 
   // Viewer / Unauthenticated Gate
   if (!auth.authenticated || auth.role === 'viewer') {
@@ -102,6 +112,23 @@ export function RoomFeesPage() {
           </div>
         )}
       </div>
+
+      {canAccessAdmin && (
+        <Card className="border-slate-200/90 dark:border-slate-800">
+          <CardContent className="flex flex-wrap items-center gap-3 p-4">
+            <label htmlFor="roomFeeMember" className="text-xs font-semibold text-slate-700 dark:text-slate-300">Viewing member</label>
+            <select
+              id="roomFeeMember"
+              value={selectedMemberId}
+              onChange={(event) => selectMember(event.target.value)}
+              className="h-8 rounded-md border border-slate-200 bg-white px-3 text-xs dark:border-slate-800 dark:bg-slate-950"
+            >
+              {ROOMMATES.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
+            </select>
+            <span className="text-[11px] text-slate-500">Stable ID: {selectedMemberId}</span>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Month Selector Card */}
       <Card className="border-slate-200/90 dark:border-slate-800">

@@ -6,7 +6,7 @@ import { getIndiaCurrentLogicalMonth } from '../lib/logicalDate.js';
 /**
  * Hook for a Member to view their current month room fee statement & assignment
  */
-export function useMyRoomFees(month) {
+export function useMyRoomFees(month, memberId = null) {
   const [state, setState] = useState({ key: null, loading: true, error: '', data: null });
   const [version, setVersion] = useState(0);
 
@@ -18,7 +18,9 @@ export function useMyRoomFees(month) {
   useEffect(() => {
     if (!month) return undefined;
     const controller = new AbortController();
-    api.get(`/api/room-fees/me?month=${encodeURIComponent(month)}`, { signal: controller.signal })
+    const query = new URLSearchParams({ month });
+    if (memberId) query.set('memberId', memberId);
+    api.get(`/api/room-fees/me?${query.toString()}`, { signal: controller.signal })
       .then((res) => setState({ key: month, loading: false, error: '', data: res.data }))
       .catch((err) => {
         if (!controller.signal.aborted) {
@@ -26,7 +28,7 @@ export function useMyRoomFees(month) {
         }
       });
     return () => controller.abort();
-  }, [month, version]);
+  }, [memberId, month, version]);
 
   useEffect(() => {
     const handleRoomFees = (event) => {
@@ -56,7 +58,7 @@ export function useMyRoomFees(month) {
 /**
  * Hook for a Member to view their month-wise history of issued room fees
  */
-export function useMyRoomFeeHistory() {
+export function useMyRoomFeeHistory(memberId = null) {
   const [state, setState] = useState({ loading: true, error: '', data: null });
   const [version, setVersion] = useState(0);
 
@@ -67,7 +69,8 @@ export function useMyRoomFeeHistory() {
 
   useEffect(() => {
     const controller = new AbortController();
-    api.get('/api/room-fees/me/history', { signal: controller.signal })
+    const query = memberId ? `?memberId=${encodeURIComponent(memberId)}` : '';
+    api.get(`/api/room-fees/me/history${query}`, { signal: controller.signal })
       .then((res) => setState({ loading: false, error: '', data: res.data }))
       .catch((err) => {
         if (!controller.signal.aborted) {
@@ -75,7 +78,7 @@ export function useMyRoomFeeHistory() {
         }
       });
     return () => controller.abort();
-  }, [version]);
+  }, [memberId, version]);
 
   useEffect(() => {
     const handleRoomFees = () => refresh();

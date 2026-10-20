@@ -15,6 +15,7 @@ export function calculateMaxSimultaneousOccupancy({
 
   const overlapping = [];
   for (const a of roomAssignments) {
+    if (a.cancelledAt) continue;
     if (a.assignmentId && a.assignmentId === targetAssignment.assignmentId) continue;
     if (a.memberId === targetAssignment.memberId) continue;
 
@@ -174,6 +175,7 @@ export function createRoomFeeService({
         const todayDate = getLogicalDateInTimeZone(now(), timezone);
         const assignments = await repository.findAssignmentsForRoom(roomId);
         const activeOccupants = assignments.filter((a) => {
+          if (a.cancelledAt) return false;
           const fromDate = a.effectiveFromDate || `${a.effectiveFromMonth}-01`;
           const untilDate = a.effectiveUntilDate || (a.effectiveUntilMonth ? lastDateOfMonth(a.effectiveUntilMonth) : null);
           return fromDate <= todayDate && (!untilDate || untilDate >= todayDate);
@@ -189,12 +191,14 @@ export function createRoomFeeService({
         // Check committed future intervals
         const futureDates = new Set([todayDate]);
         for (const a of assignments) {
+          if (a.cancelledAt) continue;
           const fromDate = a.effectiveFromDate || `${a.effectiveFromMonth}-01`;
           if (fromDate >= todayDate) futureDates.add(fromDate);
         }
         for (const fDate of futureDates) {
           let count = 0;
           for (const a of assignments) {
+            if (a.cancelledAt) continue;
             const fromDate = a.effectiveFromDate || `${a.effectiveFromMonth}-01`;
             const untilDate = a.effectiveUntilDate || (a.effectiveUntilMonth ? lastDateOfMonth(a.effectiveUntilMonth) : null);
             if (fromDate <= fDate && (!untilDate || untilDate >= fDate)) {
@@ -228,6 +232,7 @@ export function createRoomFeeService({
       // Determine active occupants per room as of today
       const occupantMap = new Map();
       for (const a of assignments) {
+        if (a.cancelledAt) continue;
         const fromDate = a.effectiveFromDate || `${a.effectiveFromMonth}-01`;
         const untilDate = a.effectiveUntilDate || (a.effectiveUntilMonth ? lastDateOfMonth(a.effectiveUntilMonth) : null);
         if (fromDate <= todayDate && (!untilDate || untilDate >= todayDate)) {
@@ -250,6 +255,7 @@ export function createRoomFeeService({
       const assignments = await repository.findAssignmentsForRoom(roomId);
       const activeOccupants = assignments
         .filter((a) => {
+          if (a.cancelledAt) return false;
           const fromDate = a.effectiveFromDate || `${a.effectiveFromMonth}-01`;
           const untilDate = a.effectiveUntilDate || (a.effectiveUntilMonth ? lastDateOfMonth(a.effectiveUntilMonth) : null);
           return fromDate <= todayDate && (!untilDate || untilDate >= todayDate);
@@ -356,6 +362,7 @@ export function createRoomFeeService({
         let cappedUntilMonth = null;
 
         for (const a of memberAssignments) {
+          if (a.cancelledAt) continue;
           const aFrom = a.effectiveFromDate || `${a.effectiveFromMonth}-01`;
           const aUntil = a.effectiveUntilDate || (a.effectiveUntilMonth ? lastDateOfMonth(a.effectiveUntilMonth) : null);
 
@@ -450,12 +457,132 @@ export function createRoomFeeService({
       return { success: true };
     },
 
+    async cancelAdmissionArtifacts({ assignmentId, feePlanId = null, reason, actorRole, session = null }) {
+      if (actorRole !== 'superadmin') {
+        throw new HttpError(403, 'Only Super Admin can cancel admission room artifacts.');
+      }
+      if (!assignmentId) {
+        throw new HttpError(409, 'The admission room assignment cannot be identified safely.');
+      }
+
+      const assignment = await repository.findAssignmentById(assignmentId, { session });
+      if (!assignment) {
+        throw new HttpError(409, 'The admission room assignment no longer exists.');
+      }
+      await repository.updateAssignment(
+        assignmentId,
+        {
+          cancelledAt: now(),
+          cancelledByRole: actorRole,
+          cancelReason: reason,
+        },
+        { session },
+      );
+
+      if (feePlanId) {
+        const feePlan = await repository.findFeePlanById(feePlanId, { session });
+        if (!feePlan) {
+          throw new HttpError(409, 'The admission fee plan no longer exists.');
+        }
+        await repository.updateFeePlan(
+          feePlanId,
+          { supersededAt: now(), supersededBy: actorRole },
+          { session },
+        );
+      }
+
+      return { success: true };
+    },
+
+    async correctAdmissionArtifacts({
+      assignmentId,
+      feePlanId = null,
+      memberId,
+      roomId,
+      effectiveFromDate,
+      actorRole,
+      session = null,
+    }) {
+      if (actorRole !== 'superadmin') {
+        throw new HttpError(403, 'Only Super Admin can correct admission room artifacts.');
+      }
+      if (!MEMBER_IDS.includes(memberId) || !isValidLogicalDate(effectiveFromDate)) {
+        throw new HttpError(400, 'A valid member and admission date are required.');
+      }
+      if (!roomId || !roomId.trim()) {
+        throw new HttpError(400, 'A corrected room is required.');
+      }
+
+      const assignment = await repository.findAssignmentById(assignmentId, { session });
+      if (!assignment || assignment.memberId !== memberId || assignment.cancelledAt) {
+        throw new HttpError(409, 'The admission room assignment cannot be corrected safely.');
+      }
+      const room = (await repository.findRoomById(roomId.trim(), { session }))
+        || (await repository.findRoomByNumber(roomId.trim(), { session }));
+      if (!room || !room.active) {
+        throw new HttpError(400, 'Selected room does not exist or is inactive.');
+      }
+
+      if (session) {
+        await repository.updateRoom(room.roomId, { $inc: { occupancyRevision: 1 } }, { session });
+      }
+      const targetAssignment = {
+        ...assignment,
+        roomId: room.roomId,
+        effectiveFromMonth: effectiveFromDate.slice(0, 7),
+        effectiveFromDate,
+      };
+      const roomAssignments = await repository.findAssignmentsForRoom(room.roomId, { session });
+      if (calculateMaxSimultaneousOccupancy({
+        roomAssignments,
+        targetAssignment,
+        roomCapacity: room.capacity,
+      }) > room.capacity) {
+        throw new HttpError(409, `Room ${room.roomNumber} is at maximum capacity during the corrected admission period.`);
+      }
+
+      const memberAssignments = await repository.findAssignmentsForMember(memberId, { session });
+      const targetUntil = targetAssignment.effectiveUntilDate
+        || (targetAssignment.effectiveUntilMonth ? lastDateOfMonth(targetAssignment.effectiveUntilMonth) : null);
+      for (const other of memberAssignments) {
+        if (other.assignmentId === assignmentId || other.cancelledAt) continue;
+        const otherFrom = other.effectiveFromDate || `${other.effectiveFromMonth}-01`;
+        const otherUntil = other.effectiveUntilDate
+          || (other.effectiveUntilMonth ? lastDateOfMonth(other.effectiveUntilMonth) : null);
+        if (otherFrom <= (targetUntil || '9999-12-31') && effectiveFromDate <= (otherUntil || '9999-12-31')) {
+          throw new HttpError(409, 'The corrected admission would overlap another room assignment for this member.');
+        }
+      }
+
+      const updatedAssignment = await repository.updateAssignment(assignmentId, {
+        roomId: room.roomId,
+        effectiveFromMonth: effectiveFromDate.slice(0, 7),
+        effectiveFromDate,
+      }, { session });
+
+      let updatedFeePlan = null;
+      if (feePlanId) {
+        const feePlan = await repository.findFeePlanById(feePlanId, { session });
+        if (!feePlan || feePlan.memberId !== memberId) {
+          throw new HttpError(409, 'The admission fee plan cannot be corrected safely.');
+        }
+        updatedFeePlan = await repository.updateFeePlan(
+          feePlanId,
+          { effectiveFromMonth: effectiveFromDate.slice(0, 7) },
+          { session },
+        );
+      }
+
+      return { assignment: updatedAssignment, feePlan: updatedFeePlan };
+    },
+
     async endActiveRoomAssignment({ memberId, endMonth, endDate = null, session = null }) {
       const assignments = await repository.findAssignmentsForMember(memberId);
       const targetMonth = endDate ? endDate.slice(0, 7) : endMonth;
       const targetDate = endDate || (targetMonth ? lastDateOfMonth(targetMonth) : null);
 
       for (const a of assignments) {
+        if (a.cancelledAt) continue;
         const fromDate = a.effectiveFromDate || `${a.effectiveFromMonth}-01`;
         const untilDate = a.effectiveUntilDate || (a.effectiveUntilMonth ? lastDateOfMonth(a.effectiveUntilMonth) : null);
 

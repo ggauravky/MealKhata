@@ -11,7 +11,7 @@ import {
   broadcastDepositUpdated,
   broadcastClearanceUpdated,
 } from '../socket.js';
-import { DEPOSIT_TRANSACTION_TYPES } from '../stays/stay.constants.js';
+import { DEPOSIT_TRANSACTION_TYPES, STAY_STATUSES } from '../stays/stay.constants.js';
 
 export function createStayRouter({
   service = stayService,
@@ -88,7 +88,7 @@ export function createStayRouter({
       if (!activeStay) {
         // Return latest completed stay or null if never configured
         const stays = await service.listStaysForMember(targetMemberId);
-        const latest = stays.length > 0 ? stays[0] : null;
+        const latest = stays.find((stay) => stay.status !== STAY_STATUSES.CANCELLED) || null;
         return res.json({
           success: true,
           configured: Boolean(latest),
@@ -260,7 +260,7 @@ export function createStayRouter({
 
   router.post('/', requireAdminOrAbove, async (req, res, next) => {
     try {
-      const { memberId, joinedOn, initialRoomId, expectedDepositPaise } = req.body || {};
+      const { memberId, joinedOn, initialRoomId, expectedDepositPaise, historicalReason } = req.body || {};
       const monthlyFeePaise = req.body?.monthlyFeePaise ?? req.body?.monthlyRatePaise ?? req.body?.monthlyRentPaise;
       const newStay = await service.createStay({
         memberId,
@@ -271,6 +271,7 @@ export function createStayRouter({
         expectedDepositPaise,
         actorRole: req.auth.role,
         actorMemberId: req.auth.memberId || null,
+        historicalReason,
       });
 
       notifyStayChange();
@@ -370,6 +371,39 @@ export function createStayRouter({
   // ==========================================
   // Lifecycle Management Actions
   // ==========================================
+
+  router.post('/:stayId/cancel', requireSuperAdmin, assertStayAccess, async (req, res, next) => {
+    try {
+      const cancelled = await service.cancelIncorrectStay({
+        stayId: req.stay.stayId,
+        reason: req.body?.reason,
+        expectedRevision: req.body?.expectedRevision,
+        actorRole: req.auth.role,
+      });
+      notifyStayChange();
+      notifyDepositChange();
+      return res.json({ success: true, data: cancelled });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post('/:stayId/correct-admission', requireSuperAdmin, assertStayAccess, async (req, res, next) => {
+    try {
+      const corrected = await service.correctAdmissionDetails({
+        stayId: req.stay.stayId,
+        joinedOn: req.body?.joinedOn,
+        roomId: req.body?.roomId,
+        reason: req.body?.reason,
+        expectedRevision: req.body?.expectedRevision,
+        actorRole: req.auth.role,
+      });
+      notifyStayChange();
+      return res.json({ success: true, data: corrected });
+    } catch (error) {
+      return next(error);
+    }
+  });
 
   router.post('/:stayId/transfers', requireAdminOrAbove, assertStayAccess, async (req, res, next) => {
     try {

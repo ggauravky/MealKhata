@@ -6,6 +6,7 @@ export const BACKUP_FORMAT_VERSION = 1;
 export const BACKUP_COLLECTIONS = Object.freeze([
   'user_accounts',
   'member_accounts',
+  'member_account_audits',
   'meal_days',
   'monthly_meal_rates',
   'payments',

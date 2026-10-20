@@ -14,6 +14,7 @@ import {
   House,
   LogOut,
   PlusCircle,
+  PencilLine,
   Receipt,
   Shield,
   ShieldAlert,
@@ -23,6 +24,8 @@ import {
 import { useState } from 'react';
 import { PageHeader } from '../components/common/PageHeader.jsx';
 import { CheckoutReviewWizard } from '../components/stays/CheckoutReviewWizard.jsx';
+import { CancelStayDialog } from '../components/stays/CancelStayDialog.jsx';
+import { CorrectAdmissionDialog } from '../components/stays/CorrectAdmissionDialog.jsx';
 import { DepositOverviewCard } from '../components/stays/DepositOverviewCard.jsx';
 import { DepositTransactionDialog } from '../components/stays/DepositTransactionDialog.jsx';
 import { DepositTransactionHistory } from '../components/stays/DepositTransactionHistory.jsx';
@@ -32,11 +35,13 @@ import { RoomTransferDialog } from '../components/stays/RoomTransferDialog.jsx';
 import { StayStatusBadge } from '../components/stays/StayStatusBadge.jsx';
 import { Button } from '../components/ui/button.jsx';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card.jsx';
+import { ErrorState } from '../components/ui/ErrorState.jsx';
 import { Skeleton } from '../components/ui/skeleton.jsx';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table.jsx';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs.jsx';
 import { useAuth } from '../hooks/useAuth.js';
 import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
+import { useMembers } from '../hooks/useMembers.js';
 import {
   useAdminStays,
   useStayDetails,
@@ -56,14 +61,20 @@ export function AdminStaysPage() {
     stays = [],
     refresh,
     createStay,
+    cancelStay,
+    correctAdmission,
     transferRoom,
     recordDepositTransaction,
     voidDepositTransaction,
     finalizeCheckout,
   } = useAdminStays();
+  const memberRoster = useMembers();
 
   const [activeTab, setActiveTab] = useState('overview');
   const [joinModalOpen, setJoinModalOpen] = useState(false);
+  const [joinMemberId, setJoinMemberId] = useState(null);
+  const [cancelTargetStay, setCancelTargetStay] = useState(null);
+  const [correctionTargetStay, setCorrectionTargetStay] = useState(null);
   const [transferTargetStay, setTransferTargetStay] = useState(null);
   const [depositTargetStay, setDepositTargetStay] = useState(null);
   const [depositActionType, setDepositActionType] = useState('RECEIVED');
@@ -94,6 +105,26 @@ export function AdminStaysPage() {
     refresh();
   };
 
+  const handleCreateStay = async (payload) => {
+    const created = await createStay(payload);
+    memberRoster.refresh();
+    return created;
+  };
+
+  const handleCancelStay = async (payload) => {
+    if (!cancelTargetStay) return;
+    await cancelStay(cancelTargetStay.stayId, payload);
+    setCancelTargetStay(null);
+    memberRoster.refresh();
+  };
+
+  const handleCorrectAdmission = async (payload) => {
+    if (!correctionTargetStay) return;
+    await correctAdmission(correctionTargetStay.stayId, payload);
+    setCorrectionTargetStay(null);
+    memberRoster.refresh();
+  };
+
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-slate-200/80 dark:border-slate-800/80 pb-4">
@@ -104,7 +135,10 @@ export function AdminStaysPage() {
         />
         <Button
           size="sm"
-          onClick={() => setJoinModalOpen(true)}
+          onClick={() => {
+            setJoinMemberId(null);
+            setJoinModalOpen(true);
+          }}
           className="text-xs bg-teal-600 hover:bg-teal-700 text-white self-start sm:self-center"
         >
           <PlusCircle className="h-4 w-4 mr-1.5" />
@@ -270,6 +304,28 @@ export function AdminStaysPage() {
                           <LogOut className="h-3 w-3 mr-1" />
                           Checkout
                         </Button>
+                        {isSuperAdmin && (
+                          <>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setCorrectionTargetStay(stay)}
+                              className="h-7 text-xs text-teal-700 dark:text-teal-400"
+                            >
+                              <PencilLine className="h-3 w-3 mr-1" />
+                              Correct Admission
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setCancelTargetStay(stay)}
+                              className="h-7 text-xs text-rose-600 hover:text-rose-700"
+                            >
+                              <Ban className="h-3 w-3 mr-1" />
+                              Cancel Incorrect Stay
+                            </Button>
+                          </>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -285,64 +341,63 @@ export function AdminStaysPage() {
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-semibold flex items-center gap-2 text-slate-900 dark:text-slate-100">
                 <UserCheck className="h-4 w-4 text-teal-600" />
-                All Stay Records
+                Configured Members
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="text-[11px] text-slate-500 uppercase tracking-wider">
-                      <TableHead>Resident</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Joined On</TableHead>
-                      <TableHead>Room</TableHead>
-                      <TableHead>Departure</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody className="text-xs divide-y divide-slate-100 dark:divide-slate-800">
-                    {stays.map((s) => (
-                      <TableRow key={s.stayId}>
-                        <TableCell className="font-semibold capitalize text-slate-900 dark:text-slate-100">
-                          {s.memberId}
-                        </TableCell>
-                        <TableCell>
-                          <StayStatusBadge status={s.status} />
-                        </TableCell>
-                        <TableCell>{s.joinedOn}</TableCell>
-                        <TableCell>Room {s.initialRoomId || '—'}</TableCell>
-                        <TableCell>
-                          {s.status === 'CHECKED_OUT'
-                            ? s.actualLeftOn
-                            : s.checkoutRequestedFor
-                            ? `Req: ${s.checkoutRequestedFor}`
-                            : '—'}
-                        </TableCell>
-                        <TableCell className="text-right space-x-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setSelectedStayIdForDetails(s.stayId)}
-                            className="h-6 text-xs text-teal-600 hover:text-teal-700"
-                          >
-                            Details
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => downloadLifetimeStatementPdf(s.stayId, s.memberId)}
-                            className="h-6 text-xs text-slate-600 hover:text-slate-900"
-                          >
-                            <Download className="h-3 w-3 mr-1" />
-                            PDF
-                          </Button>
-                        </TableCell>
+              {memberRoster.loading && memberRoster.data.length === 0 && (
+                <Skeleton className="h-32 w-full rounded-lg" />
+              )}
+              {memberRoster.error && (
+                <ErrorState compact title="Member roster unavailable" message={memberRoster.error} actionLabel="Try again" onAction={memberRoster.refresh} />
+              )}
+              {!memberRoster.loading && !memberRoster.error && (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="text-[11px] text-slate-500 uppercase tracking-wider">
+                        <TableHead>Member</TableHead>
+                        <TableHead>Account</TableHead>
+                        <TableHead>Stay Status</TableHead>
+                        <TableHead>Room</TableHead>
+                        <TableHead className="text-right">Action</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+                    </TableHeader>
+                    <TableBody className="text-xs divide-y divide-slate-100 dark:divide-slate-800">
+                      {memberRoster.data.map((member) => (
+                        <TableRow key={member.memberId}>
+                          <TableCell className="font-semibold text-slate-900 dark:text-slate-100">
+                            <div>{member.name}</div>
+                            <div className="text-[10px] font-normal text-slate-500">{member.memberId}</div>
+                          </TableCell>
+                          <TableCell>{member.account.exists ? (member.account.active ? 'Active' : 'Disabled') : 'Not configured'}</TableCell>
+                          <TableCell>{member.stay ? <StayStatusBadge status={member.stay.status} /> : 'Not registered'}</TableCell>
+                          <TableCell>{member.room ? `Room ${member.room.roomNumber}` : '—'}</TableCell>
+                          <TableCell className="text-right">
+                            {member.stay ? (
+                              <Button variant="ghost" size="sm" onClick={() => setSelectedStayIdForDetails(member.stay.stayId)} className="h-6 text-xs text-teal-600 hover:text-teal-700">
+                                View
+                              </Button>
+                            ) : (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                  setJoinMemberId(member.memberId);
+                                  setJoinModalOpen(true);
+                                }}
+                                className="h-6 text-xs text-teal-600 hover:text-teal-700"
+                              >
+                                Register Stay
+                              </Button>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -652,7 +707,23 @@ export function AdminStaysPage() {
       <JoinStayDialog
         open={joinModalOpen}
         onOpenChange={setJoinModalOpen}
-        onSubmitStay={createStay}
+        onSubmitStay={handleCreateStay}
+        isSuperAdmin={isSuperAdmin}
+        initialMemberId={joinMemberId}
+      />
+
+      <CancelStayDialog
+        open={Boolean(cancelTargetStay)}
+        onOpenChange={(open) => !open && setCancelTargetStay(null)}
+        stay={cancelTargetStay}
+        onConfirm={handleCancelStay}
+      />
+
+      <CorrectAdmissionDialog
+        open={Boolean(correctionTargetStay)}
+        onOpenChange={(open) => !open && setCorrectionTargetStay(null)}
+        stay={correctionTargetStay}
+        onConfirm={handleCorrectAdmission}
       />
 
       {/* Room Transfer Dialog */}

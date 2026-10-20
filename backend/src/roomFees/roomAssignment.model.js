@@ -63,6 +63,20 @@ export const roomAssignmentSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    cancelledAt: {
+      type: Date,
+      default: null,
+    },
+    cancelledByRole: {
+      type: String,
+      default: null,
+    },
+    cancelReason: {
+      type: String,
+      default: null,
+      trim: true,
+      maxlength: 500,
+    },
   },
   {
     collection: 'room_assignments',

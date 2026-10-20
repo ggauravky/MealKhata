@@ -19,6 +19,8 @@ export function JoinStayDialog({
   open,
   onOpenChange,
   onSubmitStay,
+  isSuperAdmin = false,
+  initialMemberId = null,
 }) {
   const [memberId, setMemberId] = useState('gaurav');
   const [joinedOn, setJoinedOn] = useState('');
@@ -28,6 +30,7 @@ export function JoinStayDialog({
   const [expectedDepositRupees, setExpectedDepositRupees] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [historicalReason, setHistoricalReason] = useState('');
 
   useEffect(() => {
     if (!open) return;
@@ -36,9 +39,11 @@ export function JoinStayDialog({
       .catch(() => setRooms([]));
 
     const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+    setMemberId(initialMemberId || 'gaurav');
     setJoinedOn(todayStr);
     setError('');
-  }, [open]);
+    setHistoricalReason('');
+  }, [initialMemberId, open]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -60,6 +65,7 @@ export function JoinStayDialog({
         monthlyFeePaise,
         monthlyRentPaise: monthlyFeePaise,
         expectedDepositPaise,
+        historicalReason: historicalReason.trim() || undefined,
       });
 
       onOpenChange(false);
@@ -176,6 +182,23 @@ export function JoinStayDialog({
           <p className="text-[11px] text-slate-500 italic">
             Note: Setting expected deposit records the commitment; receipt of deposit funds must be recorded separately when paid.
           </p>
+
+          {isSuperAdmin && joinedOn && joinedOn < new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date()) && (
+            <div className="space-y-1">
+              <Label htmlFor="stayHistoricalReason" className="text-xs">
+                Historical admission reason
+              </Label>
+              <Input
+                id="stayHistoricalReason"
+                value={historicalReason}
+                onChange={(e) => setHistoricalReason(e.target.value)}
+                placeholder="Why is this admission being entered now?"
+                required
+                maxLength={500}
+                className="text-xs"
+              />
+            </div>
+          )}
 
           <DialogFooter className="pt-2 gap-2 sm:gap-0">
             <Button

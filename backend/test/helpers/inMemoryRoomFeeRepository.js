@@ -1,4 +1,5 @@
 import { ROOM_SETTINGS_KEY, RECIPIENT_MODES, DEFAULT_DUE_DAY } from '../../src/roomFees/roomFee.constants.js';
+import { selectAssignmentForDate, selectAssignmentForMonth } from '../../src/roomFees/assignmentResolution.js';
 
 function clone(data) {
   if (data === null || data === undefined) return data;
@@ -118,13 +119,11 @@ export class InMemoryRoomFeeRepository {
   }
 
   async findActiveAssignment(memberId, month) {
-    const found = Array.from(this.assignments.values()).find((a) => {
-      if (a.memberId !== memberId) return false;
-      if (a.effectiveFromMonth > month) return false;
-      if (a.effectiveUntilMonth && a.effectiveUntilMonth < month) return false;
-      return true;
-    });
-    return clone(found ?? null);
+    return clone(selectAssignmentForMonth(Array.from(this.assignments.values()), memberId, month));
+  }
+
+  async findAssignmentOnDate(memberId, date) {
+    return clone(selectAssignmentForDate(Array.from(this.assignments.values()), memberId, date));
   }
 
   async deleteAssignment(assignmentId) {

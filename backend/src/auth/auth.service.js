@@ -83,6 +83,19 @@ export function createAuthService({
       }
 
       if (legacyMemberAccount && legacyMemberAccount.active !== false) {
+        let canonicalAccount;
+        try {
+          canonicalAccount = userAccounts
+            ? await userAccounts.findByMemberId(legacyMemberAccount.memberId)
+            : null;
+        } catch (error) {
+          throw new HttpError(503, 'Authentication service is temporarily unavailable.', { cause: error });
+        }
+        if (canonicalAccount) {
+          await bcrypt.compare(password, DUMMY_PASSWORD_HASH);
+          throw new HttpError(401, 'Invalid email or password.');
+        }
+
         const passwordMatches = await bcrypt.compare(
           password,
           legacyMemberAccount.passwordHash || DUMMY_PASSWORD_HASH,

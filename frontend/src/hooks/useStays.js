@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
 import { socket } from '../lib/socket.js';
+import { mapDepositSummary, mapLifetimeSummary, parseMyStayResponse } from '../lib/stayContracts.js';
 
 /**
  * Hook for Member to view their current active/pending stay and deposit summary
@@ -18,7 +19,7 @@ export function useMyStay() {
     const controller = new AbortController();
     api.get('/api/stays/me', { signal: controller.signal })
       .then((res) => {
-        setState({ loading: false, error: '', data: res.data || null });
+        setState({ loading: false, error: '', data: parseMyStayResponse(res) });
       })
       .catch((err) => {
         if (!controller.signal.aborted) {
@@ -194,6 +195,24 @@ export function useAdminStays(filter = {}) {
     return res.data;
   };
 
+  const cancelStay = async (stayId, payload) => {
+    if (!navigator.onLine) {
+      throw new Error('You are offline. Connect to the internet to cancel a Stay.');
+    }
+    const res = await api.post(`/api/stays/${stayId}/cancel`, payload);
+    refresh();
+    return res.data;
+  };
+
+  const correctAdmission = async (stayId, payload) => {
+    if (!navigator.onLine) {
+      throw new Error('You are offline. Connect to the internet to correct an admission.');
+    }
+    const res = await api.post(`/api/stays/${stayId}/correct-admission`, payload);
+    refresh();
+    return res.data;
+  };
+
   const recordDepositTransaction = async (stayId, payload) => {
     if (!navigator.onLine) {
       throw new Error('You are offline. Connect to the internet to record deposit transactions.');
@@ -245,6 +264,8 @@ export function useAdminStays(filter = {}) {
     stays: state.data,
     refresh,
     createStay,
+    cancelStay,
+    correctAdmission,
     transferRoom,
     recordDepositTransaction,
     voidDepositTransaction,
@@ -288,7 +309,7 @@ export function useStayDetails(stayId) {
           loading: false,
           error: '',
           stay: stayRes.data,
-          deposit: depRes.data,
+          deposit: mapDepositSummary(depRes.data),
           roomHistory: roomRes.data || [],
           clearances: clearRes.data || [],
         });
@@ -346,7 +367,7 @@ export function useStayFinancialReview(stayId) {
 
     api.get(`/api/stays/${stayId}/financial-review`, { signal: controller.signal })
       .then((res) => {
-        setState({ loading: false, error: '', data: res.data });
+        setState({ loading: false, error: '', data: mapLifetimeSummary(res.data) });
       })
       .catch((err) => {
         if (!controller.signal.aborted) {

@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { Route, Routes } from 'react-router-dom';
 import { ProtectedRoute } from './components/auth/ProtectedRoute.jsx';
+import { ErrorBoundary } from './components/common/ErrorBoundary.jsx';
 import { AppLayout } from './layouts/AppLayout.jsx';
 import { DashboardPage } from './pages/DashboardPage.jsx';
 import { LoginPage } from './pages/LoginPage.jsx';
@@ -17,6 +18,7 @@ const ExpensesPage = lazy(() => import('./pages/ExpensesPage.jsx').then((module)
 const AdminExpensesPage = lazy(() => import('./pages/AdminExpensesPage.jsx').then((module) => ({ default: module.AdminExpensesPage })));
 const MyStayPage = lazy(() => import('./pages/MyStayPage.jsx').then((module) => ({ default: module.MyStayPage })));
 const AdminStaysPage = lazy(() => import('./pages/AdminStaysPage.jsx').then((module) => ({ default: module.AdminStaysPage })));
+const AdminMembersPage = lazy(() => import('./pages/AdminMembersPage.jsx').then((module) => ({ default: module.AdminMembersPage })));
 
 export default function App() {
   return (
@@ -29,12 +31,13 @@ export default function App() {
           <Route path="expenses" element={<ExpensesPage />} />
           <Route path="reports" element={<ReportsPage />} />
           <Route path="payments" element={<PaymentsPage />} />
-          <Route path="my-stay" element={<MyStayPage />} />
+          <Route path="my-stay" element={<ErrorBoundary><MyStayPage /></ErrorBoundary>} />
           <Route element={<ProtectedRoute />}>
             <Route path="admin" element={<AdminPage />} />
             <Route path="admin/room-fees" element={<AdminRoomFeesPage />} />
             <Route path="admin/expenses" element={<AdminExpensesPage />} />
             <Route path="admin/stays" element={<AdminStaysPage />} />
+            <Route path="admin/members" element={<AdminMembersPage />} />
           </Route>
         </Route>
         <Route path="login" element={<LoginPage />} />

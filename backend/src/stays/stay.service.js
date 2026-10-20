@@ -6,7 +6,8 @@
 import { randomUUID } from 'node:crypto';
 import mongoose from 'mongoose';
 import { MEMBER_IDS } from '../config/members.js';
-import { isValidLogicalDate, getLogicalDateInTimeZone } from '../utils/date.js';
+import { canEditDate, isValidLogicalDate, getLogicalDateInTimeZone } from '../utils/date.js';
+import { ROLES } from '../auth/permissions.js';
 import { isValidLogicalMonth } from '../utils/month.js';
 import { roomFeeService } from '../roomFees/roomFee.service.js';
 import { financialOverviewService } from '../finance/financialOverview.service.js';
@@ -54,6 +55,8 @@ export function createStayService({
   finance = financialOverviewService,
   deposits = depositService,
   stayAttribution = null,
+  now = () => new Date(),
+  enforceHistoricalPolicy = process.env.NODE_ENV !== 'test',
 } = {}) {
   const attributionService =
     stayAttribution ||
@@ -76,6 +79,8 @@ export function createStayService({
       monthlyRatePaise = null,
       expectedDepositPaise = 0,
       actorRole,
+      actorMemberId = null,
+      historicalReason = null,
     }) {
       const monthlyFeePaise = rawMonthlyFee ?? monthlyRatePaise ?? null;
       if (!MEMBER_IDS.includes(memberId)) {
@@ -104,6 +109,18 @@ export function createStayService({
         if (!Number.isInteger(monthlyFeePaise) || monthlyFeePaise <= 0) {
           throw new StayDomainError('Monthly fee must be a positive integer in paise.', 400);
         }
+      }
+
+      const today = getLogicalDateInTimeZone(now(), 'Asia/Kolkata');
+      if (enforceHistoricalPolicy && !canEditDate({ role: actorRole, targetDate: joinedOn, now: now(), timeZone: 'Asia/Kolkata' })) {
+        throw new StayDomainError('Only Super Admin can register a historical or future admission.', 403);
+      }
+      const isHistoricalAdmission = joinedOn < today;
+      const normalizedHistoricalReason = typeof historicalReason === 'string'
+        ? historicalReason.trim().slice(0, 500)
+        : '';
+      if (enforceHistoricalPolicy && isHistoricalAdmission && actorRole === ROLES.SUPERADMIN && !normalizedHistoricalReason) {
+        throw new StayDomainError('A reason is required for historical admission.', 400);
       }
 
       // Invariant: At most ONE active or pending stay per member!
@@ -148,6 +165,18 @@ export function createStayService({
           });
         }
 
+        if (monthlyFeePaise && roomFees && typeof roomFees.createFeePlan === 'function') {
+          createdFeePlan = await roomFees.createFeePlan({
+            memberId,
+            effectiveFromMonth: joinMonth,
+            amountPaise: monthlyFeePaise,
+            reason: `Initial fee plan on admission in Room ${initialRoomId}`,
+            actorRole,
+            isAdmission: true,
+            session,
+          });
+        }
+
         createdStay = await repository.createStay({
           stayId,
           memberId,
@@ -157,13 +186,24 @@ export function createStayService({
           status: STAY_STATUSES.ACTIVE,
           initialRoomId: initialRoomId.trim(),
           currentRoomId: initialRoomId.trim(),
+          admissionAssignmentId: createdAssignment?.assignmentId || null,
+          admissionFeePlanId: createdFeePlan?.feePlanId || null,
           history: [
             {
               event: 'STAY_CREATED',
               timestamp: new Date(),
               actorRole,
-              note: `Hostel stay created from ${joinedOn} in Room ${initialRoomId}`,
-              details: { initialRoomId, monthlyFeePaise, expectedDepositPaise: expectedDepositPaise || 0 },
+              actorMemberId,
+              note: isHistoricalAdmission
+                ? `Historical hostel stay created from ${joinedOn} in Room ${initialRoomId}: ${normalizedHistoricalReason}`
+                : `Hostel stay created from ${joinedOn} in Room ${initialRoomId}`,
+              details: {
+                initialRoomId,
+                monthlyFeePaise,
+                expectedDepositPaise: expectedDepositPaise || 0,
+                historicalAdmission: isHistoricalAdmission,
+                historicalReason: isHistoricalAdmission ? normalizedHistoricalReason : null,
+              },
             },
           ],
         }, { session });
@@ -186,18 +226,6 @@ export function createStayService({
             },
           ],
         }, { session });
-
-        if (monthlyFeePaise && roomFees && typeof roomFees.createFeePlan === 'function') {
-          createdFeePlan = await roomFees.createFeePlan({
-            memberId,
-            effectiveFromMonth: joinMonth,
-            amountPaise: monthlyFeePaise,
-            reason: `Initial fee plan on admission in Room ${initialRoomId}`,
-            actorRole,
-            isAdmission: true,
-            session,
-          });
-        }
 
         if (session) {
           await session.commitTransaction();
@@ -264,6 +292,249 @@ export function createStayService({
      */
     async listStaysForMember(memberId) {
       return repository.findStaysByMember(memberId);
+    },
+
+    async cancelIncorrectStay({ stayId, reason, expectedRevision, actorRole }) {
+      if (actorRole !== ROLES.SUPERADMIN) {
+        throw new StayDomainError('Only Super Admin can cancel an incorrect stay.', 403);
+      }
+      const normalizedReason = typeof reason === 'string' ? reason.trim().slice(0, 500) : '';
+      if (normalizedReason.length < 3) {
+        throw new StayDomainError('A cancellation reason is required.', 400);
+      }
+      if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+        throw new StayDomainError('expectedRevision must be a non-negative integer.', 400);
+      }
+
+      const stay = await repository.findStayById(stayId);
+      if (!stay) throw new StayDomainError('Hostel stay not found.', 404);
+      if (stay.status === STAY_STATUSES.CANCELLED) {
+        throw new StayDomainError('Hostel stay is already cancelled.', 409);
+      }
+      if (stay.status === STAY_STATUSES.CHECKED_OUT) {
+        throw new StayDomainError('A checked-out stay cannot be cancelled.', 409);
+      }
+      if (!stay.admissionAssignmentId) {
+        throw new StayDomainError(
+          'The admission room assignment cannot be identified safely. Use the correction workflow.',
+          409,
+          { blockers: [{ type: 'ADMISSION_ASSIGNMENT', message: 'Missing admission assignment link.' }] },
+        );
+      }
+
+      const [finances, clearances] = await Promise.all([
+        attributionService.getStayAttributedFinances({ stayId, actorRole }),
+        repository.findClearancesByStayId(stayId),
+      ]);
+      const blockers = [];
+      if ((finances.totalMessBilledPaise || 0) !== 0 || (finances.totalMessPaidPaise || 0) !== 0) {
+        blockers.push({ type: 'MESS_ACTIVITY', message: 'Mess obligations or payments are attributed to this stay.' });
+      }
+      if ((finances.totalRoomBilledPaise || 0) !== 0 || (finances.totalRoomPaidPaise || 0) !== 0) {
+        blockers.push({ type: 'ROOM_CHARGES', message: 'Room charges or payments are attributed to this stay.' });
+      }
+      if (
+        (finances.totalExpenseSharePaise || 0) !== 0
+        || (finances.totalExpenseOwedPaise || 0) !== 0
+        || (finances.totalExpenseReceivablePaise || 0) !== 0
+      ) {
+        blockers.push({ type: 'EXPENSE_ACTIVITY', message: 'Shared-expense obligations are attributed to this stay.' });
+      }
+      if ((finances.depositOverview?.transactions || []).length > 0) {
+        blockers.push({ type: 'DEPOSIT_ACTIVITY', message: 'Deposit transactions exist for this stay.' });
+      }
+      if (clearances.length > 0) {
+        blockers.push({ type: 'CLEARANCE', message: 'A clearance snapshot exists for this stay.' });
+      }
+      if ((finances.attributionWarnings || []).length > 0) {
+        blockers.push({ type: 'AMBIGUOUS_ATTRIBUTION', message: 'Financial attribution is incomplete or ambiguous.' });
+      }
+      if (blockers.length > 0) {
+        throw new StayDomainError(
+          'This stay has financial or clearance activity and cannot be cancelled directly.',
+          409,
+          { blockers },
+        );
+      }
+
+      let session = null;
+      if (mongoose.connection?.readyState === 1) {
+        session = await mongoose.startSession();
+        session.startTransaction();
+      } else if (process.env.NODE_ENV === 'production') {
+        throw new StayDomainError('Database transaction support is required.', 503);
+      }
+
+      const cancelledAt = now();
+      try {
+        await roomFees.cancelAdmissionArtifacts({
+          assignmentId: stay.admissionAssignmentId,
+          feePlanId: stay.admissionFeePlanId || null,
+          reason: normalizedReason,
+          actorRole,
+          session,
+        });
+
+        const depositAccount = await repository.findDepositAccountByStayId(stayId, { session });
+        if (depositAccount) {
+          await repository.updateDepositAccount(
+            depositAccount.depositAccountId,
+            { status: DEPOSIT_ACCOUNT_STATUSES.SETTLED },
+            depositAccount.revision,
+            { session },
+          );
+          await repository.addDepositAccountHistory(
+            depositAccount.depositAccountId,
+            {
+              event: 'DEPOSIT_ACCOUNT_CANCELLED_EMPTY',
+              timestamp: cancelledAt,
+              actorRole,
+              note: normalizedReason,
+              details: { stayId },
+            },
+            { session },
+          );
+        }
+
+        const cancelled = await repository.cancelStay(
+          stayId,
+          { reason: normalizedReason, actorRole, expectedRevision, cancelledAt },
+          { session },
+        );
+        if (!cancelled) {
+          throw new StayDomainError('Stay changed while cancellation was being processed. Refresh and retry.', 409);
+        }
+        if (session) await session.commitTransaction();
+        return cancelled;
+      } catch (error) {
+        if (session?.inTransaction()) await session.abortTransaction();
+        throw error;
+      } finally {
+        if (session) await session.endSession();
+      }
+    },
+
+    async correctAdmissionDetails({
+      stayId,
+      joinedOn,
+      roomId,
+      reason,
+      expectedRevision,
+      actorRole,
+    }) {
+      if (actorRole !== ROLES.SUPERADMIN) {
+        throw new StayDomainError('Only Super Admin can correct an admission.', 403);
+      }
+      if (!joinedOn || !isValidLogicalDate(joinedOn)) {
+        throw new StayDomainError('Valid corrected joining date is required.', 400);
+      }
+      if (!roomId || !roomId.trim()) {
+        throw new StayDomainError('Corrected room is required.', 400);
+      }
+      const normalizedReason = typeof reason === 'string' ? reason.trim().slice(0, 500) : '';
+      if (normalizedReason.length < 3) {
+        throw new StayDomainError('A correction reason is required.', 400);
+      }
+      if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+        throw new StayDomainError('expectedRevision must be a non-negative integer.', 400);
+      }
+
+      const stay = await repository.findStayById(stayId);
+      if (!stay) throw new StayDomainError('Hostel stay not found.', 404);
+      if (stay.status !== STAY_STATUSES.ACTIVE) {
+        throw new StayDomainError('Only an active Stay can have its admission corrected.', 409);
+      }
+      if (stay.expectedLeaveOn && joinedOn > stay.expectedLeaveOn) {
+        throw new StayDomainError('Joining date cannot be after the expected departure date.', 400);
+      }
+      if (!stay.admissionAssignmentId) {
+        throw new StayDomainError('The admission room assignment cannot be identified safely.', 409);
+      }
+
+      const [finances, clearances] = await Promise.all([
+        attributionService.getStayAttributedFinances({ stayId, actorRole }),
+        repository.findClearancesByStayId(stayId),
+      ]);
+      const blockers = [];
+      if ((finances.totalMessBilledPaise || 0) !== 0 || (finances.totalMessPaidPaise || 0) !== 0) {
+        blockers.push({ type: 'MESS_ACTIVITY', message: 'Mess activity is attributed to this Stay.' });
+      }
+      if ((finances.totalRoomBilledPaise || 0) !== 0 || (finances.totalRoomPaidPaise || 0) !== 0) {
+        blockers.push({ type: 'ROOM_CHARGES', message: 'Room fee activity is attributed to this Stay.' });
+      }
+      if (
+        (finances.totalExpenseSharePaise || 0) !== 0
+        || (finances.totalExpenseOwedPaise || 0) !== 0
+        || (finances.totalExpenseReceivablePaise || 0) !== 0
+      ) {
+        blockers.push({ type: 'EXPENSE_ACTIVITY', message: 'Expense activity is attributed to this Stay.' });
+      }
+      if ((finances.depositOverview?.transactions || []).length > 0) {
+        blockers.push({ type: 'DEPOSIT_ACTIVITY', message: 'Deposit transactions exist for this Stay.' });
+      }
+      if (clearances.length > 0) {
+        blockers.push({ type: 'CLEARANCE', message: 'A clearance snapshot exists for this Stay.' });
+      }
+      if ((finances.attributionWarnings || []).length > 0) {
+        blockers.push({ type: 'AMBIGUOUS_ATTRIBUTION', message: 'Financial attribution is incomplete or ambiguous.' });
+      }
+      if (blockers.length > 0) {
+        throw new StayDomainError(
+          'This admission has financial or clearance activity and cannot be corrected directly.',
+          409,
+          { blockers },
+        );
+      }
+
+      let session = null;
+      if (mongoose.connection?.readyState === 1) {
+        session = await mongoose.startSession();
+        session.startTransaction();
+      } else if (process.env.NODE_ENV === 'production') {
+        throw new StayDomainError('Database transaction support is required.', 503);
+      }
+
+      try {
+        const correctedRoomId = roomId.trim();
+        await roomFees.correctAdmissionArtifacts({
+          assignmentId: stay.admissionAssignmentId,
+          feePlanId: stay.admissionFeePlanId || null,
+          memberId: stay.memberId,
+          roomId: correctedRoomId,
+          effectiveFromDate: joinedOn,
+          actorRole,
+          session,
+        });
+        const wasStillInAdmissionRoom = stay.currentRoomId === stay.initialRoomId;
+        const corrected = await repository.updateStay(stayId, {
+          joinedOn,
+          initialRoomId: correctedRoomId,
+          ...(wasStillInAdmissionRoom ? { currentRoomId: correctedRoomId } : {}),
+        }, expectedRevision, { session });
+        if (!corrected) {
+          throw new StayDomainError('Stay changed while correction was being processed. Refresh and retry.', 409);
+        }
+        await repository.addStayHistory(stayId, {
+          event: 'ADMISSION_CORRECTED',
+          timestamp: now(),
+          actorRole,
+          note: normalizedReason,
+          details: {
+            previousJoinedOn: stay.joinedOn,
+            joinedOn,
+            previousRoomId: stay.initialRoomId,
+            roomId: correctedRoomId,
+            expectedRevision,
+          },
+        }, { session });
+        if (session) await session.commitTransaction();
+        return corrected;
+      } catch (error) {
+        if (session?.inTransaction()) await session.abortTransaction();
+        throw error;
+      } finally {
+        if (session) await session.endSession();
+      }
     },
 
     /**

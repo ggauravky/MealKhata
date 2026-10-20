@@ -80,6 +80,30 @@ export const hostelStaySchema = new mongoose.Schema(
       default: null,
       trim: true,
     },
+    admissionAssignmentId: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    admissionFeePlanId: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    cancelledAt: {
+      type: Date,
+      default: null,
+    },
+    cancelledByRole: {
+      type: String,
+      default: null,
+    },
+    cancelReason: {
+      type: String,
+      default: null,
+      trim: true,
+      maxlength: MAX_NOTE_LENGTH,
+    },
     checkoutRequestedAt: {
       type: Date,
       default: null,

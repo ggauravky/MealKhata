@@ -35,7 +35,7 @@ describe('MealKhata 2.0 Phase 4: Complete Hostel Lifecycle, Security Deposits & 
       const appContent = await fs.readFile(appPath, 'utf8');
       assert.match(appContent, /lazy\(\(\)\s*=>\s*import\('\.\/pages\/MyStayPage\.jsx'\)/);
       assert.match(appContent, /lazy\(\(\)\s*=>\s*import\('\.\/pages\/AdminStaysPage\.jsx'\)/);
-      assert.match(appContent, /<Route path="my-stay" element={<MyStayPage \/>} \/>/);
+      assert.match(appContent, /<Route path="my-stay" element={<ErrorBoundary><MyStayPage \/><\/ErrorBoundary>} \/>/);
       assert.match(appContent, /<Route path="admin\/stays" element={<AdminStaysPage \/>} \/>/);
     });
 
@@ -103,12 +103,13 @@ describe('MealKhata 2.0 Phase 4: Complete Hostel Lifecycle, Security Deposits & 
   });
 
   describe('Lifecycle UI Components', () => {
-    test('StayStatusBadge supports all 4 lifecycle statuses and clearance statuses', async () => {
+    test('StayStatusBadge supports lifecycle statuses including cancellation and clearance statuses', async () => {
       const content = await fs.readFile(stayStatusBadgePath, 'utf8');
       assert.match(content, /ACTIVE/);
       assert.match(content, /CHECKOUT_REQUESTED/);
       assert.match(content, /CHECKOUT_PENDING/);
       assert.match(content, /CHECKED_OUT/);
+      assert.match(content, /CANCELLED/);
       assert.match(content, /NO_DUES/);
       assert.match(content, /OUTSTANDING_DUES/);
     });

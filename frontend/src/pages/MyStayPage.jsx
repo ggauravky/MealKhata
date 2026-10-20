@@ -1,4 +1,4 @@
-import { BedDouble, History, House, LogOut, ShieldCheck, TrendingUp } from 'lucide-react';
+import { History } from 'lucide-react';
 import { useState } from 'react';
 import { PageHeader } from '../components/common/PageHeader.jsx';
 import { CheckoutRequestDialog } from '../components/stays/CheckoutRequestDialog.jsx';
@@ -24,10 +24,9 @@ export function MyStayPage() {
   const [selectedStayId, setSelectedStayId] = useState(null);
 
   const activeStay = myStayQuery.data?.stay;
-  const activeDeposit = myStayQuery.data?.deposit;
 
   // Use either active stay or a selected historical stay
-  const currentStayId = selectedStayId || activeStay?.stayId;
+  const currentStayId = selectedStayId || activeStay?.stayId || historyQuery.data?.[0]?.stayId;
   const stayDetails = useStayDetails(currentStayId);
   const lifetimeSummary = useStayLifetimeSummary(currentStayId);
 
@@ -59,8 +58,17 @@ export function MyStayPage() {
       )}
 
       {/* When no stay is registered at all */}
-      {!myStayQuery.loading && !activeStay && historyQuery.data?.length === 0 && (
+      {!myStayQuery.loading && !historyQuery.loading && !myStayQuery.error && !historyQuery.error && !activeStay && historyQuery.data?.length === 0 && (
         <StayEmptyState isMember={isMember} />
+      )}
+
+      {historyQuery.error && (
+        <ErrorState
+          title="Stay history unavailable"
+          message={historyQuery.error}
+          actionLabel="Try again"
+          onAction={historyQuery.refresh}
+        />
       )}
 
       {/* Historical Stays Selector if multiple stays exist */}
@@ -123,6 +131,24 @@ export function MyStayPage() {
             />
           )}
         </div>
+      )}
+
+      {currentStayId && stayDetails.error && (
+        <ErrorState
+          title="Stay details unavailable"
+          message={stayDetails.error}
+          actionLabel="Try again"
+          onAction={stayDetails.refresh}
+        />
+      )}
+
+      {currentStayId && lifetimeSummary.error && (
+        <ErrorState
+          title="Lifetime summary unavailable"
+          message={lifetimeSummary.error}
+          actionLabel="Try again"
+          onAction={lifetimeSummary.refresh}
+        />
       )}
 
       {/* Checkout Request Dialog */}

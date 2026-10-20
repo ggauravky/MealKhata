@@ -14,15 +14,21 @@ export class ErrorBoundary extends Component {
     }
   }
 
+  componentDidUpdate(previousProps) {
+    if (this.state.hasError && previousProps.resetKey !== this.props.resetKey) {
+      this.setState({ hasError: false });
+    }
+  }
+
   render() {
     if (this.state.hasError) {
       return (
         <main className="standalone-page">
           <ErrorState
-            title="MealKhata needs a refresh"
-            message="The page could not be displayed safely. Reload to try again."
-            actionLabel="Reload page"
-            onAction={() => window.location.reload()}
+            title={this.props.title || 'MealKhata needs a refresh'}
+            message={this.props.message || 'The page could not be displayed safely. Try the page again.'}
+            actionLabel="Try again"
+            onAction={() => this.setState({ hasError: false })}
           />
         </main>
       );

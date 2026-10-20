@@ -89,6 +89,34 @@ export const stayRepository = {
     ).lean();
   },
 
+  async cancelStay(stayId, { reason, actorRole, expectedRevision, cancelledAt }, { session } = {}) {
+    const options = { returnDocument: 'after', runValidators: true };
+    if (session) options.session = session;
+    return HostelStay.findOneAndUpdate(
+      { stayId, revision: expectedRevision },
+      {
+        $set: {
+          status: STAY_STATUSES.CANCELLED,
+          currentRoomId: null,
+          cancelledAt,
+          cancelledByRole: actorRole,
+          cancelReason: reason,
+        },
+        $push: {
+          history: {
+            event: 'STAY_CANCELLED',
+            timestamp: cancelledAt,
+            actorRole,
+            note: reason,
+            details: { expectedRevision },
+          },
+        },
+        $inc: { revision: 1 },
+      },
+      options,
+    ).lean();
+  },
+
   async deleteStay(stayId) {
     return HostelStay.findOneAndDelete({ stayId }).lean();
   },
