@@ -114,3 +114,38 @@ export function broadcastExpensesUpdated(payload) {
   return true;
 }
 
+export function broadcastStayUpdated(payload = { scope: 'stay' }) {
+  if (!activeSocketServer) {
+    return false;
+  }
+
+  activeSocketServer.emit('stay:updated', {
+    scope: 'stay',
+    revision: payload?.revision || Date.now().toString(),
+  });
+  return true;
+}
+
+export function broadcastDepositUpdated(payload = { scope: 'deposit' }) {
+  if (!activeSocketServer) {
+    return false;
+  }
+
+  activeSocketServer.emit('deposit:updated', {
+    scope: 'deposit',
+    revision: payload?.revision || Date.now().toString(),
+  });
+  return true;
+}
+
+export function broadcastClearanceUpdated(payload = { scope: 'clearance' }) {
+  if (!activeSocketServer) {
+    return false;
+  }
+
+  activeSocketServer.emit('clearance:updated', {
+    scope: 'clearance',
+    revision: payload?.revision || Date.now().toString(),
+  });
+  return true;
+}

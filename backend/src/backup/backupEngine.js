@@ -22,6 +22,10 @@ export const BACKUP_COLLECTIONS = Object.freeze([
   'room_payment_settings',
   'expenses',
   'expense_reimbursements',
+  'hostel_stays',
+  'hostel_deposit_accounts',
+  'hostel_deposit_transactions',
+  'hostel_clearances',
 ]);
 
 /**

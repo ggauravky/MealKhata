@@ -19,6 +19,7 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
 import { useFinance, useMemberFinance, useHouseholdFinance } from '../hooks/useFinance.js';
 import { FinancialOverviewCard } from '../components/finance/FinancialOverviewCard.jsx';
 import { FinancialHouseholdSummary } from '../components/finance/FinancialHouseholdSummary.jsx';
+import { DashboardStayCard } from '../components/dashboard/DashboardStayCard.jsx';
 import { usePwa } from '../hooks/usePwa.js';
 import { api } from '../lib/api.js';
 import { formatLogicalDate } from '../lib/logicalDate.js';
@@ -151,6 +152,9 @@ export function DashboardPage() {
               household={householdFinance.data}
             />
           )}
+
+          {/* Phase 4 Hostel Stay Lifecycle Card */}
+          <DashboardStayCard />
 
           {/* Member view: 1. Personal Meals Today */}
           {isMember && data.personalHero && (

@@ -269,6 +269,16 @@ export function createRoomFeeService({
       return { success: true };
     },
 
+    async endActiveRoomAssignment({ memberId, endMonth }) {
+      const assignments = await repository.findAssignmentsForMember(memberId);
+      for (const a of assignments) {
+        if (!a.effectiveUntilMonth || a.effectiveUntilMonth > endMonth) {
+          await repository.updateAssignment(a.assignmentId, { effectiveUntilMonth: endMonth });
+        }
+      }
+      return { success: true };
+    },
+
     // --- Fee Plans ---
     async createFeePlan({
       memberId,

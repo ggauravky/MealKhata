@@ -766,6 +766,128 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
     checks.push({ name: 'Other Expenses Domain', status: 'FAIL', issues: 1, message: error.message });
   }
 
+  // 7. Hostel Stays & Lifecycle Domain
+  try {
+    const stays = await db.collection('hostel_stays').find({}).toArray();
+    let stayIssues = 0;
+    const activeStayMembers = new Set();
+
+    for (const s of stays) {
+      if (!s.stayId || typeof s.stayId !== 'string') {
+        issues.push(`[hostel_stays] Invalid stayId for stay: ${s._id}`);
+        stayIssues++;
+      }
+
+      if (!MEMBER_IDS.includes(s.memberId)) {
+        issues.push(`[hostel_stays] Invalid memberId: ${s.memberId} in stay ${s.stayId}`);
+        stayIssues++;
+      }
+
+      if (!isValidLogicalDate(s.joinedOn)) {
+        issues.push(`[hostel_stays] Invalid joinedOn date: ${s.joinedOn} in stay ${s.stayId}`);
+        stayIssues++;
+      }
+
+      if (s.actualLeftOn && !isValidLogicalDate(s.actualLeftOn)) {
+        issues.push(`[hostel_stays] Invalid actualLeftOn date: ${s.actualLeftOn} in stay ${s.stayId}`);
+        stayIssues++;
+      }
+
+      if (s.actualLeftOn && s.joinedOn && s.actualLeftOn < s.joinedOn) {
+        issues.push(`[hostel_stays] actualLeftOn (${s.actualLeftOn}) precedes joinedOn (${s.joinedOn}) in stay ${s.stayId}`);
+        stayIssues++;
+      }
+
+      if (s.status === 'checked_out' && !s.actualLeftOn) {
+        issues.push(`[hostel_stays] Checked out stay ${s.stayId} missing actualLeftOn`);
+        stayIssues++;
+      }
+
+      if (['active', 'checkout_requested', 'checkout_pending'].includes(s.status)) {
+        if (activeStayMembers.has(s.memberId)) {
+          issues.push(`[hostel_stays] Member ${s.memberId} has multiple active or pending stays`);
+          stayIssues++;
+        }
+        activeStayMembers.add(s.memberId);
+      }
+    }
+
+    checks.push({
+      name: 'Hostel Stays & Lifecycle',
+      recordsChecked: stays.length,
+      status: stayIssues === 0 ? 'PASS' : 'FAIL',
+      issues: stayIssues,
+    });
+  } catch (error) {
+    checks.push({ name: 'Hostel Stays & Lifecycle', status: 'FAIL', issues: 1, message: error.message });
+  }
+
+  // 8. Security Deposits & Clearances Domain
+  try {
+    const accounts = await db.collection('hostel_deposit_accounts').find({}).toArray();
+    const transactions = await db.collection('hostel_deposit_transactions').find({}).toArray();
+    const clearances = await db.collection('hostel_clearances').find({}).toArray();
+    let depositIssues = 0;
+
+    const accountMap = new Map();
+    for (const a of accounts) {
+      accountMap.set(a.stayId, a);
+      if (typeof a.expectedDepositPaise !== 'number' || a.expectedDepositPaise < 0) {
+        issues.push(`[hostel_deposit_accounts] Invalid expectedDepositPaise in account ${a.depositAccountId}`);
+        depositIssues++;
+      }
+    }
+
+    // Ledger balance verification per stay
+    const totalsByStay = new Map();
+    for (const tx of transactions) {
+      if (typeof tx.amountPaise !== 'number' || tx.amountPaise <= 0 || !Number.isInteger(tx.amountPaise)) {
+        issues.push(`[hostel_deposit_transactions] Non-positive or non-integer amount in tx ${tx.depositTransactionId}`);
+        depositIssues++;
+      }
+
+      if (tx.status === 'posted') {
+        const current = totalsByStay.get(tx.stayId) || { received: 0, refunded: 0, deducted: 0 };
+        if (tx.type === 'received') current.received += tx.amountPaise;
+        else if (tx.type === 'refunded') current.refunded += tx.amountPaise;
+        else if (tx.type === 'deducted') current.deducted += tx.amountPaise;
+        totalsByStay.set(tx.stayId, current);
+      }
+    }
+
+    for (const [stayId, totals] of totalsByStay.entries()) {
+      const held = totals.received - totals.refunded - totals.deducted;
+      if (held < 0) {
+        issues.push(`[hostel_deposit_transactions] Negative held balance (${held}) in stay ${stayId}`);
+        depositIssues++;
+      }
+    }
+
+    const seenClearanceKeys = new Set();
+    for (const c of clearances) {
+      const key = `${c.stayId}:${c.sequence}`;
+      if (seenClearanceKeys.has(key)) {
+        issues.push(`[hostel_clearances] Duplicate clearance sequence ${c.sequence} for stay ${c.stayId}`);
+        depositIssues++;
+      }
+      seenClearanceKeys.add(key);
+
+      if (c.clearanceStatus === 'no_dues' && c.depositSummary?.heldPaise > 0) {
+        issues.push(`[hostel_clearances] No-Dues clearance ${c.clearanceId} has unrefunded deposit (${c.depositSummary.heldPaise})`);
+        depositIssues++;
+      }
+    }
+
+    checks.push({
+      name: 'Security Deposits & Clearances',
+      recordsChecked: accounts.length + transactions.length + clearances.length,
+      status: depositIssues === 0 ? 'PASS' : 'FAIL',
+      issues: depositIssues,
+    });
+  } catch (error) {
+    checks.push({ name: 'Security Deposits & Clearances', status: 'FAIL', issues: 1, message: error.message });
+  }
+
   const overallPassed = checks.every((c) => c.status === 'PASS');
   return { passed: overallPassed, checks, issues };
 }

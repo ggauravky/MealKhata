@@ -68,4 +68,7 @@ export const api = {
       body: JSON.stringify(body),
     });
   },
+  delete(path, options) {
+    return request(path, { ...options, method: 'DELETE' });
+  },
 };

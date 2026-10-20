@@ -461,10 +461,9 @@ export class ExpenseService {
     return serializeReimbursement(updated);
   }
 
-  /**
-   * Get member-specific expense summary for a month.
-   */
-  async getMemberExpenseSummary(month, memberId) {
+  async getMemberExpenseSummary(arg1, arg2) {
+    const month = isValidLogicalMonth(arg1) ? arg1 : arg2;
+    const memberId = isValidLogicalMonth(arg1) ? arg2 : arg1;
     if (!isValidLogicalMonth(month)) {
       throw new ExpenseDomainError('Month must be in YYYY-MM format.', 400);
     }

@@ -15,6 +15,8 @@ const ReportsPage = lazy(() => import('./pages/ReportsPage.jsx').then((module) =
 const RoomFeesPage = lazy(() => import('./pages/RoomFeesPage.jsx').then((module) => ({ default: module.RoomFeesPage })));
 const ExpensesPage = lazy(() => import('./pages/ExpensesPage.jsx').then((module) => ({ default: module.ExpensesPage })));
 const AdminExpensesPage = lazy(() => import('./pages/AdminExpensesPage.jsx').then((module) => ({ default: module.AdminExpensesPage })));
+const MyStayPage = lazy(() => import('./pages/MyStayPage.jsx').then((module) => ({ default: module.MyStayPage })));
+const AdminStaysPage = lazy(() => import('./pages/AdminStaysPage.jsx').then((module) => ({ default: module.AdminStaysPage })));
 
 export default function App() {
   return (
@@ -27,10 +29,12 @@ export default function App() {
           <Route path="expenses" element={<ExpensesPage />} />
           <Route path="reports" element={<ReportsPage />} />
           <Route path="payments" element={<PaymentsPage />} />
+          <Route path="my-stay" element={<MyStayPage />} />
           <Route element={<ProtectedRoute />}>
             <Route path="admin" element={<AdminPage />} />
             <Route path="admin/room-fees" element={<AdminRoomFeesPage />} />
             <Route path="admin/expenses" element={<AdminExpensesPage />} />
+            <Route path="admin/stays" element={<AdminStaysPage />} />
           </Route>
         </Route>
         <Route path="login" element={<LoginPage />} />

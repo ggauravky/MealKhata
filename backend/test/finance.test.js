@@ -219,7 +219,9 @@ function createMockRoomFees(overrides = {}) {
 
 function createMockExpenses() {
   return {
-    async getMemberExpenseSummary(memberId, month) {
+    async getMemberExpenseSummary(arg1, arg2) {
+      const memberId = ['gaurav', 'nikhil', 'devansh'].includes(arg1) ? arg1 : arg2;
+      const month = ['gaurav', 'nikhil', 'devansh'].includes(arg1) ? arg2 : arg1;
       if (memberId === 'gaurav') {
         return {
           spendingSharePaise: 36000, // ₹360

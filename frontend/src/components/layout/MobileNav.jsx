@@ -113,6 +113,15 @@ export function MobileNav() {
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
 
+            {/* My Hostel Stay */}
+            <DropdownMenuItem
+              onClick={() => navigate('/my-stay')}
+              className="flex items-center gap-2.5 cursor-pointer text-xs font-medium"
+            >
+              <House className="h-4 w-4 text-teal-600 dark:text-teal-400" />
+              <span>My Hostel Stay</span>
+            </DropdownMenuItem>
+
             {/* Payments */}
             <DropdownMenuItem
               onClick={() => navigate('/payments')}
@@ -134,6 +143,13 @@ export function MobileNav() {
             {/* Admin Panel */}
             {canAccessAdmin && (
               <>
+                <DropdownMenuItem
+                  onClick={() => navigate('/admin/stays')}
+                  className="flex items-center gap-2.5 cursor-pointer text-xs font-medium"
+                >
+                  <House className="h-4 w-4 text-teal-600 dark:text-teal-400" />
+                  <span>Hostel Stays Admin</span>
+                </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={() => navigate('/admin/expenses')}
                   className="flex items-center gap-2.5 cursor-pointer text-xs font-medium"
