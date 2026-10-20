@@ -10,6 +10,7 @@ import {
   deriveParticipationStatuses,
   validatePlateAllocation,
 } from './plateAllocation.service.js';
+import { stayRepository } from '../stays/stay.repository.js';
 
 const MAX_CONCURRENT_RETRIES = 12;
 
@@ -20,6 +21,7 @@ function isDuplicateKeyError(error) {
 export function createMealService({
   repository = mealRepository,
   settlements = null,
+  stays = null,
   timezone = env.appTimezone,
 } = {}) {
   return Object.freeze({
@@ -52,6 +54,27 @@ export function createMealService({
     }) {
       if (settlements && (await settlements.isMonthClosed(date.slice(0, 7)))) {
         throw new HttpError(409, 'This month is closed. Reopen the month before changing meals.');
+      }
+
+      if (status === 'taking' && stays) {
+        const activeStay = typeof stays.getActiveStayForMember === 'function'
+          ? await stays.getActiveStayForMember(memberId)
+          : (typeof stays.findActiveStayForMember === 'function' ? await stays.findActiveStayForMember(memberId) : null);
+
+        if (!activeStay) {
+          const memberStays = typeof stays.listStaysForMember === 'function'
+            ? await stays.listStaysForMember(memberId)
+            : (typeof stays.findStaysByMember === 'function' ? await stays.findStaysByMember(memberId) : []);
+
+          const checkedOutStays = (memberStays || []).filter((s) => s.status === 'CHECKED_OUT' && s.actualLeftOn);
+          if (checkedOutStays.length > 0) {
+            checkedOutStays.sort((a, b) => (b.actualLeftOn || '').localeCompare(a.actualLeftOn || ''));
+            const lastStay = checkedOutStays[0];
+            if (date > lastStay.actualLeftOn) {
+              throw new HttpError(400, `Meal participation is blocked after hostel checkout on ${lastStay.actualLeftOn}.`);
+            }
+          }
+        }
       }
 
       const path = getMealPath(mealType, memberId);
@@ -501,4 +524,4 @@ export function createMealService({
   });
 }
 
-export const mealService = createMealService();
+export const mealService = createMealService({ stays: stayRepository });

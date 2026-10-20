@@ -34,6 +34,26 @@ export const roomAssignmentSchema = new mongoose.Schema(
         message: 'effectiveUntilMonth must be in YYYY-MM format or null',
       },
     },
+    effectiveFromDate: {
+      type: String,
+      default: null,
+      validate: {
+        validator(v) {
+          return v === null || /^\d{4}-\d{2}-\d{2}$/.test(v);
+        },
+        message: 'effectiveFromDate must be in YYYY-MM-DD format or null',
+      },
+    },
+    effectiveUntilDate: {
+      type: String,
+      default: null,
+      validate: {
+        validator(v) {
+          return v === null || /^\d{4}-\d{2}-\d{2}$/.test(v);
+        },
+        message: 'effectiveUntilDate must be in YYYY-MM-DD format or null',
+      },
+    },
     assignedAt: {
       type: Date,
       required: true,

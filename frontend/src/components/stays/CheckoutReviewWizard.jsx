@@ -71,10 +71,12 @@ export function CheckoutReviewWizard({
 
     setSubmitting(true);
     try {
+      const isException = hasUnresolvedObligations ? allowWithDues : false;
       await onFinalize({
         actualLeftOn,
-        allowWithDues: hasUnresolvedObligations ? allowWithDues : false,
-        exceptionReason: hasUnresolvedObligations && allowWithDues ? exceptionReason.trim() : undefined,
+        isException,
+        allowWithDues: isException,
+        exceptionReason: isException ? exceptionReason.trim() : undefined,
       });
     } catch (err) {
       setError(err?.message || 'Failed to finalize checkout.');

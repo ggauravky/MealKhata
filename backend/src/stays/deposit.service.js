@@ -112,17 +112,61 @@ export function createDepositService({ repository = stayRepository } = {}) {
         throw new DepositDomainError('Idempotency key required.', 400);
       }
 
-      // 1. Idempotency check: if key already processed, return existing
+      // 1. Idempotency check: if key already processed, return existing or verify identical payload
       const existing = await repository.findDepositTransactionByIdempotencyKey(idempotencyKey.trim());
       if (existing) {
+        if (
+          existing.type !== type ||
+          existing.amountPaise !== amountPaise ||
+          existing.stayId !== stayId
+        ) {
+          throw new DepositDomainError(
+            'Idempotency key has already been used with a different transaction payload.',
+            409,
+          );
+        }
         return existing;
       }
 
-      // Concurrency retry loop for balance check
+      // Check account exists
+      const account = await repository.findDepositAccountByStayId(stayId);
+      if (!account) {
+        throw new DepositDomainError('Deposit account not found for this stay.', 404);
+      }
+
+      // 2. Database-backed atomic transaction execution
+      if (typeof repository.executeAtomicDepositTransaction === 'function') {
+        const transactionId = randomUUID();
+        const txData = {
+          depositTransactionId: transactionId,
+          depositAccountId: account.depositAccountId,
+          stayId,
+          memberId: account.memberId,
+          type,
+          amountPaise,
+          method,
+          reference: reference?.trim() || null,
+          reason: reason?.trim() || null,
+          idempotencyKey: idempotencyKey.trim(),
+          recordedAt: new Date(),
+          recordedByRole: actorRole,
+          status: 'recorded',
+        };
+
+        return repository.executeAtomicDepositTransaction({
+          stayId,
+          type,
+          amountPaise,
+          transactionData: txData,
+          actorRole,
+        });
+      }
+
+      // Fallback concurrency retry loop for balance check
       const maxRetries = 3;
       for (let attempt = 0; attempt < maxRetries; attempt++) {
-        const { account, summary } = await this.getDepositSummary(stayId);
-        if (!account) {
+        const { account: freshAccount, summary } = await this.getDepositSummary(stayId);
+        if (!freshAccount) {
           throw new DepositDomainError('Deposit account not found for this stay.', 404);
         }
 
@@ -142,9 +186,9 @@ export function createDepositService({ repository = stayRepository } = {}) {
 
         // Optimistic locking update on deposit account revision
         const updatedAccount = await repository.updateDepositAccount(
-          account.depositAccountId,
+          freshAccount.depositAccountId,
           {},
-          account.revision,
+          freshAccount.revision,
         );
 
         if (!updatedAccount) {
@@ -156,9 +200,9 @@ export function createDepositService({ repository = stayRepository } = {}) {
         const transactionId = randomUUID();
         const transaction = await repository.createDepositTransaction({
           depositTransactionId: transactionId,
-          depositAccountId: account.depositAccountId,
+          depositAccountId: freshAccount.depositAccountId,
           stayId,
-          memberId: account.memberId,
+          memberId: freshAccount.memberId,
           type,
           amountPaise,
           method,
@@ -171,7 +215,7 @@ export function createDepositService({ repository = stayRepository } = {}) {
         });
 
         // Audit entry
-        await repository.addDepositAccountHistory(account.depositAccountId, {
+        await repository.addDepositAccountHistory(freshAccount.depositAccountId, {
           event: `DEPOSIT_${type}`,
           timestamp: new Date(),
           actorRole,
@@ -182,7 +226,7 @@ export function createDepositService({ repository = stayRepository } = {}) {
         // Update settled status if balance now 0 and stay is checked out
         const postSummary = await this.getDepositSummary(stayId);
         if (postSummary.summary.heldPaise === 0 && postSummary.summary.receivedPaise > 0) {
-          await repository.updateDepositAccount(account.depositAccountId, {
+          await repository.updateDepositAccount(freshAccount.depositAccountId, {
             status: DEPOSIT_ACCOUNT_STATUSES.SETTLED,
           });
         }
@@ -206,9 +250,9 @@ export function createDepositService({ repository = stayRepository } = {}) {
 
       const tx = await repository.findDepositTransactionById(depositTransactionId);
       if (!tx || (stayId && tx.stayId !== stayId)) {
-        throw new DepositDomainError('Deposit transaction not found.', 404);
+        throw new DepositDomainError('Deposit transaction not found or does not belong to this stay.', 404);
       }
-      const targetStayId = stayId || tx.stayId;
+      const targetStayId = tx.stayId || stayId;
 
       if (tx.status === 'voided') {
         throw new DepositDomainError('Deposit transaction is already voided.', 400);
@@ -231,8 +275,8 @@ export function createDepositService({ repository = stayRepository } = {}) {
         voidedAt: new Date(),
       });
 
-      // Audit entry on deposit account
-      const account = await repository.findDepositAccountByStayId(stayId);
+      // Audit entry on deposit account using authoritative targetStayId
+      const account = await repository.findDepositAccountByStayId(targetStayId);
       if (account) {
         await repository.addDepositAccountHistory(account.depositAccountId, {
           event: 'DEPOSIT_TRANSACTION_VOIDED',

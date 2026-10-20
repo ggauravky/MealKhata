@@ -503,7 +503,6 @@ export function createMonthlyFinancialPdfService({
             width: 761.89,
             align: 'center',
           });
-        rRowY += 30;
       } else {
         for (const rc of roomCharges) {
           doc.rect(40, rRowY, 761.89, 22).fillAndStroke(COLORS.white, COLORS.borderLight);

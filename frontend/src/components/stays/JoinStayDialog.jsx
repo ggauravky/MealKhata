@@ -25,7 +25,7 @@ export function JoinStayDialog({
   const [rooms, setRooms] = useState([]);
   const [initialRoomId, setInitialRoomId] = useState('');
   const [rentRupees, setRentRupees] = useState('');
-  const [expectedDepositRupees, setExpectedDepositRupees] = useState('5000');
+  const [expectedDepositRupees, setExpectedDepositRupees] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
@@ -35,7 +35,7 @@ export function JoinStayDialog({
       .then((res) => setRooms(res.data || []))
       .catch(() => setRooms([]));
 
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
     setJoinedOn(todayStr);
     setError('');
   }, [open]);
@@ -50,14 +50,15 @@ export function JoinStayDialog({
     setSubmitting(true);
     setError('');
     try {
-      const monthlyRentPaise = rentRupees ? rupeesToPaise(rentRupees) : undefined;
+      const monthlyFeePaise = rentRupees ? rupeesToPaise(rentRupees) : undefined;
       const expectedDepositPaise = expectedDepositRupees ? rupeesToPaise(expectedDepositRupees) : 0;
 
       await onSubmitStay({
         memberId,
         joinedOn,
         initialRoomId,
-        monthlyRentPaise,
+        monthlyFeePaise,
+        monthlyRentPaise: monthlyFeePaise,
         expectedDepositPaise,
       });
 
@@ -164,7 +165,7 @@ export function JoinStayDialog({
               <Input
                 id="stayDeposit"
                 type="number"
-                placeholder="e.g. 5000"
+                placeholder="Enter amount if applicable (e.g. 5000)"
                 value={expectedDepositRupees}
                 onChange={(e) => setExpectedDepositRupees(e.target.value)}
                 className="text-xs"

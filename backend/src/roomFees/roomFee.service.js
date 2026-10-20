@@ -162,9 +162,19 @@ export function createRoomFeeService({
     },
 
     // --- Room Assignments ---
-    async assignMemberToRoom({ memberId, roomId, effectiveFromMonth, effectiveUntilMonth = null, actorRole }) {
+    async assignMemberToRoom({
+      memberId,
+      roomId,
+      effectiveFromMonth: rawFromMonth,
+      effectiveUntilMonth = null,
+      effectiveFromDate = null,
+      effectiveUntilDate = null,
+      actorRole,
+      isAdmission = false,
+    }) {
+      const effectiveFromMonth = rawFromMonth || (effectiveFromDate ? effectiveFromDate.slice(0, 7) : null);
       const currentMonth = getCurrentMonth();
-      if (!canAssignRooms({ role: actorRole, effectiveFromMonth, currentMonth })) {
+      if (!isAdmission && !canAssignRooms({ role: actorRole, effectiveFromMonth, currentMonth })) {
         throw new HttpError(403, 'Permission denied to assign rooms for this period.');
       }
 
@@ -189,13 +199,28 @@ export function createRoomFeeService({
         throw new HttpError(400, 'effectiveUntilMonth cannot be earlier than effectiveFromMonth.');
       }
 
-      // Check member's existing assignments for overlap
+      // 1. Room capacity check for target month FIRST before modifying any assignments!
+      const roomAssignments = await repository.findAssignmentsForRoom(roomId);
+      const activeInMonth = roomAssignments.filter((a) => {
+        const from = a.effectiveFromMonth;
+        const until = a.effectiveUntilMonth;
+        return from <= effectiveFromMonth && (!until || until >= effectiveFromMonth);
+      });
+
+      if (activeInMonth.length >= room.capacity) {
+        throw new HttpError(409, `Room ${room.roomNumber} is at maximum capacity (${room.capacity}) for ${effectiveFromMonth}.`);
+      }
+
+      // 2. Check member's existing assignments for overlap and auto-cap open-ended past assignments
       const memberAssignments = await repository.findAssignmentsForMember(memberId);
       for (const a of memberAssignments) {
         // If an open-ended assignment exists starting before the new one, we auto-cap it
         if (!a.effectiveUntilMonth && compareLogicalMonths(a.effectiveFromMonth, effectiveFromMonth) < 0) {
           const cappedUntil = getPreviousLogicalMonth(effectiveFromMonth);
-          await repository.updateAssignment(a.assignmentId, { effectiveUntilMonth: cappedUntil });
+          await repository.updateAssignment(a.assignmentId, {
+            effectiveUntilMonth: cappedUntil,
+            effectiveUntilDate: effectiveFromDate ? `${cappedUntil}-28` : null,
+          });
           continue;
         }
 
@@ -214,18 +239,6 @@ export function createRoomFeeService({
         }
       }
 
-      // Room capacity check for target month
-      const roomAssignments = await repository.findAssignmentsForRoom(roomId);
-      const activeInMonth = roomAssignments.filter((a) => {
-        const from = a.effectiveFromMonth;
-        const until = a.effectiveUntilMonth;
-        return from <= effectiveFromMonth && (!until || until >= effectiveFromMonth);
-      });
-
-      if (activeInMonth.length >= room.capacity) {
-        throw new HttpError(409, `Room ${room.roomNumber} is at maximum capacity (${room.capacity}) for ${effectiveFromMonth}.`);
-      }
-
       const assignmentId = randomUUID();
       const assignment = await repository.createAssignment({
         assignmentId,
@@ -233,6 +246,8 @@ export function createRoomFeeService({
         memberId,
         effectiveFromMonth,
         effectiveUntilMonth,
+        effectiveFromDate,
+        effectiveUntilDate,
         assignedAt: now(),
         assignedByRole: actorRole,
       });
@@ -272,7 +287,7 @@ export function createRoomFeeService({
     async endActiveRoomAssignment({ memberId, endMonth }) {
       const assignments = await repository.findAssignmentsForMember(memberId);
       for (const a of assignments) {
-        if (!a.effectiveUntilMonth || a.effectiveUntilMonth > endMonth) {
+        if (a.effectiveFromMonth <= endMonth && (!a.effectiveUntilMonth || a.effectiveUntilMonth > endMonth)) {
           await repository.updateAssignment(a.assignmentId, { effectiveUntilMonth: endMonth });
         }
       }
@@ -288,9 +303,10 @@ export function createRoomFeeService({
       dueDay = DEFAULT_DUE_DAY,
       reason = null,
       actorRole,
+      isAdmission = false,
     }) {
       const currentMonth = getCurrentMonth();
-      if (!canManageFeePlans({ role: actorRole, effectiveFromMonth, currentMonth })) {
+      if (!isAdmission && !canManageFeePlans({ role: actorRole, effectiveFromMonth, currentMonth })) {
         throw new HttpError(403, 'Permission denied to manage fee plans for this period.');
       }
 
@@ -1002,4 +1018,3 @@ export function createRoomFeeService({
 
 import { roomRepository } from './room.repository.js';
 export const roomFeeService = createRoomFeeService({ repository: roomRepository });
-

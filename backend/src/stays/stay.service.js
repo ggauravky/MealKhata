@@ -5,7 +5,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { MEMBER_IDS } from '../config/members.js';
-import { isValidLogicalDate } from '../utils/date.js';
+import { isValidLogicalDate, getLogicalDateInTimeZone } from '../utils/date.js';
 import { isValidLogicalMonth } from '../utils/month.js';
 import { roomFeeService } from '../roomFees/roomFee.service.js';
 import { financialOverviewService } from '../finance/financialOverview.service.js';
@@ -15,8 +15,27 @@ import {
   CLEARANCE_STATUSES,
   DEPOSIT_ACCOUNT_STATUSES,
   DEPOSIT_HOLDER_TYPES,
+  MAX_DEPOSIT_PAISE,
   STAY_STATUSES,
 } from './stay.constants.js';
+
+function getMonthsRange(startMonth, endMonth) {
+  const months = [];
+  let current = startMonth;
+  while (current <= endMonth) {
+    months.push(current);
+    const [yStr, mStr] = current.split('-');
+    let y = parseInt(yStr, 10);
+    let m = parseInt(mStr, 10);
+    m += 1;
+    if (m > 12) {
+      m = 1;
+      y += 1;
+    }
+    current = `${y}-${String(m).padStart(2, '0')}`;
+  }
+  return months;
+}
 
 export class StayDomainError extends Error {
   constructor(message, statusCode = 400, details = {}) {
@@ -42,10 +61,12 @@ export function createStayService({
       joinedOn,
       expectedLeaveOn = null,
       initialRoomId,
-      monthlyFeePaise = null,
+      monthlyFeePaise: rawMonthlyFee = null,
+      monthlyRatePaise = null,
       expectedDepositPaise = 0,
       actorRole,
     }) {
+      const monthlyFeePaise = rawMonthlyFee ?? monthlyRatePaise ?? null;
       if (!MEMBER_IDS.includes(memberId)) {
         throw new StayDomainError(`Invalid member ID: ${memberId}`, 400);
       }
@@ -61,6 +82,18 @@ export function createStayService({
       if (!initialRoomId || !initialRoomId.trim()) {
         throw new StayDomainError('Initial room is required.', 400);
       }
+      if (
+        expectedDepositPaise !== undefined &&
+        expectedDepositPaise !== null &&
+        (!Number.isInteger(expectedDepositPaise) || expectedDepositPaise < 0 || expectedDepositPaise > MAX_DEPOSIT_PAISE)
+      ) {
+        throw new StayDomainError('Invalid expected security deposit amount.', 400);
+      }
+      if (monthlyFeePaise !== null && monthlyFeePaise !== undefined) {
+        if (!Number.isInteger(monthlyFeePaise) || monthlyFeePaise <= 0) {
+          throw new StayDomainError('Monthly fee must be a positive integer in paise.', 400);
+        }
+      }
 
       // Invariant: At most ONE active or pending stay per member!
       const activeStay = await repository.findActiveStayForMember(memberId);
@@ -72,81 +105,95 @@ export function createStayService({
         );
       }
 
+      const joinMonth = joinedOn.slice(0, 7);
       const stayId = randomUUID();
       const depositAccountId = randomUUID();
-      const joinMonth = joinedOn.slice(0, 7);
 
-      // 1. Create HostelStay record
-      const stay = await repository.createStay({
-        stayId,
-        memberId,
-        joinedOn,
-        expectedLeaveOn: expectedLeaveOn || null,
-        actualLeftOn: null,
-        status: STAY_STATUSES.ACTIVE,
-        initialRoomId: initialRoomId.trim(),
-        currentRoomId: initialRoomId.trim(),
-        history: [
-          {
-            event: 'STAY_CREATED',
-            timestamp: new Date(),
-            actorRole,
-            note: `Hostel stay created from ${joinedOn} in Room ${initialRoomId}`,
-            details: { initialRoomId, monthlyFeePaise, expectedDepositPaise },
-          },
-        ],
-      });
+      // Transactional onboarding: assign room first, then create stay & deposit, then fee plan
+      let createdAssignment = null;
+      let createdStay = null;
+      let createdDepositAccount = null;
+      let createdFeePlan = null;
 
-      // 2. Create associated Security Deposit Account
-      await repository.createDepositAccount({
-        depositAccountId,
-        stayId,
-        memberId,
-        expectedDepositPaise: Number.isInteger(expectedDepositPaise) && expectedDepositPaise >= 0
-          ? expectedDepositPaise
-          : 0,
-        holderType: DEPOSIT_HOLDER_TYPES.ADMIN_COLLECTOR,
-        holderName: 'Hostel Administration',
-        status: DEPOSIT_ACCOUNT_STATUSES.OPEN,
-        history: [
-          {
-            event: 'DEPOSIT_ACCOUNT_OPENED',
-            timestamp: new Date(),
-            actorRole,
-            note: `Deposit account initialized for stay ${stayId}`,
-            details: { expectedDepositPaise },
-          },
-        ],
-      });
-
-      // 3. Link Room Assignment if supported
       try {
-        await roomFees.assignMemberToRoom({
-          roomId: initialRoomId.trim(),
-          memberId,
-          effectiveFromMonth: joinMonth,
-          actorRole,
-        });
-      } catch (err) {
-        // If room is already assigned or needs manual config, record warning note
-      }
+        if (roomFees && typeof roomFees.assignMemberToRoom === 'function') {
+          createdAssignment = await roomFees.assignMemberToRoom({
+            roomId: initialRoomId.trim(),
+            memberId,
+            effectiveFromMonth: joinMonth,
+            effectiveFromDate: joinedOn,
+            actorRole,
+            isAdmission: true,
+          });
+        }
 
-      // 4. Configure initial fee plan if specified
-      if (Number.isInteger(monthlyFeePaise) && monthlyFeePaise > 0) {
-        try {
-          await roomFees.createFeePlan({
+        createdStay = await repository.createStay({
+          stayId,
+          memberId,
+          joinedOn,
+          expectedLeaveOn: expectedLeaveOn || null,
+          actualLeftOn: null,
+          status: STAY_STATUSES.ACTIVE,
+          initialRoomId: initialRoomId.trim(),
+          currentRoomId: initialRoomId.trim(),
+          history: [
+            {
+              event: 'STAY_CREATED',
+              timestamp: new Date(),
+              actorRole,
+              note: `Hostel stay created from ${joinedOn} in Room ${initialRoomId}`,
+              details: { initialRoomId, monthlyFeePaise, expectedDepositPaise: expectedDepositPaise || 0 },
+            },
+          ],
+        });
+
+        createdDepositAccount = await repository.createDepositAccount({
+          depositAccountId,
+          stayId,
+          memberId,
+          expectedDepositPaise: expectedDepositPaise || 0,
+          holderType: DEPOSIT_HOLDER_TYPES.ADMIN_COLLECTOR,
+          holderName: 'Hostel Administration',
+          status: DEPOSIT_ACCOUNT_STATUSES.OPEN,
+          history: [
+            {
+              event: 'DEPOSIT_ACCOUNT_OPENED',
+              timestamp: new Date(),
+              actorRole,
+              note: `Deposit account initialized for stay ${stayId}`,
+              details: { expectedDepositPaise: expectedDepositPaise || 0 },
+            },
+          ],
+        });
+
+        if (monthlyFeePaise && roomFees && typeof roomFees.createFeePlan === 'function') {
+          createdFeePlan = await roomFees.createFeePlan({
             memberId,
             effectiveFromMonth: joinMonth,
             amountPaise: monthlyFeePaise,
             reason: `Initial fee plan on admission in Room ${initialRoomId}`,
             actorRole,
+            isAdmission: true,
           });
-        } catch (err) {
-          // preserve fee plan exception without aborting stay
         }
-      }
 
-      return stay;
+        return createdStay;
+      } catch (err) {
+        // Rollback all created entities on failure
+        if (createdFeePlan?.feePlanId && typeof roomFees?.deleteFeePlan === 'function') {
+          try { await roomFees.deleteFeePlan(createdFeePlan.feePlanId); } catch (_err) { /* rollback best-effort */ }
+        }
+        if (createdDepositAccount && typeof repository?.deleteDepositAccount === 'function') {
+          try { await repository.deleteDepositAccount(depositAccountId); } catch (_err) { /* rollback best-effort */ }
+        }
+        if (createdStay && typeof repository?.deleteStay === 'function') {
+          try { await repository.deleteStay(stayId); } catch (_err) { /* rollback best-effort */ }
+        }
+        if (createdAssignment?.assignmentId && typeof roomFees?.deleteAssignment === 'function') {
+          try { await roomFees.deleteAssignment(createdAssignment.assignmentId, 'superadmin'); } catch (_err) { /* rollback best-effort */ }
+        }
+        throw err;
+      }
     },
 
     /**
@@ -291,9 +338,14 @@ export function createStayService({
       newRoomId,
       effectiveDate,
       newMonthlyRatePaise = null,
+      monthlyFeePaise = null,
       reason = null,
       actorRole,
     }) {
+      const finalMonthlyRate = monthlyFeePaise ?? newMonthlyRatePaise ?? null;
+      if (actorRole !== 'admin' && actorRole !== 'superadmin') {
+        throw new StayDomainError('Only administrators can perform room transfers.', 403);
+      }
       const stay = await this.getStayById(stayId);
       if (stay.status === STAY_STATUSES.CHECKED_OUT) {
         throw new StayDomainError('Cannot transfer a member who is already checked out.', 400);
@@ -310,34 +362,88 @@ export function createStayService({
       if (effectiveDate < stay.joinedOn) {
         throw new StayDomainError('Transfer date cannot precede admission date.', 400);
       }
+      if (finalMonthlyRate !== null && (!Number.isInteger(finalMonthlyRate) || finalMonthlyRate <= 0)) {
+        throw new StayDomainError('Monthly fee must be a positive integer in paise.', 400);
+      }
 
       const transferMonth = effectiveDate.slice(0, 7);
       const oldRoomId = stay.currentRoomId || stay.initialRoomId;
 
-      // Assign to new room via roomFeeService (enforces room capacity)
-      await roomFees.assignMemberToRoom({
-        roomId: newRoomId.trim(),
-        memberId: stay.memberId,
-        effectiveFromMonth: transferMonth,
-        actorRole,
-      });
-
-      // Update fee plan if provided
-      if (Number.isInteger(newMonthlyRatePaise) && newMonthlyRatePaise > 0) {
-        await roomFees.createFeePlan({
+      let newAssignment = null;
+      let newPlan = null;
+      try {
+        // 1. Assign to new room via roomFeeService (which validates capacity BEFORE modifying old assignments)
+        newAssignment = await roomFees.assignMemberToRoom({
+          roomId: newRoomId.trim(),
           memberId: stay.memberId,
           effectiveFromMonth: transferMonth,
-          amountPaise: newMonthlyRatePaise,
-          reason: `Updated rate upon room transfer from Room ${oldRoomId} to ${newRoomId}`,
+          effectiveFromDate: effectiveDate,
           actorRole,
         });
+
+        // 2. Update fee plan if provided
+        if (Number.isInteger(finalMonthlyRate) && finalMonthlyRate > 0) {
+          newPlan = await roomFees.createFeePlan({
+            memberId: stay.memberId,
+            effectiveFromMonth: transferMonth,
+            amountPaise: finalMonthlyRate,
+            reason: `Updated rate upon room transfer from Room ${oldRoomId} to ${newRoomId}`,
+            actorRole,
+          });
+        }
+
+        // 3. Update stay currentRoomId
+        const updated = await repository.updateStay(
+          stayId,
+          {
+            currentRoomId: newRoomId.trim(),
+          },
+          stay.revision,
+        );
+
+        if (!updated) {
+          throw new StayDomainError('Stay modified concurrently. Please retry.', 409);
+        }
+
+        await repository.addStayHistory(stayId, {
+          event: 'ROOM_TRANSFERRED',
+          timestamp: new Date(),
+          actorRole,
+          note: `Transferred from Room ${oldRoomId} to Room ${newRoomId} effective ${effectiveDate}${reason ? `: ${reason}` : ''}`,
+          details: { oldRoomId, newRoomId, effectiveDate, newMonthlyRatePaise: finalMonthlyRate },
+        });
+
+        return updated;
+      } catch (err) {
+        // Rollback any partial updates
+        if (newPlan?.feePlanId && typeof roomFees?.deleteFeePlan === 'function') {
+          try { await roomFees.deleteFeePlan(newPlan.feePlanId); } catch (_err) { /* rollback best-effort */ }
+        }
+        if (newAssignment?.assignmentId && typeof roomFees?.deleteAssignment === 'function') {
+          try { await roomFees.deleteAssignment(newAssignment.assignmentId, 'superadmin'); } catch (_err) { /* rollback best-effort */ }
+        }
+        throw err;
+      }
+    },
+
+    /**
+     * Initiate checkout review (transitions CHECKOUT_REQUESTED -> CHECKOUT_PENDING)
+     */
+    async initiateCheckoutReview({ stayId, actorRole }) {
+      if (actorRole !== 'admin' && actorRole !== 'superadmin') {
+        throw new StayDomainError('Only administrators can initiate checkout review.', 403);
+      }
+      const stay = await this.getStayById(stayId);
+      if (stay.status !== STAY_STATUSES.CHECKOUT_REQUESTED && stay.status !== STAY_STATUSES.ACTIVE) {
+        throw new StayDomainError(`Cannot initiate checkout review from status: ${stay.status}`, 400);
       }
 
-      // Update stay
       const updated = await repository.updateStay(
         stayId,
         {
-          currentRoomId: newRoomId.trim(),
+          status: STAY_STATUSES.CHECKOUT_PENDING,
+          checkoutReviewInitiatedAt: new Date(),
+          checkoutReviewInitiatedByRole: actorRole,
         },
         stay.revision,
       );
@@ -347,11 +453,11 @@ export function createStayService({
       }
 
       await repository.addStayHistory(stayId, {
-        event: 'ROOM_TRANSFERRED',
+        event: 'CHECKOUT_REVIEW_INITIATED',
         timestamp: new Date(),
         actorRole,
-        note: `Transferred from Room ${oldRoomId} to Room ${newRoomId} effective ${effectiveDate}${reason ? `: ${reason}` : ''}`,
-        details: { oldRoomId, newRoomId, effectiveDate, newMonthlyRatePaise },
+        note: `Checkout review initiated by ${actorRole}`,
+        details: { previousStatus: stay.status, newStatus: STAY_STATUSES.CHECKOUT_PENDING },
       });
 
       return updated;
@@ -383,63 +489,157 @@ export function createStayService({
     },
 
     /**
-     * Get 5-step Checkout Review data
+     * Get 5-step Checkout Review data across all attributable stay months
      */
     async getCheckoutReview(stayId) {
       const stay = await this.getStayById(stayId);
       const memberId = stay.memberId;
-      const currentMonth = new Date().toISOString().slice(0, 7);
+      const currentMonth = getLogicalDateInTimeZone(new Date(), 'Asia/Kolkata').slice(0, 7);
+      const startMonth = stay.joinedOn.slice(0, 7);
+      const endMonth = stay.actualLeftOn ? (stay.actualLeftOn.slice(0, 7) > currentMonth ? stay.actualLeftOn.slice(0, 7) : currentMonth) : currentMonth;
 
-      // 1. Live unified financial overview
-      const financeOverview = await finance.getMemberFinancialOverview({
-        memberId,
-        month: currentMonth,
-        actorRole: 'admin',
-      });
+      const months = getMonthsRange(startMonth, endMonth);
+      const monthlyOverviews = [];
 
-      // 2. Deposit status
-      const depositOverview = await deposits.getDepositSummary(stayId);
-
-      // 3. Compile outstanding obligations
-      const outstandingObligations = [];
-      if (financeOverview.mess.remainingPaise > 0) {
-        outstandingObligations.push({
-          domain: 'MESS',
-          title: 'Hostel Mess Bills',
-          amountPaise: financeOverview.mess.remainingPaise,
-          toRecipient: 'Hostel Kitchen / Mess Fund',
-        });
-      }
-      if (financeOverview.room.remainingPaise > 0) {
-        outstandingObligations.push({
-          domain: 'ROOM_FEES',
-          title: 'Monthly Room Fees',
-          amountPaise: financeOverview.room.remainingPaise,
-          toRecipient: 'Hostel Administration',
-        });
-      }
-      if (financeOverview.expenses.owedToOthersPaise > 0) {
-        for (const debt of financeOverview.expenses.debtsOwed || []) {
-          outstandingObligations.push({
-            domain: 'OTHER_EXPENSES',
-            title: `Reimbursement to ${debt.toMemberId}: ${debt.title}`,
-            amountPaise: debt.amountPaise,
-            toRecipient: debt.toMemberId,
+      for (const month of months) {
+        try {
+          const overview = await finance.getMemberFinancialOverview({
+            memberId,
+            month,
+            actorRole: 'admin',
           });
+          monthlyOverviews.push(overview);
+        } catch (err) {
+          throw new StayDomainError(`Failed to load authoritative financial overview for ${month} during checkout review.`, 500);
         }
       }
 
-      const totalOutstandingPayablePaise = financeOverview.combined.outstandingPayablePaise;
-      const isEligibleForNoDues =
-        totalOutstandingPayablePaise === 0 && depositOverview.summary.heldPaise === 0;
+      // Live deposit overview
+      const depositOverview = await deposits.getDepositSummary(stayId);
+      const depositHeldPaise = depositOverview?.summary?.heldPaise || 0;
+
+      // Compile stay-wide outstanding obligations across all months
+      const outstandingObligations = [];
+      let totalMessBilledPaise = 0;
+      let totalMessPaidPaise = 0;
+      let totalMessRemainingPaise = 0;
+
+      let totalRoomBilledPaise = 0;
+      let totalRoomPaidPaise = 0;
+      let totalRoomRemainingPaise = 0;
+
+      let totalExpenseSharePaise = 0;
+      let totalExpenseOwedPaise = 0;
+      let totalExpenseReceivablePaise = 0;
+
+      for (const ov of monthlyOverviews) {
+        totalMessBilledPaise += ov.mess?.billPaise || 0;
+        totalMessPaidPaise += ov.mess?.paidPaise || 0;
+        totalMessRemainingPaise += ov.mess?.remainingPaise || 0;
+
+        if (ov.mess?.remainingPaise > 0) {
+          outstandingObligations.push({
+            domain: 'MESS',
+            month: ov.month,
+            title: `Hostel Mess Bill (${ov.month})`,
+            amountPaise: ov.mess.remainingPaise,
+            toRecipient: 'Hostel Kitchen / Mess Fund',
+          });
+        }
+
+        if (ov.room?.chargeIssued || (ov.room?.remainingPaise && ov.room.remainingPaise > 0) || (ov.room?.issuedChargePaise && ov.room.issuedChargePaise > 0)) {
+          totalRoomBilledPaise += ov.room?.issuedChargePaise || 0;
+          totalRoomPaidPaise += ov.room?.paidPaise || 0;
+          totalRoomRemainingPaise += ov.room?.remainingPaise || 0;
+
+          if (ov.room?.remainingPaise > 0) {
+            outstandingObligations.push({
+              domain: 'ROOM_FEES',
+              month: ov.month,
+              title: `Monthly Room Fee (${ov.month})`,
+              amountPaise: ov.room.remainingPaise,
+              toRecipient: 'Hostel Administration',
+            });
+          }
+        }
+
+        totalExpenseSharePaise += ov.expenses?.spendingSharePaise || 0;
+        totalExpenseOwedPaise += ov.expenses?.owedToOthersPaise || 0;
+        totalExpenseReceivablePaise += ov.expenses?.owedToMePaise || 0;
+
+        if (ov.expenses?.debtsOwed && Array.isArray(ov.expenses.debtsOwed)) {
+          for (const debt of ov.expenses.debtsOwed) {
+            if (debt.amountPaise > 0) {
+              outstandingObligations.push({
+                domain: 'OTHER_EXPENSES',
+                month: ov.month,
+                title: `Reimbursement to ${debt.toMemberId}: ${debt.title || 'Shared Expense'} (${ov.month})`,
+                amountPaise: debt.amountPaise,
+                toRecipient: debt.toMemberId,
+              });
+            }
+          }
+        }
+      }
+
+      if (depositHeldPaise > 0) {
+        outstandingObligations.push({
+          domain: 'SECURITY_DEPOSIT',
+          title: 'Unrefunded Security Deposit Held',
+          amountPaise: depositHeldPaise,
+          toRecipient: `Resident Member (${memberId})`,
+        });
+      }
+
+      const totalOutstandingPayablePaise =
+        totalMessRemainingPaise + totalRoomRemainingPaise + totalExpenseOwedPaise;
+
+      // Invariant: NO_DUES is allowed ONLY when all relevant outstanding obligations = 0 AND deposit obligations are resolved
+      const isEligibleForNoDues = totalOutstandingPayablePaise === 0 && depositHeldPaise === 0;
+
+      const currentOverview = monthlyOverviews.find((m) => m.month === currentMonth) || monthlyOverviews[monthlyOverviews.length - 1];
 
       return {
         stay,
-        financialOverview: financeOverview,
+        financialOverview: {
+          ...currentOverview,
+          mess: {
+            ...currentOverview?.mess,
+            billPaise: totalMessBilledPaise,
+            paidPaise: totalMessPaidPaise,
+            remainingPaise: totalMessRemainingPaise,
+          },
+          room: {
+            ...currentOverview?.room,
+            issuedChargePaise: totalRoomBilledPaise,
+            paidPaise: totalRoomPaidPaise,
+            remainingPaise: totalRoomRemainingPaise,
+          },
+          expenses: {
+            ...currentOverview?.expenses,
+            spendingSharePaise: totalExpenseSharePaise,
+            owedToOthersPaise: totalExpenseOwedPaise,
+            owedToMePaise: totalExpenseReceivablePaise,
+          },
+          combined: {
+            ...currentOverview?.combined,
+            outstandingPayablePaise: totalOutstandingPayablePaise,
+          },
+        },
+        monthlyOverviews,
+        totalMessBilledPaise,
+        totalMessPaidPaise,
+        totalMessRemainingPaise,
+        totalRoomBilledPaise,
+        totalRoomPaidPaise,
+        totalRoomRemainingPaise,
+        totalExpenseSharePaise,
+        totalExpenseOwedPaise,
+        totalExpenseReceivablePaise,
         depositOverview,
         outstandingObligations,
         totalOutstandingPayablePaise,
-        depositHeldPaise: depositOverview.summary.heldPaise,
+        depositHeldPaise,
         isEligibleForNoDues,
       };
     },
@@ -450,6 +650,8 @@ export function createStayService({
     async finalizeCheckout({
       stayId,
       actualLeftOn,
+      isException = false,
+      allowWithDues = false,
       exceptionReason = null,
       actorRole,
     }) {
@@ -464,7 +666,9 @@ export function createStayService({
         throw new StayDomainError('Departure date cannot precede joining date.', 400);
       }
 
-      // Review live obligations
+      const explicitException = Boolean(isException || allowWithDues);
+
+      // Review stay-wide obligations
       const review = await this.getCheckoutReview(stayId);
 
       // If obligations or unrefunded deposit remain, only Super Admin can override
@@ -475,6 +679,12 @@ export function createStayService({
             'Cannot finalize checkout with pending dues or unrefunded deposit. Super Admin approval required.',
             403,
             { totalOutstandingPayablePaise: review.totalOutstandingPayablePaise },
+          );
+        }
+        if (!explicitException) {
+          throw new StayDomainError(
+            'Departure with unresolved obligations requires explicit exception authorization (isException: true).',
+            400,
           );
         }
         if (!exceptionReason || !exceptionReason.trim()) {
@@ -489,38 +699,10 @@ export function createStayService({
       const sequence = await repository.getNextClearanceSequence(stayId);
       const clearanceId = randomUUID();
 
-      // 1. Create Immutable Clearance Snapshot
-      const clearance = await repository.createClearance({
-        clearanceId,
-        stayId,
+      // 1. End active room assignment and release capacity
+      await roomFees.endActiveRoomAssignment({
         memberId: stay.memberId,
-        sequence,
-        snapshotVersion: 1,
-        joinedOn: stay.joinedOn,
-        actualLeftOn,
-        lastRoomId: stay.currentRoomId || stay.initialRoomId,
-        financialAsOf: new Date(),
-        messSummary: {
-          billPaise: review.financialOverview.mess.billPaise,
-          paidPaise: review.financialOverview.mess.paidPaise,
-          remainingPaise: review.financialOverview.mess.remainingPaise,
-        },
-        roomFeeSummary: {
-          issuedChargePaise: review.financialOverview.room.issuedChargePaise,
-          paidPaise: review.financialOverview.room.paidPaise,
-          remainingPaise: review.financialOverview.room.remainingPaise,
-        },
-        expenseSummary: {
-          spendingSharePaise: review.financialOverview.expenses.spendingSharePaise,
-          owedToOthersPaise: review.financialOverview.expenses.owedToOthersPaise,
-          owedToMePaise: review.financialOverview.expenses.owedToMePaise,
-        },
-        depositSummary: review.depositOverview.summary,
-        outstandingObligations: review.outstandingObligations,
-        clearanceStatus,
-        exceptionReason: exceptionReason?.trim() || null,
-        finalizedAt: new Date(),
-        finalizedByRole: actorRole,
+        endMonth: actualLeftOn.slice(0, 7),
       });
 
       // 2. Transition Stay to CHECKED_OUT
@@ -535,15 +717,43 @@ export function createStayService({
         stay.revision,
       );
 
-      // 3. End active room assignment and release capacity after checkout date
-      try {
-        await roomFees.endActiveRoomAssignment({
-          memberId: stay.memberId,
-          endMonth: actualLeftOn.slice(0, 7),
-        });
-      } catch {
-        // preserve checkout if room fee service reports no active assignment
+      if (!updatedStay) {
+        throw new StayDomainError('Stay modified concurrently. Please retry.', 409);
       }
+
+      // 3. Create Immutable Clearance Snapshot
+      const clearance = await repository.createClearance({
+        clearanceId,
+        stayId,
+        memberId: stay.memberId,
+        sequence,
+        snapshotVersion: sequence,
+        joinedOn: stay.joinedOn,
+        actualLeftOn,
+        lastRoomId: stay.currentRoomId || stay.initialRoomId,
+        financialAsOf: new Date(),
+        messSummary: {
+          billPaise: review.totalMessBilledPaise ?? review.financialOverview.mess.billPaise,
+          paidPaise: review.totalMessPaidPaise ?? review.financialOverview.mess.paidPaise,
+          remainingPaise: review.totalMessRemainingPaise ?? review.financialOverview.mess.remainingPaise,
+        },
+        roomFeeSummary: {
+          issuedChargePaise: review.totalRoomBilledPaise ?? review.financialOverview.room.issuedChargePaise,
+          paidPaise: review.totalRoomPaidPaise ?? review.financialOverview.room.paidPaise,
+          remainingPaise: review.totalRoomRemainingPaise ?? review.financialOverview.room.remainingPaise,
+        },
+        expenseSummary: {
+          spendingSharePaise: review.totalExpenseSharePaise ?? review.financialOverview.expenses.spendingSharePaise,
+          owedToOthersPaise: review.totalExpenseOwedPaise ?? review.financialOverview.expenses.owedToOthersPaise,
+          owedToMePaise: review.totalExpenseReceivablePaise ?? review.financialOverview.expenses.owedToMePaise,
+        },
+        depositSummary: review.depositOverview.summary,
+        outstandingObligations: review.outstandingObligations,
+        clearanceStatus,
+        exceptionReason: exceptionReason?.trim() || null,
+        finalizedAt: new Date(),
+        finalizedByRole: actorRole,
+      });
 
       // 4. Audit trail
       await repository.addStayHistory(stayId, {
@@ -558,6 +768,75 @@ export function createStayService({
         stay: updatedStay,
         clearance,
       };
+    },
+
+    /**
+     * Reissue clearance certificate with fresh snapshot (Super Admin only)
+     */
+    async reissueClearance({ stayId, reissueReason, actorRole }) {
+      if (actorRole !== 'superadmin') {
+        throw new StayDomainError('Only Super Admin can reissue clearance certificates.', 403);
+      }
+      if (!reissueReason || !reissueReason.trim()) {
+        throw new StayDomainError('Mandatory reissue reason is required.', 400);
+      }
+
+      const stay = await this.getStayById(stayId);
+      if (stay.status !== STAY_STATUSES.CHECKED_OUT) {
+        throw new StayDomainError('Clearance can only be reissued for a checked-out stay.', 400);
+      }
+
+      const review = await this.getCheckoutReview(stayId);
+      let clearanceStatus = CLEARANCE_STATUSES.NO_DUES;
+      if (!review.isEligibleForNoDues) {
+        clearanceStatus = CLEARANCE_STATUSES.OUTSTANDING_DUES;
+      }
+
+      const sequence = await repository.getNextClearanceSequence(stayId);
+      const clearanceId = randomUUID();
+
+      const clearance = await repository.createClearance({
+        clearanceId,
+        stayId,
+        memberId: stay.memberId,
+        sequence,
+        snapshotVersion: sequence,
+        joinedOn: stay.joinedOn,
+        actualLeftOn: stay.actualLeftOn,
+        lastRoomId: stay.currentRoomId || stay.initialRoomId,
+        financialAsOf: new Date(),
+        messSummary: {
+          billPaise: review.totalMessBilledPaise ?? review.financialOverview.mess.billPaise,
+          paidPaise: review.totalMessPaidPaise ?? review.financialOverview.mess.paidPaise,
+          remainingPaise: review.totalMessRemainingPaise ?? review.financialOverview.mess.remainingPaise,
+        },
+        roomFeeSummary: {
+          issuedChargePaise: review.totalRoomBilledPaise ?? review.financialOverview.room.issuedChargePaise,
+          paidPaise: review.totalRoomPaidPaise ?? review.financialOverview.room.paidPaise,
+          remainingPaise: review.totalRoomRemainingPaise ?? review.financialOverview.room.remainingPaise,
+        },
+        expenseSummary: {
+          spendingSharePaise: review.totalExpenseSharePaise ?? review.financialOverview.expenses.spendingSharePaise,
+          owedToOthersPaise: review.totalExpenseOwedPaise ?? review.financialOverview.expenses.owedToOthersPaise,
+          owedToMePaise: review.totalExpenseReceivablePaise ?? review.financialOverview.expenses.owedToMePaise,
+        },
+        depositSummary: review.depositOverview.summary,
+        outstandingObligations: review.outstandingObligations,
+        clearanceStatus,
+        exceptionReason: reissueReason.trim(),
+        finalizedAt: new Date(),
+        finalizedByRole: actorRole,
+      });
+
+      await repository.addStayHistory(stayId, {
+        event: 'CLEARANCE_REISSUED',
+        timestamp: new Date(),
+        actorRole,
+        note: `Clearance #${sequence} reissued: ${reissueReason.trim()}`,
+        details: { clearanceId, sequence, clearanceStatus, reissueReason: reissueReason.trim() },
+      });
+
+      return clearance;
     },
 
     /**

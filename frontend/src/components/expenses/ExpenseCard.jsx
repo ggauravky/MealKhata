@@ -43,7 +43,7 @@ export function ExpenseCard({ expense, currentMemberId, onClick }) {
   const isPayer = expense.paidByMemberId === currentMemberId;
 
   // Reimbursement status label & badge
-  let statusBadge = null;
+  let statusBadge;
   if (isVoided) {
     statusBadge = (
       <span className="inline-flex items-center gap-1 text-[11px] font-medium text-rose-700 bg-rose-50 border border-rose-200 dark:bg-rose-950/40 dark:text-rose-400 dark:border-rose-800 px-2 py-0.5 rounded-full">

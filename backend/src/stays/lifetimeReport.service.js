@@ -3,6 +3,7 @@
  * Aggregates lifetime financial history, room history, and deposits across a resident's hostel stay.
  */
 
+import { getLogicalDateInTimeZone } from '../utils/date.js';
 import { stayRepository } from './stay.repository.js';
 import { financialOverviewService } from '../finance/financialOverview.service.js';
 import { depositService } from './deposit.service.js';
@@ -48,12 +49,12 @@ export function createLifetimeReportService({
       };
 
       const startMonth = stay.joinedOn.slice(0, 7);
-      const currentMonth = new Date().toISOString().slice(0, 7);
+      const currentMonth = getLogicalDateInTimeZone(new Date(), 'Asia/Kolkata').slice(0, 7);
       const endMonth = stay.actualLeftOn ? stay.actualLeftOn.slice(0, 7) : currentMonth;
 
       const months = getMonthsRange(startMonth, endMonth);
 
-      // Fetch monthly financial snapshots
+      // Fetch monthly financial snapshots - fail closed if any month fails
       const monthlySummaries = await Promise.all(
         months.map(async (month) => {
           try {
@@ -63,12 +64,15 @@ export function createLifetimeReportService({
               actorRole,
             });
           } catch (err) {
-            return null;
+            const error = new Error(`Failed to calculate authoritative financial overview for month ${month}: ${err.message}`);
+            error.statusCode = 500;
+            error.month = month;
+            throw error;
           }
         }),
       );
 
-      const validMonthSummaries = monthlySummaries.filter(Boolean);
+      const validMonthSummaries = monthlySummaries;
 
       // Aggregate lifetime totals
       let totalMessBilledPaise = 0;

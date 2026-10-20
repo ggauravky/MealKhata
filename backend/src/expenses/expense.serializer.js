@@ -57,7 +57,7 @@ export function computeExpenseFinancials({ expense, reimbursements = [] }) {
     totalInitialReceivablePaise - totalReimbursedReceivedPaise,
   );
 
-  let derivedStatus = 'unsettled';
+  let derivedStatus;
   if (isVoided) {
     derivedStatus = 'voided';
   } else if (totalInitialReceivablePaise === 0) {

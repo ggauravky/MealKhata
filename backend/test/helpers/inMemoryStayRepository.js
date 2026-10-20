@@ -95,6 +95,13 @@ export class InMemoryStayRepository {
     return JSON.parse(JSON.stringify(this.stays[index]));
   }
 
+  async deleteStay(stayId) {
+    const idx = this.stays.findIndex((s) => s.stayId === stayId);
+    if (idx === -1) return null;
+    const [deleted] = this.stays.splice(idx, 1);
+    return JSON.parse(JSON.stringify(deleted));
+  }
+
   // --- Deposit Account Operations ---
   async createDepositAccount(data) {
     const doc = {
@@ -106,6 +113,13 @@ export class InMemoryStayRepository {
     };
     this.accounts.push(doc);
     return JSON.parse(JSON.stringify(doc));
+  }
+
+  async deleteDepositAccount(depositAccountId) {
+    const idx = this.accounts.findIndex((a) => a.depositAccountId === depositAccountId);
+    if (idx === -1) return null;
+    const [deleted] = this.accounts.splice(idx, 1);
+    return JSON.parse(JSON.stringify(deleted));
   }
 
   async findDepositAccountByStayId(stayId) {
@@ -193,6 +207,73 @@ export class InMemoryStayRepository {
       updatedAt: new Date(),
     };
     return JSON.parse(JSON.stringify(this.transactions[index]));
+  }
+
+  async executeAtomicDepositTransaction({
+    stayId,
+    type,
+    amountPaise,
+    transactionData,
+    actorRole,
+  }) {
+    const account = this.accounts.find((a) => a.stayId === stayId);
+    if (!account) {
+      const err = new Error('Deposit account not found for this stay.');
+      err.statusCode = 404;
+      throw err;
+    }
+    const transactions = this.transactions.filter((t) => t.stayId === stayId && t.status === 'recorded');
+    let received = 0;
+    let refunded = 0;
+    let deducted = 0;
+    for (const tx of transactions) {
+      if (tx.type === 'RECEIVED') received += tx.amountPaise;
+      else if (tx.type === 'REFUNDED') refunded += tx.amountPaise;
+      else if (tx.type === 'DEDUCTED') deducted += tx.amountPaise;
+    }
+    const heldPaise = received - refunded - deducted;
+    if ((type === 'REFUNDED' || type === 'DEDUCTED') && heldPaise < amountPaise) {
+      const action = type === 'REFUNDED' ? 'refund' : 'deduct';
+      const err = new Error(`Cannot ${action} ₹${(amountPaise / 100).toFixed(2)}: only ₹${(heldPaise / 100).toFixed(2)} currently held.`);
+      err.statusCode = 400;
+      err.details = { heldPaise, requestedPaise: amountPaise };
+      throw err;
+    }
+
+    if (transactionData.idempotencyKey) {
+      const dup = this.transactions.find((t) => t.idempotencyKey === transactionData.idempotencyKey);
+      if (dup) {
+        if (dup.type !== type || dup.amountPaise !== amountPaise || dup.stayId !== stayId) {
+          const err = new Error('Idempotency key has already been used with a different transaction payload.');
+          err.statusCode = 409;
+          throw err;
+        }
+        return JSON.parse(JSON.stringify(dup));
+      }
+    }
+
+    account.revision = (account.revision || 1) + 1;
+    account.history = account.history || [];
+    account.history.push({
+      event: `DEPOSIT_${type}`,
+      timestamp: new Date(),
+      actorRole,
+      note: `Recorded ${type} transaction of ${amountPaise} paise`,
+      details: { depositTransactionId: transactionData.depositTransactionId, amountPaise, method: transactionData.method },
+    });
+    const nextHeld = heldPaise + (type === 'RECEIVED' ? amountPaise : -amountPaise);
+    const nextReceived = received + (type === 'RECEIVED' ? amountPaise : 0);
+    if (nextHeld === 0 && nextReceived > 0) {
+      account.status = 'SETTLED';
+    }
+
+    const doc = {
+      ...transactionData,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.transactions.push(doc);
+    return JSON.parse(JSON.stringify(doc));
   }
 
   // --- Clearance Operations ---

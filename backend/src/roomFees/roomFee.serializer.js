@@ -18,7 +18,7 @@ export function computeChargeFinancials({ charge, payments = [], now = new Date(
   const remainingAmountPaise = Math.max(0, finalBillAmountPaise - paidAmountPaise);
   const overpaidAmountPaise = Math.max(0, paidAmountPaise - finalBillAmountPaise);
 
-  let paymentStatus = ROOM_PAYMENT_SUMMARY_STATUSES.DUE;
+  let paymentStatus;
   if (charge.status === ROOM_CHARGE_STATUSES.CANCELLED) {
     paymentStatus = ROOM_PAYMENT_SUMMARY_STATUSES.CANCELLED;
   } else if (overpaidAmountPaise > 0) {

@@ -33,6 +33,8 @@ export function CheckoutRequestDialog({
     setError('');
     try {
       await onSubmitRequest({
+        preferredLeaveDate: leavingDate,
+        reason: note.trim() || undefined,
         checkoutRequestedFor: leavingDate,
         checkoutRequestNote: note.trim() || undefined,
       });

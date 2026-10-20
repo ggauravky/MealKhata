@@ -2,6 +2,7 @@
  * MealKhata 2.0 - Hostel Stay, Deposit & Clearance Repository
  */
 
+import mongoose from 'mongoose';
 import {
   HostelClearance,
   HostelDepositAccount,
@@ -73,12 +74,20 @@ export const stayRepository = {
     ).lean();
   },
 
+  async deleteStay(stayId) {
+    return HostelStay.findOneAndDelete({ stayId }).lean();
+  },
+
   // ----------------------------------------------------
   // Security Deposit Account Operations
   // ----------------------------------------------------
   async createDepositAccount(data) {
     const account = await HostelDepositAccount.create(data);
     return account.toObject();
+  },
+
+  async deleteDepositAccount(depositAccountId) {
+    return HostelDepositAccount.findOneAndDelete({ depositAccountId }).lean();
   },
 
   async findDepositAccountByStayId(stayId) {
@@ -148,6 +157,125 @@ export const stayRepository = {
       },
       { returnDocument: 'after' },
     ).lean();
+  },
+
+  async executeAtomicDepositTransaction({
+    stayId,
+    type,
+    amountPaise,
+    transactionData,
+    actorRole,
+  }) {
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+      let session = null;
+      try {
+        session = await mongoose.startSession();
+        session.startTransaction();
+
+        const account = await HostelDepositAccount.findOne({ stayId }).session(session);
+        if (!account) {
+          const err = new Error('Deposit account not found for this stay.');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        const transactions = await HostelDepositTransaction.find({
+          stayId,
+          status: 'recorded',
+        }).session(session);
+
+        let received = 0;
+        let refunded = 0;
+        let deducted = 0;
+        for (const tx of transactions) {
+          if (tx.type === 'RECEIVED') received += tx.amountPaise;
+          else if (tx.type === 'REFUNDED') refunded += tx.amountPaise;
+          else if (tx.type === 'DEDUCTED') deducted += tx.amountPaise;
+        }
+        const heldPaise = received - refunded - deducted;
+
+        if ((type === 'REFUNDED' || type === 'DEDUCTED') && heldPaise < amountPaise) {
+          const action = type === 'REFUNDED' ? 'refund' : 'deduct';
+          const err = new Error(`Cannot ${action} ₹${(amountPaise / 100).toFixed(2)}: only ₹${(heldPaise / 100).toFixed(2)} currently held.`);
+          err.statusCode = 400;
+          err.details = { heldPaise, requestedPaise: amountPaise };
+          throw err;
+        }
+
+        account.revision += 1;
+        account.history.push({
+          event: `DEPOSIT_${type}`,
+          timestamp: new Date(),
+          actorRole,
+          note: `Recorded ${type} transaction of ${amountPaise} paise`,
+          details: { depositTransactionId: transactionData.depositTransactionId, amountPaise, method: transactionData.method },
+        });
+
+        const nextHeld = heldPaise + (type === 'RECEIVED' ? amountPaise : -amountPaise);
+        const nextReceived = received + (type === 'RECEIVED' ? amountPaise : 0);
+        if (nextHeld === 0 && nextReceived > 0) {
+          account.status = 'SETTLED';
+        }
+        await account.save({ session });
+
+        const created = await HostelDepositTransaction.create([transactionData], { session });
+        await session.commitTransaction();
+        return created[0].toObject();
+      } catch (err) {
+        if (session && session.inTransaction()) {
+          await session.abortTransaction();
+        }
+        if (err.message && (err.message.includes('Transactions are not supported') || err.message.includes('replica set'))) {
+          // Fall through to non-session fallback
+        } else {
+          throw err;
+        }
+      } finally {
+        if (session) {
+          await session.endSession();
+        }
+      }
+    }
+
+    const account = await HostelDepositAccount.findOne({ stayId });
+    if (!account) {
+      const err = new Error('Deposit account not found for this stay.');
+      err.statusCode = 404;
+      throw err;
+    }
+    const transactions = await HostelDepositTransaction.find({ stayId, status: 'recorded' });
+    let received = 0;
+    let refunded = 0;
+    let deducted = 0;
+    for (const tx of transactions) {
+      if (tx.type === 'RECEIVED') received += tx.amountPaise;
+      else if (tx.type === 'REFUNDED') refunded += tx.amountPaise;
+      else if (tx.type === 'DEDUCTED') deducted += tx.amountPaise;
+    }
+    const heldPaise = received - refunded - deducted;
+    if ((type === 'REFUNDED' || type === 'DEDUCTED') && heldPaise < amountPaise) {
+      const action = type === 'REFUNDED' ? 'refund' : 'deduct';
+      const err = new Error(`Cannot ${action} ₹${(amountPaise / 100).toFixed(2)}: only ₹${(heldPaise / 100).toFixed(2)} currently held.`);
+      err.statusCode = 400;
+      err.details = { heldPaise, requestedPaise: amountPaise };
+      throw err;
+    }
+    account.revision += 1;
+    account.history.push({
+      event: `DEPOSIT_${type}`,
+      timestamp: new Date(),
+      actorRole,
+      note: `Recorded ${type} transaction of ${amountPaise} paise`,
+      details: { depositTransactionId: transactionData.depositTransactionId, amountPaise, method: transactionData.method },
+    });
+    const nextHeld = heldPaise + (type === 'RECEIVED' ? amountPaise : -amountPaise);
+    const nextReceived = received + (type === 'RECEIVED' ? amountPaise : 0);
+    if (nextHeld === 0 && nextReceived > 0) {
+      account.status = 'SETTLED';
+    }
+    await account.save();
+    const created = await HostelDepositTransaction.create(transactionData);
+    return created.toObject();
   },
 
   // ----------------------------------------------------

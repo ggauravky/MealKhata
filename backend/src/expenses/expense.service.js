@@ -192,7 +192,7 @@ export class ExpenseService {
       throw new ExpenseDomainError('Month must be in YYYY-MM format.', 400);
     }
 
-    let rawExpenses = [];
+    let rawExpenses;
     if (canViewHouseholdExpenses(actorRole)) {
       rawExpenses = await this.repository.findExpensesByMonth(month, { includeVoided: true });
     } else {
@@ -327,7 +327,74 @@ export class ExpenseService {
       }
       const existing = await this.repository.findReimbursementByIdempotencyKey(idempotencyKey);
       if (existing) {
+        if (
+          existing.fromMemberId !== fromMemberId ||
+          existing.amountPaise !== amountPaise ||
+          existing.expenseId !== expenseId
+        ) {
+          throw new ExpenseDomainError(
+            'Idempotency key has already been used with a different transaction payload.',
+            409,
+          );
+        }
         return serializeReimbursement(existing);
+      }
+    }
+
+    if (typeof this.repository.executeAtomicReimbursement === 'function') {
+      const expense = await this.repository.findExpenseById(expenseId);
+      if (!expense) {
+        throw new ExpenseDomainError('Expense not found.', 404);
+      }
+      if (expense.status === EXPENSE_STATUSES.VOIDED) {
+        throw new ExpenseDomainError('Cannot record reimbursement against a voided expense.', 409);
+      }
+      if (fromMemberId === expense.paidByMemberId) {
+        throw new ExpenseDomainError('Payer cannot reimburse themselves for their own purchase.', 400);
+      }
+      const allocation = (expense.allocations || []).find((a) => a.memberId === fromMemberId);
+      if (!allocation) {
+        throw new ExpenseDomainError(`Member ${fromMemberId} is not a beneficiary of this expense.`, 400);
+      }
+
+      const reimbursementId = crypto.randomUUID();
+      const newRevision = crypto.randomUUID();
+      const reimbursementData = {
+        reimbursementId,
+        expenseId,
+        expenseMonth: expense.month,
+        fromMemberId,
+        toMemberId: expense.paidByMemberId,
+        amountPaise,
+        method,
+        reference: reference ? reference.trim() : null,
+        idempotencyKey: idempotencyKey || null,
+        status: REIMBURSEMENT_STATUSES.RECORDED,
+        recordedAt: new Date(),
+        recordedByRole: actorRole,
+      };
+
+      try {
+        const created = await this.repository.executeAtomicReimbursement({
+          expenseId,
+          fromMemberId,
+          amountPaise,
+          reimbursementData,
+          newRevision,
+        });
+
+        broadcastExpensesUpdated({
+          scope: 'expenses',
+          month: expense.month,
+          revision: newRevision,
+        });
+
+        return serializeReimbursement(created);
+      } catch (err) {
+        if (err.statusCode) {
+          throw new ExpenseDomainError(err.message, err.statusCode);
+        }
+        throw err;
       }
     }
 

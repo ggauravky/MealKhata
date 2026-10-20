@@ -49,13 +49,17 @@ export function useMyStay() {
     };
   }, [refresh]);
 
-  const requestCheckout = async ({ checkoutRequestedFor, checkoutRequestNote }) => {
+  const requestCheckout = async (payload = {}) => {
     if (!navigator.onLine) {
       throw new Error('You are offline. Connect to the internet to request checkout.');
     }
+    const preferredLeaveDate = payload.preferredLeaveDate || payload.checkoutRequestedFor;
+    const reason = payload.reason || payload.checkoutRequestNote;
     const res = await api.post('/api/stays/me/checkout-request', {
-      checkoutRequestedFor,
-      checkoutRequestNote,
+      preferredLeaveDate,
+      reason,
+      checkoutRequestedFor: preferredLeaveDate,
+      checkoutRequestNote: reason,
     });
     refresh();
     return res.data;

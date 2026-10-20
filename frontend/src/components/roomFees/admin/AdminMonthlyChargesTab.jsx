@@ -12,6 +12,7 @@ import {
 } from '../../ui/dialog.jsx';
 import { Input } from '../../ui/input.jsx';
 import { Label } from '../../ui/label.jsx';
+import { Select } from '../../ui/select.jsx';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../ui/table.jsx';
 import { ROOMMATES } from '../../../lib/constants.js';
 import { formatLogicalMonth } from '../../../lib/logicalMonth.js';

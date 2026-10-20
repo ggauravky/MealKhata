@@ -142,7 +142,8 @@ export function createStayRouter({
         return res.status(400).json({ success: false, message: 'No active stay found for this member.' });
       }
 
-      const { preferredLeaveDate, reason } = req.body || {};
+      const preferredLeaveDate = req.body?.preferredLeaveDate ?? req.body?.checkoutRequestedFor;
+      const reason = req.body?.reason ?? req.body?.checkoutRequestNote;
       const updated = await service.requestCheckout({
         stayId: activeStay.stayId,
         preferredLeaveDate,
@@ -259,12 +260,14 @@ export function createStayRouter({
 
   router.post('/', requireAdminOrAbove, async (req, res, next) => {
     try {
-      const { memberId, joinedOn, initialRoomId, monthlyRatePaise, expectedDepositPaise } = req.body || {};
+      const { memberId, joinedOn, initialRoomId, expectedDepositPaise } = req.body || {};
+      const monthlyFeePaise = req.body?.monthlyFeePaise ?? req.body?.monthlyRatePaise ?? req.body?.monthlyRentPaise;
       const newStay = await service.createStay({
         memberId,
         joinedOn,
         initialRoomId,
-        monthlyRatePaise,
+        monthlyFeePaise,
+        monthlyRatePaise: monthlyFeePaise,
         expectedDepositPaise,
         actorRole: req.auth.role,
         actorMemberId: req.auth.memberId || null,
@@ -421,12 +424,29 @@ export function createStayRouter({
 
   router.post('/:stayId/finalize-checkout', requireSuperAdmin, assertStayAccess, async (req, res, next) => {
     try {
-      const { actualLeftOn, isException, exceptionReason } = req.body || {};
+      const { actualLeftOn, exceptionReason } = req.body || {};
+      const isException = req.body?.isException ?? req.body?.allowWithDues ?? false;
       const result = await service.finalizeCheckout({
         stayId: req.stay.stayId,
         actualLeftOn,
         isException: Boolean(isException),
         exceptionReason,
+        actorRole: req.auth.role,
+      });
+
+      notifyClearanceChange();
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post('/:stayId/clearance/reissue', requireSuperAdmin, assertStayAccess, async (req, res, next) => {
+    try {
+      const { reissueReason, reason } = req.body || {};
+      const result = await service.reissueClearance({
+        stayId: req.stay.stayId,
+        reissueReason: reissueReason || reason,
         actorRole: req.auth.role,
       });
 
@@ -504,8 +524,9 @@ export function createStayRouter({
     async (req, res, next) => {
       try {
         const { reason } = req.body || {};
-        const voided = await deposits.voidDepositTransaction({
-          transactionId: req.params.transactionId,
+        const voided = await deposits.voidTransaction({
+          stayId: req.stay.stayId,
+          depositTransactionId: req.params.transactionId,
           reason,
           actorRole: req.auth.role,
         });

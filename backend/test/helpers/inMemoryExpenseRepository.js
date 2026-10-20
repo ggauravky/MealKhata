@@ -134,4 +134,57 @@ export class InMemoryExpenseRepository {
     };
     return JSON.parse(JSON.stringify(this.reimbursements[index]));
   }
+
+  async executeAtomicReimbursement({
+    expenseId,
+    fromMemberId,
+    amountPaise,
+    reimbursementData,
+    newRevision,
+  }) {
+    const expense = this.expenses.find((e) => e.expenseId === expenseId);
+    if (!expense || expense.status === 'voided') {
+      const err = new Error('Expense not found or voided.');
+      err.statusCode = 404;
+      throw err;
+    }
+    const allocation = (expense.allocations || []).find((a) => a.memberId === fromMemberId);
+    if (!allocation) {
+      const err = new Error(`Member ${fromMemberId} is not a beneficiary of this expense.`);
+      err.statusCode = 400;
+      throw err;
+    }
+    const activeReimbursements = this.reimbursements.filter(
+      (r) => r.expenseId === expenseId && r.fromMemberId === fromMemberId && r.status !== 'voided',
+    );
+    const alreadyReimbursedPaise = activeReimbursements.reduce((sum, r) => sum + r.amountPaise, 0);
+    const remainingOwedPaise = Math.max(0, allocation.amountPaise - alreadyReimbursedPaise);
+    if (amountPaise > remainingOwedPaise) {
+      const err = new Error(`Payment of ₹${(amountPaise / 100).toFixed(2)} exceeds remaining due of ₹${(remainingOwedPaise / 100).toFixed(2)}.`);
+      err.statusCode = 409;
+      throw err;
+    }
+
+    if (reimbursementData.idempotencyKey) {
+      const dup = this.reimbursements.find((r) => r.idempotencyKey === reimbursementData.idempotencyKey);
+      if (dup) {
+        if (dup.fromMemberId !== fromMemberId || dup.amountPaise !== amountPaise || dup.expenseId !== expenseId) {
+          const err = new Error('Idempotency key has already been used with a different transaction payload.');
+          err.statusCode = 409;
+          throw err;
+        }
+        return JSON.parse(JSON.stringify(dup));
+      }
+    }
+
+    expense.revision = newRevision || new Date().toISOString();
+    const doc = {
+      ...reimbursementData,
+      recordedAt: reimbursementData.recordedAt || new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.reimbursements.push(doc);
+    return JSON.parse(JSON.stringify(doc));
+  }
 }

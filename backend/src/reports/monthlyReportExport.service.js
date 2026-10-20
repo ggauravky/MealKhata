@@ -544,7 +544,7 @@ export function createMonthlyReportExportService({
         .slice()
         .reverse()
         .map((p) => {
-          const recDateStr = p.recordedAt ? new Date(p.recordedAt).toISOString().slice(0, 10) : startDate;
+          const recDateStr = p.recordedAt ? getLogicalDateInTimeZone(new Date(p.recordedAt), 'Asia/Kolkata') : startDate;
           return {
             paymentId: p.paymentId,
             date: formatReportDate(recDateStr).displayDate,
