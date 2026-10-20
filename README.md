@@ -38,11 +38,13 @@ MealKhata simplifies daily household meal coordination and monthly shared-expens
 1. **Dashboard (`/`)**: Daily home view. Members toggle today's meals; authenticated members view their current month Room Fee preview; Admins oversee roommate plate requirements and have shortcuts to Room Fee Administration.
 2. **Mess Calendar (`/calendar?month=YYYY-MM`)**: Household monthly view. Inspect any past, current, or future month with date-level plate counts.
 3. **Room Fees (`/room-fees?month=YYYY-MM`)**: Member room fee portal with current month charge, payment progress bar, month-wise fee history, payment breakdown dialog, summary metrics, and verified recipient UPI instructions.
-4. **Payments (`/payments?month=YYYY-MM`)**: Dual-ledger financial center with independent `[ Mess ]` and `[ Room Fees ]` tabs.
-5. **Reports (`/reports?month=YYYY-MM`)**: Monthly mess financial report detailing plate counts, rates, total bill, paid amounts, and projected month-end totals.
-6. **Mess Admin Panel (`/admin`)**: Administrative controls for mess monthly rates, mess receiver settings, reminders, and mess monthly settlements.
-7. **Room Fee Administration (`/admin/room-fees`)**: Dedicated hostel room admin center with Overview, Room Registry & Occupancy, Individual Fee Plans, Monthly Charge Issuance, Verified Payments, and Recipient Configuration.
-8. **Login (`/login`)**: Secure role-aware authentication with 7-day persistent HttpOnly sessions for Admin and Super Admin, and 12-hour sessions for Members.
+4. **Other Expenses (`/expenses?month=YYYY-MM`)**: Shared and personal expense portal. Filter by category, view individual spending shares, track outstanding reimbursements owed and receivable, and inspect detailed participant splits.
+5. **Payments (`/payments?month=YYYY-MM`)**: Triple-ledger financial center with independent `[ Mess ]`, `[ Room Fees ]`, and `[ Expenses ]` tabs.
+6. **Reports (`/reports?month=YYYY-MM`)**: Monthly mess financial report detailing plate counts, rates, total bill, paid amounts, and projected month-end totals.
+7. **Mess Admin Panel (`/admin`)**: Administrative controls for mess monthly rates, mess receiver settings, reminders, and mess monthly settlements.
+8. **Room Fee Administration (`/admin/room-fees`)**: Dedicated hostel room admin center with Overview, Room Registry & Occupancy, Individual Fee Plans, Monthly Charge Issuance, Verified Payments, and Recipient Configuration.
+9. **Expense Administration (`/admin/expenses`)**: Management center for shared spending with Monthly Overview, Expense Ledger (Add/View/Void), Confirmed Reimbursements, and Immutable Financial Audit History.
+10. **Login (`/login`)**: Secure role-aware authentication with 7-day persistent HttpOnly sessions for Admin and Super Admin, and 12-hour sessions for Members.
 
 ---
 
@@ -55,9 +57,37 @@ Phase 1 introduces a dedicated, independent financial domain for hostel room fee
 - **Explicit Monthly Charge Generation (`room_charges`)**: Idempotent preview and manual charge issuance by Admin. Unissued months never generate fake debts. Super Admin can record auditable adjustments (+/-) or cancellations.
 - **Dedicated Room Payment Ledger (`room_payments`)**: Separate collection for room payments with manual methods (UPI, Cash, Bank Transfer, Other), partial payment tracking, overpayment guards, idempotency keys, and Super Admin voiding with mandatory audit reasons.
 - **Configurable Recipient Instructions (`room_payment_settings`)**: Dynamic configuration for `hostel_owner` vs. `admin_collector`, recipient display name, optional official UPI ID (generates deep links), and custom bank instructions.
+
+---
+
+## MealKhata 2.0 — Phase 2: Other Expenses & Shared Spending
+
+Phase 2 introduces a dedicated, third independent financial domain for groceries, snacks, outside food, and household supplies:
+
+- **Dedicated Expense Collections (`expenses`, `expense_reimbursements`)**: Complete physical and logical ledger separation from Mess and Room Fees. Zero cross-ledger bleed or balance contamination.
+- **Merchant Payer vs. Beneficiary Distinction**: Explicitly separates who paid the merchant (`paidByMemberId`) from who benefited and owes a share (`allocations[]`). The payer's own consumption share is tracked as spending, not as a debt to themselves.
+- **Canonical Deterministic Split Engine**:
+  - **Equal Split**: Even division using integer division and deterministic remainder distribution (canonical member ordering).
+  - **Personal Expense**: Single beneficiary; 100% allocated to beneficiary.
+  - **Custom Split**: Exact per-member integer paise allocation strictly enforcing $\sum \text{allocations} = \text{expense total}$.
+- **Reimbursement Lifecycle & Accounting Guard**:
+  - Reimbursements settle debts between roommates; they **never** count as additional household spending.
+  - Idempotent reimbursement recording with strict debt ceilings preventing overpayment.
+  - Self-reimbursement is strictly rejected ($fromMemberId \neq toMemberId$).
+- **Immutable Financial Corrections & Void Protection**:
+  - Expenses cannot be edited in place once recorded.
+  - Super Admin can void an expense with a mandatory reason, but voiding is strictly blocked if active reimbursements exist (must void reimbursements first).
+- **Privacy & Server-Side Ownership**:
+  - Members can only view expenses and reimbursements where they are payer or beneficiary. Unrelated personal purchases are hidden.
 - **Redesigned Navigation**:
-  - **Desktop**: `MealKhata Home | Mess | Room Fees | Payments | Reports` + Theme Toggle + Account Menu.
-  - **Mobile**: Clean 5-item bottom bar (`Home | Mess | Room | Payments | More`), where More exposes Reports, Admin Panels, Theme, App Install, and Sign Out.
+  - **Desktop**: `MealKhata Home | Mess | Room Fees | Expenses | Payments | Reports` + Theme Toggle + Account Menu.
+  - **Mobile**: Clean 5-item bottom bar (`Home | Mess | Room | Expenses | More`), where More exposes Payments, Reports, Admin Panels, Theme, App Install, and Sign Out.
+- **Realtime & Offline Safety**:
+  - `expenses:updated` Socket.IO broadcast invalidation with safe metadata only.
+  - Strictly network-only API routing; zero offline writes.
+- **Backup & Audit Integrity**:
+  - `expenses` and `expense_reimbursements` included in encrypted backup and restore engine.
+  - Read-only data verification enforcing 8 domain invariants across allocations and reimbursements.
 - **Separation of Concerns**: Existing `meal_days`, `payments`, `monthly_settlements`, and `monthly_meal_rates` remain completely untouched. Mess payments and room payments are strictly segregated.
 - **Backup & Verification Integration**: All 6 new collections (`rooms`, `room_assignments`, `room_fee_plans`, `room_charges`, `room_payments`, `room_payment_settings`) are included in encrypted backups, `verify-indexes`, and `verify-data` checks.
 

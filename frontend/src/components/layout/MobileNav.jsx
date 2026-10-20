@@ -9,6 +9,7 @@ import {
   LogOut,
   Moon,
   MoreHorizontal,
+  Receipt,
   ShieldCheck,
   Sun,
 } from 'lucide-react';
@@ -30,7 +31,7 @@ const mainNavItems = [
   { label: 'Home', path: '/', icon: House },
   { label: 'Mess', path: '/calendar', icon: CalendarDays },
   { label: 'Room', path: '/room-fees', icon: BedDouble },
-  { label: 'Payments', path: '/payments', icon: CreditCard },
+  { label: 'Expenses', path: '/expenses', icon: Receipt },
 ];
 
 export function MobileNav() {
@@ -112,6 +113,15 @@ export function MobileNav() {
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
 
+            {/* Payments */}
+            <DropdownMenuItem
+              onClick={() => navigate('/payments')}
+              className="flex items-center gap-2.5 cursor-pointer text-xs font-medium"
+            >
+              <CreditCard className="h-4 w-4 text-teal-600 dark:text-teal-400" />
+              <span>Payments</span>
+            </DropdownMenuItem>
+
             {/* Reports */}
             <DropdownMenuItem
               onClick={() => navigate('/reports')}
@@ -124,6 +134,13 @@ export function MobileNav() {
             {/* Admin Panel */}
             {canAccessAdmin && (
               <>
+                <DropdownMenuItem
+                  onClick={() => navigate('/admin/expenses')}
+                  className="flex items-center gap-2.5 cursor-pointer text-xs font-medium"
+                >
+                  <Receipt className="h-4 w-4 text-teal-600 dark:text-teal-400" />
+                  <span>Expense Admin</span>
+                </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={() => navigate('/admin/room-fees')}
                   className="flex items-center gap-2.5 cursor-pointer text-xs font-medium"

@@ -24,6 +24,7 @@ import { pushRouter } from './routes/push.routes.js';
 import { settlementRouter } from './routes/settlement.routes.js';
 import { dashboardRouter } from './routes/dashboard.routes.js';
 import { roomFeeRouter, roomRouter } from './routes/roomFee.routes.js';
+import { expenseRouter } from './routes/expense.routes.js';
 
 export const PRODUCTION_TRUST_PROXY_HOPS = 1;
 export const API_RATE_LIMIT = Object.freeze({
@@ -73,6 +74,7 @@ export function createApp({
   health = healthRouter,
   roomFees = roomFeeRouter,
   rooms = roomRouter,
+  expenses = expenseRouter,
 } = {}) {
   const app = express();
 
@@ -131,6 +133,7 @@ export function createApp({
   app.use('/api/push', sensitiveMutationLimiter, push);
   app.use('/api/room-fees', sensitiveMutationLimiter, roomFees);
   app.use('/api/rooms', sensitiveMutationLimiter, rooms);
+  app.use('/api/expenses', sensitiveMutationLimiter, expenses);
 
   app.use('/api', apiNotFound);
 

@@ -13,6 +13,8 @@ const CalendarPage = lazy(() => import('./pages/CalendarPage.jsx').then((module)
 const PaymentsPage = lazy(() => import('./pages/PaymentsPage.jsx').then((module) => ({ default: module.PaymentsPage })));
 const ReportsPage = lazy(() => import('./pages/ReportsPage.jsx').then((module) => ({ default: module.ReportsPage })));
 const RoomFeesPage = lazy(() => import('./pages/RoomFeesPage.jsx').then((module) => ({ default: module.RoomFeesPage })));
+const ExpensesPage = lazy(() => import('./pages/ExpensesPage.jsx').then((module) => ({ default: module.ExpensesPage })));
+const AdminExpensesPage = lazy(() => import('./pages/AdminExpensesPage.jsx').then((module) => ({ default: module.AdminExpensesPage })));
 
 export default function App() {
   return (
@@ -22,11 +24,13 @@ export default function App() {
           <Route index element={<DashboardPage />} />
           <Route path="calendar" element={<CalendarPage />} />
           <Route path="room-fees" element={<RoomFeesPage />} />
+          <Route path="expenses" element={<ExpensesPage />} />
           <Route path="reports" element={<ReportsPage />} />
           <Route path="payments" element={<PaymentsPage />} />
           <Route element={<ProtectedRoute />}>
             <Route path="admin" element={<AdminPage />} />
             <Route path="admin/room-fees" element={<AdminRoomFeesPage />} />
+            <Route path="admin/expenses" element={<AdminExpensesPage />} />
           </Route>
         </Route>
         <Route path="login" element={<LoginPage />} />

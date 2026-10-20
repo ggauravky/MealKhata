@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { PageHeader } from '../components/common/PageHeader.jsx';
 import { AttentionSection } from '../components/dashboard/AttentionSection.jsx';
 import { DashboardRoomFeeCard } from '../components/dashboard/DashboardRoomFeeCard.jsx';
+import { DashboardExpenseCard } from '../components/dashboard/DashboardExpenseCard.jsx';
 import { HouseholdMonthlyCard } from '../components/dashboard/HouseholdMonthlyCard.jsx';
 import { HouseholdTodayCard } from '../components/dashboard/HouseholdTodayCard.jsx';
 import { NextReminderCard } from '../components/dashboard/NextReminderCard.jsx';
@@ -187,6 +188,9 @@ export function DashboardPage() {
 
           {/* Phase 1 Room Fees Card */}
           <DashboardRoomFeeCard month={data.today ? data.today.slice(0, 7) : new Date().toISOString().slice(0, 7)} />
+
+          {/* Phase 2 Other Expenses Card */}
+          <DashboardExpenseCard month={data.today ? data.today.slice(0, 7) : new Date().toISOString().slice(0, 7)} />
 
           {/* Reminder widget */}
           {data.reminders && (

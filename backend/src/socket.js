@@ -105,3 +105,12 @@ export function broadcastRoomFeesUpdated(payload) {
   return true;
 }
 
+export function broadcastExpensesUpdated(payload) {
+  if (!activeSocketServer) {
+    return false;
+  }
+
+  activeSocketServer.emit('expenses:updated', payload);
+  return true;
+}
+

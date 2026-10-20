@@ -17,6 +17,8 @@ import { RoomFeePlan } from '../src/roomFees/roomFeePlan.model.js';
 import { RoomCharge } from '../src/roomFees/roomCharge.model.js';
 import { RoomPayment } from '../src/roomFees/roomPayment.model.js';
 import { RoomPaymentSettings } from '../src/roomFees/roomPaymentSettings.model.js';
+import { Expense } from '../src/expenses/expense.model.js';
+import { ExpenseReimbursement } from '../src/expenses/expenseReimbursement.model.js';
 
 export const MONITORED_MODELS = [
   MealDay,
@@ -35,6 +37,8 @@ export const MONITORED_MODELS = [
   RoomCharge,
   RoomPayment,
   RoomPaymentSettings,
+  Expense,
+  ExpenseReimbursement,
 ];
 
 function normalizeIndexKey(keyObj) {

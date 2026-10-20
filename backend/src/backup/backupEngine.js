@@ -20,6 +20,8 @@ export const BACKUP_COLLECTIONS = Object.freeze([
   'room_charges',
   'room_payments',
   'room_payment_settings',
+  'expenses',
+  'expense_reimbursements',
 ]);
 
 /**

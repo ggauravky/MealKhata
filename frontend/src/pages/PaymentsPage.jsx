@@ -7,6 +7,7 @@ import {
   CircleDollarSign,
   CreditCard,
   History,
+  Receipt,
   WalletCards,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -16,6 +17,7 @@ import { PaymentFlowDialog } from '../components/payments/PaymentFlowDialog.jsx'
 import { PaymentSettingsPanel } from '../components/payments/PaymentSettingsPanel.jsx';
 import { VoidPaymentDialog } from '../components/payments/VoidPaymentDialog.jsx';
 import { RoomFeesPaymentTab } from '../components/roomFees/RoomFeesPaymentTab.jsx';
+import { ExpensesPaymentTab } from '../components/expenses/ExpensesPaymentTab.jsx';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card.jsx';
 import { Button } from '../components/ui/button.jsx';
 import { Badge } from '../components/ui/badge.jsx';
@@ -226,7 +228,7 @@ export function PaymentsPage() {
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <div className="flex items-center justify-between pb-2">
-          <TabsList className="grid grid-cols-2 w-full max-w-xs">
+          <TabsList className="grid grid-cols-3 w-full max-w-sm">
             <TabsTrigger value="mess" className="gap-2">
               <CalendarDays className="h-4 w-4" />
               <span>Mess</span>
@@ -234,6 +236,10 @@ export function PaymentsPage() {
             <TabsTrigger value="room" className="gap-2">
               <BedDouble className="h-4 w-4" />
               <span>Room Fees</span>
+            </TabsTrigger>
+            <TabsTrigger value="expenses" className="gap-2">
+              <Receipt className="h-4 w-4" />
+              <span>Expenses</span>
             </TabsTrigger>
           </TabsList>
         </div>
@@ -253,7 +259,9 @@ export function PaymentsPage() {
                 <span className="text-xs text-slate-500 dark:text-slate-400">
                   {activeTab === 'mess'
                     ? (data ? periodLabels[data.periodType] : 'Loading payments...')
-                    : 'Hostel room fee ledger'}
+                    : activeTab === 'room'
+                      ? 'Hostel room fee ledger'
+                      : 'Roommate reimbursements & shared purchases'}
                 </span>
               </div>
 
@@ -595,6 +603,10 @@ export function PaymentsPage() {
 
         <TabsContent value="room" className="space-y-6">
           <RoomFeesPaymentTab month={month} />
+        </TabsContent>
+
+        <TabsContent value="expenses" className="space-y-6">
+          <ExpensesPaymentTab month={month} />
         </TabsContent>
       </Tabs>
     </div>

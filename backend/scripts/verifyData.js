@@ -8,6 +8,7 @@ import { isValidPaymentAmount, isValidUuid } from '../src/payments/payment.const
 import { isValidPricePaise } from '../src/billing/monthlyRate.constants.js';
 import { isValidLogicalTime } from '../src/settings/reminder.constants.js';
 import { MEAL_STATUSES } from '../src/meals/meal.constants.js';
+import { EXPENSE_CATEGORIES } from '../src/expenses/expense.constants.js';
 
 export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
   const issues = [];
@@ -558,6 +559,211 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
     });
   } catch (error) {
     checks.push({ name: 'Room Fees Domain', status: 'FAIL', issues: 1, message: error.message });
+  }
+
+  // 8. Other Expenses & Shared Spending Check
+  try {
+    const expenses = await db.collection('expenses').find({}).toArray();
+    const reimbursements = await db.collection('expense_reimbursements').find({}).toArray();
+    let expenseIssues = 0;
+
+    const seenExpenseIds = new Set();
+    const seenExpenseIdempotency = new Set();
+    const expenseMap = new Map();
+
+    for (const exp of expenses) {
+      if (!isValidUuid(exp.expenseId)) {
+        issues.push(`[expenses] Invalid expenseId UUID: ${exp.expenseId}`);
+        expenseIssues++;
+      }
+      if (seenExpenseIds.has(exp.expenseId)) {
+        issues.push(`[expenses] Duplicate expenseId found: ${exp.expenseId}`);
+        expenseIssues++;
+      }
+      seenExpenseIds.add(exp.expenseId);
+      expenseMap.set(exp.expenseId, exp);
+
+      if (exp.idempotencyKey) {
+        if (!isValidUuid(exp.idempotencyKey)) {
+          issues.push(`[expenses] Invalid idempotencyKey UUID: ${exp.idempotencyKey}`);
+          expenseIssues++;
+        }
+        if (seenExpenseIdempotency.has(exp.idempotencyKey)) {
+          issues.push(`[expenses] Duplicate idempotencyKey in expenses: ${exp.idempotencyKey}`);
+          expenseIssues++;
+        }
+        seenExpenseIdempotency.add(exp.idempotencyKey);
+      }
+
+      if (!MEMBER_IDS.includes(exp.paidByMemberId)) {
+        issues.push(`[expenses] Invalid paidByMemberId: ${exp.paidByMemberId}`);
+        expenseIssues++;
+      }
+
+      if (!EXPENSE_CATEGORIES.includes(exp.category)) {
+        issues.push(`[expenses] Invalid category: ${exp.category}`);
+        expenseIssues++;
+      }
+
+      if (!isValidLogicalDate(exp.date)) {
+        issues.push(`[expenses] Invalid date: ${exp.date}`);
+        expenseIssues++;
+      }
+
+      if (!isValidLogicalMonth(exp.month) || exp.month !== exp.date.slice(0, 7)) {
+        issues.push(`[expenses] Mismatched or invalid month: ${exp.month} for date ${exp.date}`);
+        expenseIssues++;
+      }
+
+      if (!Number.isSafeInteger(exp.amountPaise) || exp.amountPaise <= 0) {
+        issues.push(`[expenses] Invalid amountPaise: ${exp.amountPaise}`);
+        expenseIssues++;
+      }
+
+      if (!Array.isArray(exp.allocations) || exp.allocations.length === 0) {
+        issues.push(`[expenses] Missing or empty allocations array for expense: ${exp.expenseId}`);
+        expenseIssues++;
+      } else {
+        let allocationSum = 0;
+        const seenAllocMembers = new Set();
+        for (const alloc of exp.allocations) {
+          if (!MEMBER_IDS.includes(alloc.memberId)) {
+            issues.push(`[expenses] Invalid memberId in allocation: ${alloc.memberId}`);
+            expenseIssues++;
+          }
+          if (seenAllocMembers.has(alloc.memberId)) {
+            issues.push(`[expenses] Duplicate memberId in allocations: ${alloc.memberId}`);
+            expenseIssues++;
+          }
+          seenAllocMembers.add(alloc.memberId);
+
+          if (!Number.isSafeInteger(alloc.amountPaise) || alloc.amountPaise < 0) {
+            issues.push(`[expenses] Invalid allocation amountPaise: ${alloc.amountPaise}`);
+            expenseIssues++;
+          }
+          allocationSum += alloc.amountPaise || 0;
+        }
+
+        if (allocationSum !== exp.amountPaise) {
+          issues.push(
+            `[expenses] Allocation sum (${allocationSum}) does not match expense amount (${exp.amountPaise}) for: ${exp.expenseId}`,
+          );
+          expenseIssues++;
+        }
+      }
+
+      if (exp.status === 'voided') {
+        if (!exp.voidedAt || !exp.voidReason) {
+          issues.push(`[expenses] Voided expense missing audit metadata: ${exp.expenseId}`);
+          expenseIssues++;
+        }
+      } else if (exp.status !== 'recorded') {
+        issues.push(`[expenses] Unknown status: ${exp.status}`);
+        expenseIssues++;
+      }
+    }
+
+    const seenReimbursementIds = new Set();
+    const seenReimbursementIdempotency = new Set();
+    const reimbursementsByExpenseAndMember = new Map();
+
+    for (const r of reimbursements) {
+      if (!isValidUuid(r.reimbursementId)) {
+        issues.push(`[expense_reimbursements] Invalid reimbursementId UUID: ${r.reimbursementId}`);
+        expenseIssues++;
+      }
+      if (seenReimbursementIds.has(r.reimbursementId)) {
+        issues.push(`[expense_reimbursements] Duplicate reimbursementId: ${r.reimbursementId}`);
+        expenseIssues++;
+      }
+      seenReimbursementIds.add(r.reimbursementId);
+
+      if (r.idempotencyKey) {
+        if (!isValidUuid(r.idempotencyKey)) {
+          issues.push(`[expense_reimbursements] Invalid idempotencyKey: ${r.idempotencyKey}`);
+          expenseIssues++;
+        }
+        if (seenReimbursementIdempotency.has(r.idempotencyKey)) {
+          issues.push(`[expense_reimbursements] Duplicate idempotencyKey in reimbursements: ${r.idempotencyKey}`);
+          expenseIssues++;
+        }
+        seenReimbursementIdempotency.add(r.idempotencyKey);
+      }
+
+      const referencedExpense = expenseMap.get(r.expenseId);
+      if (!referencedExpense) {
+        issues.push(`[expense_reimbursements] Reimbursement references nonexistent expenseId: ${r.expenseId}`);
+        expenseIssues++;
+      } else {
+        if (r.toMemberId !== referencedExpense.paidByMemberId) {
+          issues.push(
+            `[expense_reimbursements] toMemberId (${r.toMemberId}) does not match original payer (${referencedExpense.paidByMemberId})`,
+          );
+          expenseIssues++;
+        }
+      }
+
+      if (!MEMBER_IDS.includes(r.fromMemberId)) {
+        issues.push(`[expense_reimbursements] Invalid fromMemberId: ${r.fromMemberId}`);
+        expenseIssues++;
+      }
+      if (!MEMBER_IDS.includes(r.toMemberId)) {
+        issues.push(`[expense_reimbursements] Invalid toMemberId: ${r.toMemberId}`);
+        expenseIssues++;
+      }
+      if (r.fromMemberId === r.toMemberId) {
+        issues.push(`[expense_reimbursements] fromMemberId equals toMemberId: ${r.fromMemberId}`);
+        expenseIssues++;
+      }
+
+      if (!Number.isSafeInteger(r.amountPaise) || r.amountPaise <= 0) {
+        issues.push(`[expense_reimbursements] Invalid amountPaise: ${r.amountPaise}`);
+        expenseIssues++;
+      }
+
+      if (!['upi', 'cash', 'bank_transfer', 'other'].includes(r.method)) {
+        issues.push(`[expense_reimbursements] Invalid method: ${r.method}`);
+        expenseIssues++;
+      }
+
+      if (r.status === 'voided') {
+        if (!r.voidedAt || !r.voidReason) {
+          issues.push(`[expense_reimbursements] Voided reimbursement missing audit metadata: ${r.reimbursementId}`);
+          expenseIssues++;
+        }
+      } else if (r.status === 'recorded') {
+        const key = `${r.expenseId}:${r.fromMemberId}`;
+        const currentSum = reimbursementsByExpenseAndMember.get(key) || 0;
+        reimbursementsByExpenseAndMember.set(key, currentSum + r.amountPaise);
+      } else {
+        issues.push(`[expense_reimbursements] Unknown status: ${r.status}`);
+        expenseIssues++;
+      }
+    }
+
+    for (const [key, totalReimbursed] of reimbursementsByExpenseAndMember.entries()) {
+      const [expenseId, fromMemberId] = key.split(':');
+      const exp = expenseMap.get(expenseId);
+      if (exp) {
+        const alloc = (exp.allocations || []).find((a) => a.memberId === fromMemberId);
+        const maxAllowed = alloc ? alloc.amountPaise : 0;
+        if (totalReimbursed > maxAllowed) {
+          issues.push(
+            `[expense_reimbursements] Active reimbursements (${totalReimbursed}) exceed allocation (${maxAllowed}) for ${fromMemberId} on expense ${expenseId}`,
+          );
+          expenseIssues++;
+        }
+      }
+    }
+
+    checks.push({
+      name: 'Other Expenses Domain',
+      recordsChecked: expenses.length + reimbursements.length,
+      status: expenseIssues === 0 ? 'PASS' : 'FAIL',
+      issues: expenseIssues,
+    });
+  } catch (error) {
+    checks.push({ name: 'Other Expenses Domain', status: 'FAIL', issues: 1, message: error.message });
   }
 
   const overallPassed = checks.every((c) => c.status === 'PASS');
