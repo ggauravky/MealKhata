@@ -19,3 +19,7 @@ export function disconnectSocket() {
     socket.disconnect();
   }
 }
+
+export function getSocket() {
+  return socket;
+}

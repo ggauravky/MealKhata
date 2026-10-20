@@ -331,72 +331,93 @@ export class ExpenseService {
       }
     }
 
-    const expense = await this.repository.findExpenseById(expenseId);
-    if (!expense) {
-      throw new ExpenseDomainError('Expense not found.', 404);
+    const maxRetries = 3;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      const expense = await this.repository.findExpenseById(expenseId);
+      if (!expense) {
+        throw new ExpenseDomainError('Expense not found.', 404);
+      }
+
+      if (expense.status === EXPENSE_STATUSES.VOIDED) {
+        throw new ExpenseDomainError('Cannot record reimbursement against a voided expense.', 409);
+      }
+
+      if (fromMemberId === expense.paidByMemberId) {
+        throw new ExpenseDomainError('Payer cannot reimburse themselves for their own purchase.', 400);
+      }
+
+      // Find allocation for the member owing
+      const allocation = (expense.allocations || []).find((a) => a.memberId === fromMemberId);
+      if (!allocation) {
+        throw new ExpenseDomainError(`Member ${fromMemberId} is not a beneficiary of this expense.`, 400);
+      }
+
+      // Concurrency-safe calculation of remaining debt
+      const existingReimbursements = await this.repository.findReimbursementsByExpenseId(expenseId);
+      const activeReimbursements = existingReimbursements.filter(
+        (r) => r.status !== REIMBURSEMENT_STATUSES.VOIDED && r.fromMemberId === fromMemberId,
+      );
+
+      const alreadyReimbursedPaise = activeReimbursements.reduce((sum, r) => sum + r.amountPaise, 0);
+      const remainingOwedPaise = Math.max(0, allocation.amountPaise - alreadyReimbursedPaise);
+
+      if (remainingOwedPaise === 0) {
+        throw new ExpenseDomainError(
+          `Member ${fromMemberId}'s share of this expense is already fully reimbursed.`,
+          409,
+        );
+      }
+
+      if (amountPaise > remainingOwedPaise) {
+        const remainingRupees = (remainingOwedPaise / 100).toFixed(2);
+        throw new ExpenseDomainError(
+          `Payment of ₹${(amountPaise / 100).toFixed(2)} exceeds remaining due of ₹${remainingRupees}.`,
+          409,
+        );
+      }
+
+      // Atomic revision transition guard
+      const newRevision = crypto.randomUUID();
+      const acquired = await this.repository.acquireExpenseRevision(
+        expenseId,
+        expense.revision,
+        newRevision,
+      );
+
+      if (!acquired) {
+        // Revision conflict from concurrent request; retry with refreshed state
+        continue;
+      }
+
+      const reimbursementId = crypto.randomUUID();
+      const newReimbursement = await this.repository.createReimbursement({
+        reimbursementId,
+        expenseId,
+        expenseMonth: expense.month,
+        fromMemberId,
+        toMemberId: expense.paidByMemberId,
+        amountPaise,
+        method,
+        reference: reference ? reference.trim() : null,
+        idempotencyKey: idempotencyKey || null,
+        status: REIMBURSEMENT_STATUSES.RECORDED,
+        recordedAt: new Date(),
+        recordedByRole: actorRole,
+      });
+
+      broadcastExpensesUpdated({
+        scope: 'expenses',
+        month: expense.month,
+        revision: newRevision,
+      });
+
+      return serializeReimbursement(newReimbursement);
     }
 
-    if (expense.status === EXPENSE_STATUSES.VOIDED) {
-      throw new ExpenseDomainError('Cannot record reimbursement against a voided expense.', 409);
-    }
-
-    if (fromMemberId === expense.paidByMemberId) {
-      throw new ExpenseDomainError('Payer cannot reimburse themselves for their own purchase.', 400);
-    }
-
-    // Find allocation for the member owing
-    const allocation = (expense.allocations || []).find((a) => a.memberId === fromMemberId);
-    if (!allocation) {
-      throw new ExpenseDomainError(`Member ${fromMemberId} is not a beneficiary of this expense.`, 400);
-    }
-
-    // Concurrency-safe calculation of remaining debt
-    const existingReimbursements = await this.repository.findReimbursementsByExpenseId(expenseId);
-    const activeReimbursements = existingReimbursements.filter(
-      (r) => r.status !== REIMBURSEMENT_STATUSES.VOIDED && r.fromMemberId === fromMemberId,
+    throw new ExpenseDomainError(
+      'Could not record reimbursement due to concurrent update conflict. Please retry.',
+      409,
     );
-
-    const alreadyReimbursedPaise = activeReimbursements.reduce((sum, r) => sum + r.amountPaise, 0);
-    const remainingOwedPaise = Math.max(0, allocation.amountPaise - alreadyReimbursedPaise);
-
-    if (remainingOwedPaise === 0) {
-      throw new ExpenseDomainError(
-        `Member ${fromMemberId}'s share of this expense is already fully reimbursed.`,
-        409,
-      );
-    }
-
-    if (amountPaise > remainingOwedPaise) {
-      const remainingRupees = (remainingOwedPaise / 100).toFixed(2);
-      throw new ExpenseDomainError(
-        `Payment of ₹${(amountPaise / 100).toFixed(2)} exceeds remaining due of ₹${remainingRupees}.`,
-        409,
-      );
-    }
-
-    const reimbursementId = crypto.randomUUID();
-    const newReimbursement = await this.repository.createReimbursement({
-      reimbursementId,
-      expenseId,
-      expenseMonth: expense.month,
-      fromMemberId,
-      toMemberId: expense.paidByMemberId,
-      amountPaise,
-      method,
-      reference: reference ? reference.trim() : null,
-      idempotencyKey: idempotencyKey || null,
-      status: REIMBURSEMENT_STATUSES.RECORDED,
-      recordedAt: new Date(),
-      recordedByRole: actorRole,
-    });
-
-    broadcastExpensesUpdated({
-      scope: 'expenses',
-      month: expense.month,
-      revision: new Date().toISOString(),
-    });
-
-    return serializeReimbursement(newReimbursement);
   }
 
   /**

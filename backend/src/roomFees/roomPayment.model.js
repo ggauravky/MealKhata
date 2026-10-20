@@ -131,7 +131,6 @@ export const roomPaymentSchema = new mongoose.Schema(
 );
 
 roomPaymentSchema.index({ memberId: 1, month: 1 });
-roomPaymentSchema.index({ chargeId: 1 });
 
 export const RoomPayment =
   mongoose.models.RoomPayment || mongoose.model('RoomPayment', roomPaymentSchema);

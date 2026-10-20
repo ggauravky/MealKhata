@@ -18,6 +18,10 @@ import { addLogicalMonths, formatLogicalMonth, isValidLogicalMonth } from '../li
 import { formatPaise } from '../lib/money.js';
 import { MORNING_PRICE_PAISE, NIGHT_PRICE_PAISE } from '../lib/plates.js';
 import { downloadMonthlyReport } from '../lib/reportDownload.js';
+import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs.jsx';
+import { FinancialReportPanel } from '../components/finance/FinancialReportPanel.jsx';
+import { Link } from 'react-router-dom';
+import { BedDouble, ShoppingBag } from 'lucide-react';
 
 const periodLabels = {
   past: 'Past month',
@@ -29,9 +33,11 @@ export function ReportsPage() {
   useDocumentTitle('Reports');
   const auth = useAuth();
   const serverToday = useServerToday();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryMonth = searchParams.get('month');
+  const queryTab = searchParams.get('tab');
   const [selectedMonth, setSelectedMonth] = useState('');
+  const [activeTab, setActiveTab] = useState(queryTab || 'overview');
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState(null);
   const month =
@@ -204,8 +210,97 @@ export function ReportsPage() {
         </div>
       )}
 
-      {/* Fixed Price Reference Banner */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200/80 bg-slate-50/70 p-3.5 text-xs dark:border-slate-800/80 dark:bg-slate-900/40">
+      {/* Report Domain Tabs */}
+      <div className="flex justify-center sm:justify-start">
+        <Tabs value={activeTab} onValueChange={(val) => {
+          setActiveTab(val);
+          setSearchParams((prev) => {
+            const p = new URLSearchParams(prev);
+            p.set('tab', val);
+            return p;
+          });
+        }}>
+          <TabsList className="grid grid-cols-4 w-full sm:w-auto">
+            <TabsTrigger value="overview">Hostel Overview</TabsTrigger>
+            <TabsTrigger value="mess">Mess</TabsTrigger>
+            <TabsTrigger value="room-fees">Room Fees</TabsTrigger>
+            <TabsTrigger value="expenses">Expenses</TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
+
+      {activeTab === 'overview' && (
+        <FinancialReportPanel month={month} />
+      )}
+
+      {activeTab === 'room-fees' && (
+        <Card className="border-slate-200/90 dark:border-slate-800 p-6 text-center space-y-4">
+          <div className="mx-auto w-12 h-12 rounded-full bg-indigo-50 dark:bg-indigo-950/60 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+            <BedDouble className="h-6 w-6" />
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+              Room Fees Management & Ledger
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto">
+              View individual fee plans, issued monthly room charges, occupancy, and verified payments in the dedicated Room Fees portal.
+            </p>
+          </div>
+          <div className="flex items-center justify-center gap-3 pt-2">
+            <Link
+              to={`/room-fees?month=${month}`}
+              className="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 transition-colors"
+            >
+              Go to Room Fees
+            </Link>
+            {auth.role === 'admin' || auth.role === 'superadmin' ? (
+              <Link
+                to="/admin/room-fees"
+                className="inline-flex items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              >
+                Admin Room Fees Panel
+              </Link>
+            ) : null}
+          </div>
+        </Card>
+      )}
+
+      {activeTab === 'expenses' && (
+        <Card className="border-slate-200/90 dark:border-slate-800 p-6 text-center space-y-4">
+          <div className="mx-auto w-12 h-12 rounded-full bg-amber-50 dark:bg-amber-950/60 flex items-center justify-center text-amber-600 dark:text-amber-400">
+            <ShoppingBag className="h-6 w-6" />
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+              Other Expenses & Shared Spending
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto">
+              Inspect groceries, snacks, outside food purchases, split obligations, and roommate reimbursement history in the Expenses portal.
+            </p>
+          </div>
+          <div className="flex items-center justify-center gap-3 pt-2">
+            <Link
+              to={`/expenses?month=${month}`}
+              className="inline-flex items-center justify-center rounded-lg bg-amber-600 px-4 py-2 text-xs font-semibold text-white hover:bg-amber-700 transition-colors"
+            >
+              Go to Expenses
+            </Link>
+            {auth.role === 'admin' || auth.role === 'superadmin' ? (
+              <Link
+                to="/admin/expenses"
+                className="inline-flex items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              >
+                Admin Expenses Panel
+              </Link>
+            ) : null}
+          </div>
+        </Card>
+      )}
+
+      {activeTab === 'mess' && (
+        <>
+          {/* Fixed Price Reference Banner */}
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200/80 bg-slate-50/70 p-3.5 text-xs dark:border-slate-800/80 dark:bg-slate-900/40">
         <span className="text-slate-600 dark:text-slate-400">
           Fixed prices per physical plate:
         </span>
@@ -334,6 +429,8 @@ export function ReportsPage() {
               summary={data.projection}
             />
           )}
+        </>
+      )}
         </>
       )}
     </div>

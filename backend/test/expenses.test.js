@@ -613,5 +613,51 @@ describe('MealKhata 2.0: Other Expenses & Shared Spending (Phase 2)', () => {
       const sumOfAmounts = allExpenses.reduce((sum, e) => sum + e.amountPaise, 0);
       assert.equal(householdSummary.totalExpensesPaise, sumOfAmounts);
     });
+
+    test('Section 2.2: Concurrent reimbursement race condition guard prevents exceeding debt', async () => {
+      // 1. Create an expense where Nikhil owes Gaurav ₹100 (10000 paise)
+      const expense = await service.createExpense({
+        date: '2026-10-21',
+        title: 'Snacks for Nikhil',
+        category: 'snacks',
+        amountPaise: 10000,
+        paidByMemberId: 'gaurav',
+        splitType: 'personal',
+        participants: ['nikhil'],
+        actorRole: ROLES.ADMIN,
+      });
+
+      // 2. Launch two simultaneous requests for ₹80 (8000 paise)
+      const reqA = service.recordReimbursement({
+        expenseId: expense.expenseId,
+        fromMemberId: 'nikhil',
+        amountPaise: 8000,
+        actorRole: ROLES.ADMIN,
+      });
+
+      const reqB = service.recordReimbursement({
+        expenseId: expense.expenseId,
+        fromMemberId: 'nikhil',
+        amountPaise: 8000,
+        actorRole: ROLES.ADMIN,
+      });
+
+      const results = await Promise.allSettled([reqA, reqB]);
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+
+      // Exactly ONE request must succeed; the other must be rejected
+      assert.equal(fulfilled.length, 1, 'Only one concurrent reimbursement should succeed');
+      assert.equal(rejected.length, 1, 'The competing concurrent reimbursement must fail');
+      assert.match(rejected[0].reason.message, /exceeds remaining due|concurrent update/);
+
+      // Verify that the total recorded reimbursement does not exceed ₹100
+      const reimbursements = await repository.findReimbursementsByExpenseId(expense.expenseId);
+      const active = reimbursements.filter((r) => r.status !== 'voided');
+      const totalReimbursed = active.reduce((sum, r) => sum + r.amountPaise, 0);
+
+      assert.equal(totalReimbursed, 8000, 'Total recorded reimbursement must be exactly ₹80, never ₹160');
+      assert.ok(totalReimbursed <= 10000, 'Total recorded reimbursement must never exceed ₹100');
+    });
   });
 });

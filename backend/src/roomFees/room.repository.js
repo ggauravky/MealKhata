@@ -152,12 +152,11 @@ export const roomRepository = {
 
   // Settings
   async getPaymentSettings() {
-    let settings = await RoomPaymentSettings.findOne({ settingsId: ROOM_SETTINGS_KEY }).lean();
-    if (!settings) {
-      settings = await RoomPaymentSettings.create({ settingsId: ROOM_SETTINGS_KEY });
-      settings = settings.toObject();
-    }
-    return settings;
+    return RoomPaymentSettings.findOneAndUpdate(
+      { settingsId: ROOM_SETTINGS_KEY },
+      { $setOnInsert: { settingsId: ROOM_SETTINGS_KEY } },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    ).lean();
   },
 
   async updatePaymentSettings(updates) {

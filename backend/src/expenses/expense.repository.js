@@ -34,6 +34,18 @@ export class ExpenseRepository {
     return Expense.findOneAndUpdate({ expenseId }, { $set: updateData }, { new: true }).lean();
   }
 
+  async acquireExpenseRevision(expenseId, expectedRevision, newRevision) {
+    const filter = { expenseId, status: 'recorded' };
+    if (expectedRevision) {
+      filter.revision = expectedRevision;
+    }
+    return Expense.findOneAndUpdate(
+      filter,
+      { $set: { revision: newRevision } },
+      { new: true },
+    ).lean();
+  }
+
   async createReimbursement(data) {
     return ExpenseReimbursement.create(data);
   }

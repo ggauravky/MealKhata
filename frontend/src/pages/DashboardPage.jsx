@@ -16,6 +16,9 @@ import { Skeleton } from '../components/ui/skeleton.jsx';
 import { useAuth } from '../hooks/useAuth.js';
 import { useDashboard } from '../hooks/useDashboard.js';
 import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
+import { useFinance, useMemberFinance, useHouseholdFinance } from '../hooks/useFinance.js';
+import { FinancialOverviewCard } from '../components/finance/FinancialOverviewCard.jsx';
+import { FinancialHouseholdSummary } from '../components/finance/FinancialHouseholdSummary.jsx';
 import { usePwa } from '../hooks/usePwa.js';
 import { api } from '../lib/api.js';
 import { formatLogicalDate } from '../lib/logicalDate.js';
@@ -75,6 +78,9 @@ export function DashboardPage() {
 
   const isMember = auth.role === 'member';
   const isAdminOrSuper = auth.role === 'admin' || auth.role === 'superadmin';
+  const currentMonth = data?.today ? data.today.slice(0, 7) : new Date().toISOString().slice(0, 7);
+  const memberFinance = useMemberFinance(currentMonth);
+  const householdFinance = useHouseholdFinance(currentMonth);
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -130,6 +136,21 @@ export function DashboardPage() {
 
           {/* Attention items if present */}
           <AttentionSection items={data.attention} />
+
+          {/* Phase 3 Unified Financial Overview (Member) */}
+          {isMember && memberFinance.data && (
+            <FinancialOverviewCard
+              overview={memberFinance.data}
+              onRefresh={memberFinance.refresh}
+            />
+          )}
+
+          {/* Phase 3 Unified Financial Overview (Admin / SuperAdmin) */}
+          {isAdminOrSuper && householdFinance.data && (
+            <FinancialHouseholdSummary
+              household={householdFinance.data}
+            />
+          )}
 
           {/* Member view: 1. Personal Meals Today */}
           {isMember && data.personalHero && (

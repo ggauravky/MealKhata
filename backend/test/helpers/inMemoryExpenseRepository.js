@@ -61,6 +61,22 @@ export class InMemoryExpenseRepository {
     return JSON.parse(JSON.stringify(this.expenses[index]));
   }
 
+  async acquireExpenseRevision(expenseId, expectedRevision, newRevision) {
+    const index = this.expenses.findIndex(
+      (e) =>
+        e.expenseId === expenseId &&
+        e.status === 'recorded' &&
+        (!expectedRevision || e.revision === expectedRevision),
+    );
+    if (index === -1) return null;
+    this.expenses[index] = {
+      ...this.expenses[index],
+      revision: newRevision,
+      updatedAt: new Date(),
+    };
+    return JSON.parse(JSON.stringify(this.expenses[index]));
+  }
+
   async createReimbursement(data) {
     const doc = {
       ...data,
