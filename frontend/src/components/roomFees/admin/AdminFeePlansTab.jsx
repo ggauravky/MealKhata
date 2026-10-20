@@ -1,4 +1,4 @@
-import { BedDouble, CircleDollarSign, Edit, History, Plus } from 'lucide-react';
+import { BedDouble, CircleDollarSign, Edit, History, Plus, RefreshCw, AlertCircle } from 'lucide-react';
 import { useState } from 'react';
 import { Badge } from '../../ui/badge.jsx';
 import { Button } from '../../ui/button.jsx';
@@ -18,14 +18,23 @@ import { ROOMMATES } from '../../../lib/constants.js';
 import { formatLogicalMonth } from '../../../lib/logicalMonth.js';
 import { formatPaise, rupeesToPaise } from '../../../lib/money.js';
 import { api } from '../../../lib/api.js';
+import { getIndiaCurrentLogicalMonth } from '../../../lib/logicalDate.js';
 
-export function AdminFeePlansTab({ plans = {}, rooms = [], onRefresh, loading = false, error = '' }) {
+export function AdminFeePlansTab({
+  plans = {},
+  rooms = [],
+  onRefresh,
+  loading = false,
+  error = '',
+  memberErrors = {},
+  targetMonth = null,
+}) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
   const [historyMemberId, setHistoryMemberId] = useState('nikhil');
   const [selectedMemberId, setSelectedMemberId] = useState('nikhil');
   const [rupeesAmount, setRupeesAmount] = useState('2800');
-  const [effectiveFromMonth, setEffectiveFromMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [effectiveFromMonth, setEffectiveFromMonth] = useState(() => targetMonth || getIndiaCurrentLogicalMonth());
   const [dueDay, setDueDay] = useState('5');
   const [reason, setReason] = useState('Standard monthly hostel room fee');
   const [submitting, setSubmitting] = useState(false);
@@ -33,8 +42,8 @@ export function AdminFeePlansTab({ plans = {}, rooms = [], onRefresh, loading = 
 
   const openConfigure = (memberId) => {
     setSelectedMemberId(memberId);
-    const existing = plans[memberId];
-    if (existing) {
+    const existing = plans[memberId]?.activePlan || plans[memberId];
+    if (existing && existing.amountPaise) {
       setRupeesAmount(String(Math.floor(existing.amountPaise / 100)));
       setDueDay(String(existing.dueDay || 5));
     } else {
@@ -130,8 +139,12 @@ export function AdminFeePlansTab({ plans = {}, rooms = [], onRefresh, loading = 
             <TableBody>
               {ROOMMATES.map((roommate) => {
                 const plan = plans[roommate.id];
-                const hasPlan = Boolean(plan && plan.amountPaise);
-                const hasFuture = Boolean(plan?.futurePlan);
+                const memberErr = memberErrors[roommate.id];
+                const activePlan = plan?.activePlan;
+                const futurePlan = plan?.futurePlan;
+                const hasActive = Boolean(activePlan && activePlan.amountPaise);
+                const hasFuture = Boolean(futurePlan && futurePlan.amountPaise);
+                const hasHistorical = Boolean(plan?.allPlans && plan.allPlans.length > 0);
 
                 return (
                   <TableRow key={roommate.id}>
@@ -139,16 +152,39 @@ export function AdminFeePlansTab({ plans = {}, rooms = [], onRefresh, loading = 
                       {roommate.name}
                     </TableCell>
                     <TableCell>
-                      {hasPlan ? (
+                      {memberErr ? (
+                        <div className="flex items-center gap-1.5 text-xs text-rose-600 dark:text-rose-400 font-medium">
+                          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                          <span>{memberErr}</span>
+                        </div>
+                      ) : hasActive ? (
                         <div>
                           <span className="text-base font-bold text-slate-900 dark:text-slate-100">
-                            {formatPaise(plan.amountPaise)}
+                            {formatPaise(activePlan.amountPaise)}
                           </span>
                           {hasFuture && (
                             <span className="block text-[11px] text-teal-600 dark:text-teal-400 font-medium">
-                              Future: {formatPaise(plan.futurePlan.amountPaise)} from {formatLogicalMonth(plan.futurePlan.effectiveFromMonth)}
+                              Future: {formatPaise(futurePlan.amountPaise)} from {formatLogicalMonth(futurePlan.effectiveFromMonth)}
                             </span>
                           )}
+                        </div>
+                      ) : hasFuture ? (
+                        <div>
+                          <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                            Scheduled: {formatPaise(futurePlan.amountPaise)}
+                          </span>
+                          <span className="block text-[11px] text-teal-600 dark:text-teal-400 font-medium">
+                            Starts {formatLogicalMonth(futurePlan.effectiveFromMonth)}
+                          </span>
+                        </div>
+                      ) : hasHistorical ? (
+                        <div>
+                          <span className="text-xs text-slate-500 italic">
+                            Prior rate: {formatPaise(plan.allPlans[0].amountPaise)}
+                          </span>
+                          <span className="block text-[11px] text-slate-400">
+                            Ended {plan.allPlans[0].effectiveUntilMonth ? formatLogicalMonth(plan.allPlans[0].effectiveUntilMonth) : 'previously'}
+                          </span>
                         </div>
                       ) : (
                         <span className="text-xs text-amber-600 dark:text-amber-400 italic font-medium">
@@ -157,18 +193,48 @@ export function AdminFeePlansTab({ plans = {}, rooms = [], onRefresh, loading = 
                       )}
                     </TableCell>
                     <TableCell className="text-xs text-slate-600 dark:text-slate-400">
-                      {hasPlan ? formatLogicalMonth(plan.effectiveFromMonth) : '—'}
+                      {memberErr ? '—' : hasActive ? formatLogicalMonth(activePlan.effectiveFromMonth) : hasFuture ? formatLogicalMonth(futurePlan.effectiveFromMonth) : '—'}
                     </TableCell>
                     <TableCell className="text-xs text-slate-600 dark:text-slate-400">
-                      {hasPlan ? `${plan.dueDay}th of month` : '—'}
+                      {memberErr ? '—' : hasActive ? `${activePlan.dueDay}th of month` : hasFuture ? `${futurePlan.dueDay}th of month` : '—'}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={hasPlan ? 'taking' : 'warning'} className="text-[10px] py-0">
-                        {hasPlan ? 'Active Plan' : 'Unconfigured'}
-                      </Badge>
+                      {memberErr ? (
+                        <Badge variant="destructive" className="text-[10px] py-0">
+                          Load Failed
+                        </Badge>
+                      ) : hasActive ? (
+                        <Badge variant="taking" className="text-[10px] py-0">
+                          Active Plan
+                        </Badge>
+                      ) : hasFuture ? (
+                        <Badge variant="outline" className="text-[10px] py-0 border-teal-500 text-teal-700 dark:text-teal-300">
+                          Future Scheduled
+                        </Badge>
+                      ) : hasHistorical ? (
+                        <Badge variant="secondary" className="text-[10px] py-0">
+                          Historical Only
+                        </Badge>
+                      ) : (
+                        <Badge variant="warning" className="text-[10px] py-0">
+                          No Active Plan
+                        </Badge>
+                      )}
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1.5">
+                        {memberErr && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={onRefresh}
+                            className="text-xs text-rose-600 hover:text-rose-800"
+                            title="Retry loading plan"
+                          >
+                            <RefreshCw className="h-3.5 w-3.5 mr-1" />
+                            <span>Retry</span>
+                          </Button>
+                        )}
                         {plan?.allPlans && plan.allPlans.length > 0 && (
                           <Button
                             size="sm"
@@ -188,7 +254,7 @@ export function AdminFeePlansTab({ plans = {}, rooms = [], onRefresh, loading = 
                           className="gap-1.5 text-xs font-semibold"
                         >
                           <Edit className="h-3.5 w-3.5" />
-                          <span>{hasPlan ? 'Update / Change Rate' : 'Configure Fee'}</span>
+                          <span>{hasActive ? 'Update / Change Rate' : 'Configure Fee'}</span>
                         </Button>
                       </div>
                     </TableCell>

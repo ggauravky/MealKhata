@@ -141,7 +141,7 @@ export class ExpenseService {
       splitType: splitResult.splitType,
       allocations: splitResult.allocations,
       status: EXPENSE_STATUSES.RECORDED,
-      idempotencyKey: idempotencyKey || null,
+      idempotencyKey: idempotencyKey || undefined,
       createdByRole: actorRole,
       createdByMemberId: actorMemberId || null,
       revision,
@@ -252,40 +252,54 @@ export class ExpenseService {
       throw new ExpenseDomainError('A mandatory void reason is required (up to 300 characters).', 400);
     }
 
-    const expense = await this.repository.findExpenseById(expenseId);
-    if (!expense) {
-      throw new ExpenseDomainError('Expense not found.', 404);
+    let updated;
+    if (typeof this.repository.executeAtomicExpenseVoid === 'function') {
+      try {
+        updated = await this.repository.executeAtomicExpenseVoid({
+          expenseId,
+          reason: reason.trim(),
+          actorRole,
+        });
+      } catch (err) {
+        throw new ExpenseDomainError(err.message, err.statusCode || 400);
+      }
+    } else {
+      const expense = await this.repository.findExpenseById(expenseId);
+      if (!expense) {
+        throw new ExpenseDomainError('Expense not found.', 404);
+      }
+
+      if (expense.status === EXPENSE_STATUSES.VOIDED) {
+        throw new ExpenseDomainError('Expense is already voided.', 409);
+      }
+
+      // Integrity Guard: Check if active reimbursements exist
+      const reimbursements = await this.repository.findReimbursementsByExpenseId(expenseId);
+      const activeReimbursements = reimbursements.filter((r) => r.status !== REIMBURSEMENT_STATUSES.VOIDED);
+
+      if (activeReimbursements.length > 0) {
+        throw new ExpenseDomainError(
+          `Cannot void expense with ${activeReimbursements.length} active reimbursement(s). Void active reimbursements first.`,
+          409,
+        );
+      }
+
+      updated = await this.repository.updateExpense(expenseId, {
+        status: EXPENSE_STATUSES.VOIDED,
+        voidedAt: new Date(),
+        voidedByRole: actorRole,
+        voidReason: reason.trim(),
+        revision: new Date().toISOString(),
+      });
     }
-
-    if (expense.status === EXPENSE_STATUSES.VOIDED) {
-      throw new ExpenseDomainError('Expense is already voided.', 409);
-    }
-
-    // Integrity Guard: Check if active reimbursements exist
-    const reimbursements = await this.repository.findReimbursementsByExpenseId(expenseId);
-    const activeReimbursements = reimbursements.filter((r) => r.status !== REIMBURSEMENT_STATUSES.VOIDED);
-
-    if (activeReimbursements.length > 0) {
-      throw new ExpenseDomainError(
-        `Cannot void expense with ${activeReimbursements.length} active reimbursement(s). Void active reimbursements first.`,
-        409,
-      );
-    }
-
-    const updated = await this.repository.updateExpense(expenseId, {
-      status: EXPENSE_STATUSES.VOIDED,
-      voidedAt: new Date(),
-      voidedByRole: actorRole,
-      voidReason: reason.trim(),
-      revision: new Date().toISOString(),
-    });
 
     broadcastExpensesUpdated({
       scope: 'expenses',
-      month: expense.month,
+      month: updated.month,
       revision: updated.revision,
     });
 
+    const reimbursements = await this.repository.findReimbursementsByExpenseId(expenseId);
     return serializeExpense({ expense: updated, reimbursements, role: actorRole });
   }
 
@@ -349,14 +363,19 @@ export class ExpenseService {
       throw new ExpenseDomainError(`Note must not exceed ${MAX_EXPENSE_NOTE_LENGTH} characters.`, 400);
     }
 
-    // Determine if financial fields changed
+    // Determine if financial/attribution fields changed (date change is attribution-sensitive)
     const isFinancialChange =
       newAmountPaise !== expense.amountPaise ||
       newPaidByMemberId !== expense.paidByMemberId ||
       newSplitType !== expense.splitType ||
+      newDate !== expense.date ||
       newMonth !== expense.month ||
       changes.participants !== undefined ||
       changes.customAllocations !== undefined;
+
+    if (isFinancialChange && !expectedRevision) {
+      throw new ExpenseDomainError('expectedRevision is required for financial corrections to prevent concurrent conflicts.', 400);
+    }
 
     if (isFinancialChange && activeReimbursements.length > 0) {
       throw new ExpenseDomainError(
@@ -394,12 +413,26 @@ export class ExpenseService {
       description: expense.description || '',
     };
 
+    const newSnapshot = {
+      title: newTitle,
+      category: newCategory,
+      date: newDate,
+      month: newMonth,
+      amountPaise: finalAmountPaise,
+      paidByMemberId: newPaidByMemberId,
+      splitType: finalSplitType,
+      allocations: finalAllocations,
+      description: newDescription,
+    };
+
     const correctionRecord = {
       correctionId: crypto.randomUUID(),
       correctedAt: new Date(),
       correctedByRole: actorRole,
       reason: reason.trim(),
       previousSnapshot,
+      newSnapshot,
+      revision: expense.revision,
     };
 
     const updateData = {
@@ -414,11 +447,26 @@ export class ExpenseService {
       allocations: finalAllocations,
     };
 
-    const updated = await this.repository.recordExpenseCorrection(expenseId, {
-      updateData,
-      correctionRecord,
-      expectedRevision,
-    });
+    let updated;
+    if (typeof this.repository.executeAtomicExpenseCorrection === 'function') {
+      try {
+        updated = await this.repository.executeAtomicExpenseCorrection({
+          expenseId,
+          updateData,
+          correctionRecord,
+          expectedRevision,
+          isFinancialChange,
+        });
+      } catch (err) {
+        throw new ExpenseDomainError(err.message, err.statusCode || 400);
+      }
+    } else {
+      updated = await this.repository.recordExpenseCorrection(expenseId, {
+        updateData,
+        correctionRecord,
+        expectedRevision,
+      });
+    }
 
     if (!updated) {
       throw new ExpenseDomainError('The expense was modified concurrently. Please refresh and try again.', 409);
@@ -520,7 +568,7 @@ export class ExpenseService {
         amountPaise,
         method,
         reference: reference ? reference.trim() : null,
-        idempotencyKey: idempotencyKey || null,
+        idempotencyKey: idempotencyKey || undefined,
         status: REIMBURSEMENT_STATUSES.RECORDED,
         recordedAt: new Date(),
         recordedByRole: actorRole,

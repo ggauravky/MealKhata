@@ -12,6 +12,8 @@ import { getPreviousLogicalMonth, isValidLogicalMonth } from '../utils/month.js'
 import { MEMBERS } from '../config/members.js';
 import { STAY_STATUSES } from './stay.constants.js';
 
+import { createStayAttributionService, defaultStayAttributionService } from './stayAttribution.service.js';
+
 function getMonthsRange(startMonth, endMonth) {
   const months = [];
   let current = startMonth;
@@ -35,7 +37,16 @@ export function createLifetimeReportService({
   finance = financialOverviewService,
   deposits = depositService,
   roomFees = roomFeeService,
+  stayAttribution = null,
 } = {}) {
+  const attributionService =
+    stayAttribution ||
+    createStayAttributionService({
+      stayRepo: repository,
+      finance,
+      deposits,
+      roomFees,
+    });
   return {
     async getLifetimeFinancialReport(stayId, { actorRole = 'member' } = {}) {
       const stay = await repository.findStayById(stayId);
@@ -52,57 +63,19 @@ export function createLifetimeReportService({
       const currentMonth = getLogicalDateInTimeZone(new Date(), 'Asia/Kolkata').slice(0, 7);
       const endMonth = stay.actualLeftOn ? stay.actualLeftOn.slice(0, 7) : currentMonth;
 
-      const months = getMonthsRange(startMonth, endMonth);
-
-      // Fetch monthly financial snapshots - fail closed if any month fails
-      const monthlySummaries = await Promise.all(
-        months.map(async (month) => {
-          try {
-            return await finance.getMemberFinancialOverview({
-              memberId: stay.memberId,
-              month,
-              actorRole,
-            });
-          } catch (err) {
-            const error = new Error(`Failed to calculate authoritative financial overview for month ${month}: ${err.message}`);
-            error.statusCode = 500;
-            error.month = month;
-            throw error;
-          }
-        }),
-      );
-
-      const validMonthSummaries = monthlySummaries;
-
-      // Aggregate lifetime totals
-      let totalMessBilledPaise = 0;
-      let totalMessPaidPaise = 0;
-      let totalMessRemainingPaise = 0;
-
-      let totalRoomBilledPaise = 0;
-      let totalRoomPaidPaise = 0;
-      let totalRoomRemainingPaise = 0;
-
-      let totalExpenseSharePaise = 0;
-      let totalExpenseOwedPaise = 0;
-      let totalExpenseReceivablePaise = 0;
+      const attr = await attributionService.getStayAttributedFinances({
+        stayId,
+        actorRole,
+      });
 
       let fullyPaidRoomMonths = 0;
       let partialRoomMonths = 0;
       let unpaidRoomMonths = 0;
       let issuedRoomMonths = 0;
 
-      for (const ms of validMonthSummaries) {
-        totalMessBilledPaise += ms.mess.billPaise || 0;
-        totalMessPaidPaise += ms.mess.paidPaise || 0;
-        totalMessRemainingPaise += ms.mess.remainingPaise || 0;
-
+      for (const ms of attr.monthlySummaries) {
         if (ms.room.chargeIssued) {
           issuedRoomMonths += 1;
-          totalRoomBilledPaise += ms.room.issuedChargePaise || 0;
-          totalRoomPaidPaise += ms.room.paidPaise || 0;
-          totalRoomRemainingPaise += ms.room.remainingPaise || 0;
-
           if (ms.room.remainingPaise === 0) {
             fullyPaidRoomMonths += 1;
           } else if (ms.room.paidPaise > 0) {
@@ -111,24 +84,16 @@ export function createLifetimeReportService({
             unpaidRoomMonths += 1;
           }
         }
-
-        totalExpenseSharePaise += ms.expenses.spendingSharePaise || 0;
-        totalExpenseOwedPaise += ms.expenses.owedToOthersPaise || 0;
-        totalExpenseReceivablePaise += ms.expenses.owedToMePaise || 0;
       }
-
-      // Fetch Deposit Summary
-      const depositOverview = await deposits.getDepositSummary(stayId);
 
       // Fetch Clearances if checked out
       const clearances = await repository.findClearancesByStayId(stayId);
 
       // Calculate stay duration in months
-      const stayDurationMonths = months.length;
+      const stayDurationMonths = attr.months.length;
 
       // Current live payable
-      const currentPayablePaise =
-        totalMessRemainingPaise + totalRoomRemainingPaise + totalExpenseOwedPaise;
+      const currentPayablePaise = attr.totalOutstandingPayablePaise;
 
       return {
         stay,
@@ -150,34 +115,34 @@ export function createLifetimeReportService({
         },
         lifetimeTotals: {
           mess: {
-            billedPaise: totalMessBilledPaise,
-            paidPaise: totalMessPaidPaise,
-            remainingPaise: totalMessRemainingPaise,
+            billedPaise: attr.totalMessBilledPaise,
+            paidPaise: attr.totalMessPaidPaise,
+            remainingPaise: attr.totalMessRemainingPaise,
           },
           room: {
             issuedMonths: issuedRoomMonths,
             fullyPaidMonths: fullyPaidRoomMonths,
             partialMonths: partialRoomMonths,
             unpaidMonths: unpaidRoomMonths,
-            billedPaise: totalRoomBilledPaise,
-            paidPaise: totalRoomPaidPaise,
-            remainingPaise: totalRoomRemainingPaise,
+            billedPaise: attr.totalRoomBilledPaise,
+            paidPaise: attr.totalRoomPaidPaise,
+            remainingPaise: attr.totalRoomRemainingPaise,
           },
           expenses: {
-            spendingSharePaise: totalExpenseSharePaise,
-            owedToOthersPaise: totalExpenseOwedPaise,
-            owedToMePaise: totalExpenseReceivablePaise,
+            spendingSharePaise: attr.totalExpenseSharePaise,
+            owedToOthersPaise: attr.totalExpenseOwedPaise,
+            owedToMePaise: attr.totalExpenseReceivablePaise,
           },
           combined: {
             totalTrackedSpendingPaise:
-              totalMessBilledPaise + totalRoomBilledPaise + totalExpenseSharePaise,
+              attr.totalMessBilledPaise + attr.totalRoomBilledPaise + attr.totalExpenseSharePaise,
             totalOutstandingPayablePaise: currentPayablePaise,
-            totalReceivablePaise: totalExpenseReceivablePaise,
+            totalReceivablePaise: attr.totalExpenseReceivablePaise,
           },
         },
-        depositOverview,
+        depositOverview: attr.depositOverview,
         clearances,
-        monthlySummaries: validMonthSummaries,
+        monthlySummaries: attr.monthlySummaries,
         generatedAt: new Date().toISOString(),
       };
     },

@@ -1288,4 +1288,307 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
       assert.equal(fetchedById.voidReason, 'Entered twice by mistake');
     });
   });
+
+  // =========================================================================
+  // 5. P0 ADVANCED CONCURRENCY & CANONICAL STAY ATTRIBUTION (FINAL RELEASE PASS)
+  // =========================================================================
+  describe('P0 Advanced Concurrency & Stay Attribution Guarantees', () => {
+    it('Exact date-based room occupancy interval sweep allows non-overlapping intervals within capacity', async () => {
+      // Room 205 has capacity 2
+      const room = await ensureRoom('205', 2);
+
+      // A: 2026-10-01 to 2026-10-10
+      await roomFeeService.assignMemberToRoom({
+        roomId: room.roomId,
+        memberId: 'gaurav',
+        effectiveFromMonth: '2026-10',
+        effectiveFromDate: '2026-10-01',
+        effectiveUntilDate: '2026-10-10',
+        actorRole: 'admin',
+      });
+
+      // B: 2026-10-11 to 2026-10-20
+      await roomFeeService.assignMemberToRoom({
+        roomId: room.roomId,
+        memberId: 'nikhil',
+        effectiveFromMonth: '2026-10',
+        effectiveFromDate: '2026-10-11',
+        effectiveUntilDate: '2026-10-20',
+        actorRole: 'admin',
+      });
+
+      // C: 2026-10-01 to 2026-10-20 (Simultaneous occupancy is 2: A+C on Oct 1-10, B+C on Oct 11-20)
+      const assignmentC = await roomFeeService.assignMemberToRoom({
+        roomId: room.roomId,
+        memberId: 'devansh',
+        effectiveFromMonth: '2026-10',
+        effectiveFromDate: '2026-10-01',
+        effectiveUntilDate: '2026-10-20',
+        actorRole: 'admin',
+      });
+      assert.ok(assignmentC);
+      assert.equal(assignmentC.memberId, 'devansh');
+
+      // Now create a 4th member resident attempt spanning 2026-10-05 to 2026-10-15
+      // This MUST fail because on Oct 5-10, simultaneous occupancy would reach 3 (A, C, and D)
+      await assert.rejects(
+        async () => {
+          await roomFeeService.assignMemberToRoom({
+            roomId: room.roomId,
+            memberId: 'gaurav', // gaurav re-attempting or conflicting
+            effectiveFromMonth: '2026-10',
+            effectiveFromDate: '2026-10-05',
+            effectiveUntilDate: '2026-10-15',
+            actorRole: 'admin',
+          });
+        },
+        (err) => err.statusCode === 409
+      );
+    });
+
+    it('Concurrent room assignments to a 1-capacity room accept at most one', async () => {
+      const room = await ensureRoom('301', 1);
+
+      const results = await Promise.allSettled([
+        roomFeeService.assignMemberToRoom({
+          roomId: room.roomId,
+          memberId: 'gaurav',
+          effectiveFromMonth: '2026-10',
+          actorRole: 'admin',
+        }),
+        roomFeeService.assignMemberToRoom({
+          roomId: room.roomId,
+          memberId: 'nikhil',
+          effectiveFromMonth: '2026-10',
+          actorRole: 'admin',
+        }),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+
+      assert.equal(fulfilled.length, 1, 'Exactly one concurrent assignment succeeds');
+      assert.equal(rejected.length, 1, 'The competing assignment is rejected');
+      const rejErr = rejected[0].reason;
+      assert.ok(
+        rejErr.statusCode === 409 || rejErr.code === 112 || rejErr.name === 'MongoServerError' || (rejErr.message && rejErr.message.includes('capacity')),
+        'Competing assignment rejected via 409 capacity limit or transactional serialization'
+      );
+
+      // Verify in DB that only 1 assignment exists
+      const assignments = await RoomAssignment.find({ roomId: room.roomId }).lean();
+      assert.equal(assignments.length, 1);
+    });
+
+    it('Concurrent Expense void vs reimbursement race guarantees no reimbursement against voided expense', async () => {
+      const exp = await expenseService.createExpense({
+        title: 'Weekly Groceries',
+        category: 'groceries',
+        amountPaise: 30000,
+        paidByMemberId: 'gaurav',
+        date: '2026-10-05',
+        splitType: 'equal',
+        participants: ['gaurav', 'nikhil'],
+        actorMemberId: 'gaurav',
+        actorRole: 'admin',
+      });
+
+      // Concurrently run voidExpense and recordReimbursement
+      const [voidResult, reimbResult] = await Promise.allSettled([
+        expenseService.voidExpense(exp.expenseId, {
+          reason: 'Duplicate purchase',
+          actorRole: 'superadmin',
+        }),
+        expenseService.recordReimbursement(exp.expenseId, {
+          fromMemberId: 'nikhil',
+          amountPaise: 15000,
+          paymentMethod: 'upi',
+          actorRole: 'admin',
+        }),
+      ]);
+
+      // Either:
+      // Case 1: void succeeded first -> reimbursement must fail
+      // Case 2: reimbursement succeeded first -> void must fail
+      if (voidResult.status === 'fulfilled') {
+        assert.equal(reimbResult.status, 'rejected', 'Reimbursement against voided expense must be rejected');
+      } else {
+        assert.equal(reimbResult.status, 'fulfilled', 'Reimbursement succeeded so void must be rejected');
+        assert.equal(voidResult.status, 'rejected', 'Void with active reimbursement must be rejected');
+      }
+
+      // Final check: if expense is voided, NO active reimbursements exist
+      const finalExp = await Expense.findOne({ expenseId: exp.expenseId }).lean();
+      const reimbs = await ExpenseReimbursement.find({ expenseId: exp.expenseId, status: { $ne: 'voided' } }).lean();
+      if (finalExp.status === 'voided') {
+        assert.equal(reimbs.length, 0, 'No active reimbursement can exist on a voided expense');
+      }
+    });
+
+    it('Concurrent Clearance Reissues receive unique and consecutive sequences', async () => {
+      const room = await ensureRoom('206', 2);
+      const stay = await stayService.createStay({
+        memberId: 'devansh',
+        joinedOn: '2026-09-01',
+        initialRoomId: room.roomId,
+        actorRole: 'admin',
+      });
+
+      // Finalize checkout without dues -> Clearance #1 generated
+      const checkoutResult = await stayService.finalizeCheckout({
+        stayId: stay.stayId,
+        actualLeftOn: '2026-09-30',
+        allowWithDues: false,
+        actorRole: 'admin',
+      });
+      assert.equal(checkoutResult.clearance.sequence, 1);
+
+      // Concurrently reissue clearance twice
+      const [reissue1, reissue2] = await Promise.allSettled([
+        stayService.reissueClearance({
+          stayId: stay.stayId,
+          reissueReason: 'Updated contact details',
+          actorRole: 'superadmin',
+        }),
+        stayService.reissueClearance({
+          stayId: stay.stayId,
+          reissueReason: 'Corrected departure certificate',
+          actorRole: 'superadmin',
+        }),
+      ]);
+
+      assert.equal(reissue1.status, 'fulfilled');
+      assert.equal(reissue2.status, 'fulfilled');
+
+      const seqs = [reissue1.value.sequence, reissue2.value.sequence].sort((a, b) => a - b);
+      assert.deepEqual(seqs, [2, 3], 'Concurrently reissued clearances must have sequential unique sequences (2 and 3)');
+
+      const totalClearances = await HostelClearance.find({ stayId: stay.stayId }).lean();
+      assert.equal(totalClearances.length, 3, 'Total 3 immutable clearance records exist');
+    });
+
+    it('Checkout No-Dues consistency under concurrent financial mutation', async () => {
+      const room = await ensureRoom('207', 2);
+      const stay = await stayService.createStay({
+        memberId: 'gaurav',
+        joinedOn: '2026-10-01',
+        initialRoomId: room.roomId,
+        actorRole: 'admin',
+      });
+
+      // Issue room fee charge for October: ₹2,800
+      await roomFeeService.createFeePlan({
+        memberId: 'gaurav',
+        amountPaise: 280000,
+        effectiveFromMonth: '2026-10',
+        actorRole: 'admin',
+      });
+      const issueResult = await roomFeeService.issueCharges('2026-10', 'admin');
+      const charge = issueResult.charges[0];
+      assert.ok(charge);
+
+      // Pay the charge in full
+      await roomFeeService.recordPayment({
+        chargeId: charge.chargeId,
+        amountPaise: 280000,
+        method: 'upi',
+        idempotencyKey: randomUUID(),
+        actorRole: 'admin',
+      });
+
+      // Verify checkout review reports ₹0 dues initially
+      const reviewBefore = await stayService.getCheckoutReview(stay.stayId);
+      assert.equal(reviewBefore.isEligibleForNoDues, true);
+      assert.equal(reviewBefore.totalOutstandingPayablePaise, 0);
+
+      // Super Admin adjusts the charge to ₹3,300 (creating ₹500 outstanding due)
+      await roomFeeService.adjustCharge({
+        chargeId: charge.chargeId,
+        amountPaise: 50000,
+        reason: 'Late electricity surcharges',
+        actorRole: 'superadmin',
+      });
+
+      // Attempting to finalize checkout with allowWithDues: false MUST fail because dues exist
+      await assert.rejects(
+        async () => {
+          await stayService.finalizeCheckout({
+            stayId: stay.stayId,
+            actualLeftOn: '2026-10-20',
+            allowWithDues: false,
+            actorRole: 'admin',
+          });
+        },
+        (err) => err.statusCode === 403 || err.statusCode === 409
+      );
+
+      // Clearance is NOT issued
+      const clearance = await HostelClearance.findOne({ stayId: stay.stayId }).lean();
+      assert.equal(clearance, null, 'No false No-Dues clearance can be issued with outstanding dues');
+    });
+
+    it('Same-month dual stays produce strictly isolated statements without cross-contamination', async () => {
+      const room = await ensureRoom('208', 2);
+
+      // Stay 1: Oct 1 to Oct 10
+      const stay1 = await stayService.createStay({
+        memberId: 'nikhil',
+        joinedOn: '2026-10-01',
+        initialRoomId: room.roomId,
+        actorRole: 'admin',
+      });
+
+      // Expense 1 recorded on 2026-10-05 (during Stay 1)
+      const exp1 = await expenseService.createExpense({
+        title: 'Stay 1 Breakfast Groceries',
+        category: 'groceries',
+        amountPaise: 40000,
+        paidByMemberId: 'nikhil',
+        date: '2026-10-05',
+        splitType: 'equal',
+        participants: ['nikhil'],
+        actorMemberId: 'nikhil',
+        actorRole: 'admin',
+      });
+
+      // Checkout Stay 1 on 2026-10-10
+      await stayService.finalizeCheckout({
+        stayId: stay1.stayId,
+        actualLeftOn: '2026-10-10',
+        allowWithDues: true,
+        exceptionReason: 'Temporary exit',
+        actorRole: 'admin',
+      });
+
+      // Stay 2: Oct 20 onwards
+      const stay2 = await stayService.createStay({
+        memberId: 'nikhil',
+        joinedOn: '2026-10-20',
+        initialRoomId: room.roomId,
+        actorRole: 'admin',
+      });
+
+      // Expense 2 recorded on 2026-10-25 (during Stay 2)
+      const exp2 = await expenseService.createExpense({
+        title: 'Stay 2 Dinner Groceries',
+        category: 'groceries',
+        amountPaise: 70000,
+        paidByMemberId: 'nikhil',
+        date: '2026-10-25',
+        splitType: 'equal',
+        participants: ['nikhil'],
+        actorMemberId: 'nikhil',
+        actorRole: 'admin',
+      });
+
+      // Fetch checkout review for Stay 1
+      const review1 = await stayService.getCheckoutReview(stay1.stayId);
+      // Fetch checkout review for Stay 2
+      const review2 = await stayService.getCheckoutReview(stay2.stayId);
+
+      // Verify that Stay 1 tracked spending contains only exp1 (₹400), not exp2 (₹700)
+      assert.equal(review1.totalExpenseSharePaise, 40000, 'Stay 1 only accounts for Oct 1-10 spending');
+      assert.equal(review2.totalExpenseSharePaise, 70000, 'Stay 2 only accounts for Oct 20+ spending');
+    });
+  });
 });

@@ -2,6 +2,8 @@ import { AlertCircle, ArrowLeftRight, BedDouble } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { formatPaise, rupeesToPaise } from '../../lib/money.js';
+import { getIndiaTodayLogicalDate } from '../../lib/logicalDate.js';
+import { addLogicalMonths } from '../../lib/logicalMonth.js';
 import { Button } from '../ui/button.jsx';
 import {
   Dialog,
@@ -43,10 +45,11 @@ export function RoomTransferDialog({
       })
       .finally(() => setLoadingRooms(false));
 
-    // Default effective date to next month's 1st or current date
-    const today = new Date();
-    const nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
-    setEffectiveDate(nextMonth.toISOString().slice(0, 10));
+    // Default effective date to next month's 1st using Asia/Kolkata logical date
+    const todayLogical = getIndiaTodayLogicalDate();
+    const currentLogicalMonth = todayLogical.slice(0, 7);
+    const nextLogicalMonth = addLogicalMonths(currentLogicalMonth, 1);
+    setEffectiveDate(`${nextLogicalMonth}-01`);
     setNewRentRupees('');
     setReason('');
     setError('');

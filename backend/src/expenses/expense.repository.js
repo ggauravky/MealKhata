@@ -264,6 +264,179 @@ export class ExpenseRepository {
     err.statusCode = 503;
     throw err;
   }
+
+  async executeAtomicExpenseVoid({ expenseId, reason, actorRole }) {
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+      const maxRetries = 5;
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        let session = null;
+        try {
+          session = await mongoose.startSession();
+          session.startTransaction();
+
+          const expense = await Expense.findOne({ expenseId }).session(session);
+          if (!expense) {
+            const err = new Error('Expense not found.');
+            err.statusCode = 404;
+            throw err;
+          }
+          if (expense.status === 'voided') {
+            const err = new Error('Expense is already voided.');
+            err.statusCode = 409;
+            throw err;
+          }
+
+          // Guard against concurrent reimbursement: check active reimbursements inside transaction
+          const activeReimbursements = await ExpenseReimbursement.find({
+            expenseId,
+            status: 'recorded',
+          }).session(session);
+
+          if (activeReimbursements.length > 0) {
+            const err = new Error(
+              `Cannot void expense with ${activeReimbursements.length} active reimbursement(s). Void active reimbursements first.`,
+            );
+            err.statusCode = 409;
+            throw err;
+          }
+
+          const newRevision = new Date().toISOString();
+          expense.status = 'voided';
+          expense.voidedAt = new Date();
+          expense.voidedByRole = actorRole;
+          expense.voidReason = reason.trim();
+          expense.revision = newRevision;
+          await expense.save({ session });
+
+          await session.commitTransaction();
+          return expense.toObject();
+        } catch (err) {
+          if (session && session.inTransaction()) {
+            await session.abortTransaction();
+          }
+          const isTransient =
+            err.errorLabels?.has?.('TransientTransactionError') ||
+            err.errorLabelSet?.has?.('TransientTransactionError') ||
+            err.code === 112 ||
+            (typeof err.message === 'string' && (err.message.includes('WriteConflict') || err.message.includes('catalog changes')));
+
+          if (isTransient && attempt < maxRetries - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+            continue;
+          }
+
+          if (err.message && (err.message.includes('Transactions are not supported') || err.message.includes('replica set'))) {
+            const error = new Error('Financial transaction unavailable. Database transaction support is required.');
+            error.statusCode = 503;
+            throw error;
+          }
+          throw err;
+        } finally {
+          if (session) {
+            await session.endSession();
+          }
+        }
+      }
+    }
+
+    const err = new Error('Financial transaction unavailable. Database connection required.');
+    err.statusCode = 503;
+    throw err;
+  }
+
+  async executeAtomicExpenseCorrection({
+    expenseId,
+    updateData,
+    correctionRecord,
+    expectedRevision,
+    isFinancialChange,
+  }) {
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+      const maxRetries = 5;
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        let session = null;
+        try {
+          session = await mongoose.startSession();
+          session.startTransaction();
+
+          const expense = await Expense.findOne({ expenseId }).session(session);
+          if (!expense) {
+            const err = new Error('Expense not found.');
+            err.statusCode = 404;
+            throw err;
+          }
+          if (expense.status === 'voided') {
+            const err = new Error('Cannot edit or correct a voided expense.');
+            err.statusCode = 409;
+            throw err;
+          }
+          if (expectedRevision && expense.revision !== expectedRevision) {
+            const err = new Error('The expense was modified concurrently. Please refresh and try again.');
+            err.statusCode = 409;
+            throw err;
+          }
+
+          // If financial change, check active reimbursements inside transaction
+          if (isFinancialChange) {
+            const activeReimbursements = await ExpenseReimbursement.find({
+              expenseId,
+              status: 'recorded',
+            }).session(session);
+
+            if (activeReimbursements.length > 0) {
+              const err = new Error(
+                'This Expense has recorded reimbursements. Financial details cannot be changed until the existing reimbursements are reconciled.',
+              );
+              err.statusCode = 409;
+              throw err;
+            }
+          }
+
+          // Apply update
+          Object.assign(expense, updateData);
+          const newRevision = new Date().toISOString();
+          expense.revision = newRevision;
+          if (!expense.corrections) {
+            expense.corrections = [];
+          }
+          expense.corrections.push(correctionRecord);
+
+          await expense.save({ session });
+          await session.commitTransaction();
+          return expense.toObject();
+        } catch (err) {
+          if (session && session.inTransaction()) {
+            await session.abortTransaction();
+          }
+          const isTransient =
+            err.errorLabels?.has?.('TransientTransactionError') ||
+            err.errorLabelSet?.has?.('TransientTransactionError') ||
+            err.code === 112 ||
+            (typeof err.message === 'string' && (err.message.includes('WriteConflict') || err.message.includes('catalog changes')));
+
+          if (isTransient && attempt < maxRetries - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+            continue;
+          }
+
+          if (err.message && (err.message.includes('Transactions are not supported') || err.message.includes('replica set'))) {
+            const error = new Error('Financial transaction unavailable. Database transaction support is required.');
+            error.statusCode = 503;
+            throw error;
+          }
+          throw err;
+        } finally {
+          if (session) {
+            await session.endSession();
+          }
+        }
+      }
+    }
+
+    const err = new Error('Financial transaction unavailable. Database connection required.');
+    err.statusCode = 503;
+    throw err;
+  }
 }
 
 export const defaultExpenseRepository = new ExpenseRepository();

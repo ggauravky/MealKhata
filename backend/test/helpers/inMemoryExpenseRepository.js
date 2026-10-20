@@ -235,4 +235,84 @@ export class InMemoryExpenseRepository {
     reimbursement.updatedAt = new Date();
     return JSON.parse(JSON.stringify(reimbursement));
   }
+
+  async executeAtomicExpenseVoid({ expenseId, reason, actorRole }) {
+    const expense = this.expenses.find((e) => e.expenseId === expenseId);
+    if (!expense) {
+      const err = new Error('Expense not found.');
+      err.statusCode = 404;
+      throw err;
+    }
+    if (expense.status === 'voided') {
+      const err = new Error('Expense is already voided.');
+      err.statusCode = 409;
+      throw err;
+    }
+
+    const activeReimbursements = this.reimbursements.filter(
+      (r) => r.expenseId === expenseId && r.status !== 'voided',
+    );
+    if (activeReimbursements.length > 0) {
+      const err = new Error(
+        `Cannot void expense with ${activeReimbursements.length} active reimbursement(s). Void active reimbursements first.`,
+      );
+      err.statusCode = 409;
+      throw err;
+    }
+
+    expense.status = 'voided';
+    expense.voidedAt = new Date();
+    expense.voidedByRole = actorRole;
+    expense.voidReason = reason.trim();
+    expense.revision = new Date().toISOString();
+    expense.updatedAt = new Date();
+    return JSON.parse(JSON.stringify(expense));
+  }
+
+  async executeAtomicExpenseCorrection({
+    expenseId,
+    updateData,
+    correctionRecord,
+    expectedRevision,
+    isFinancialChange,
+  }) {
+    const expense = this.expenses.find((e) => e.expenseId === expenseId);
+    if (!expense) {
+      const err = new Error('Expense not found.');
+      err.statusCode = 404;
+      throw err;
+    }
+    if (expense.status === 'voided') {
+      const err = new Error('Cannot edit or correct a voided expense.');
+      err.statusCode = 409;
+      throw err;
+    }
+    if (expectedRevision && expense.revision !== expectedRevision) {
+      const err = new Error('The expense was modified concurrently. Please refresh and try again.');
+      err.statusCode = 409;
+      throw err;
+    }
+
+    if (isFinancialChange) {
+      const activeReimbursements = this.reimbursements.filter(
+        (r) => r.expenseId === expenseId && r.status !== 'voided',
+      );
+      if (activeReimbursements.length > 0) {
+        const err = new Error(
+          'This Expense has recorded reimbursements. Financial details cannot be changed until the existing reimbursements are reconciled.',
+        );
+        err.statusCode = 409;
+        throw err;
+      }
+    }
+
+    Object.assign(expense, updateData);
+    expense.revision = new Date().toISOString();
+    if (!expense.corrections) {
+      expense.corrections = [];
+    }
+    expense.corrections.push(correctionRecord);
+    expense.updatedAt = new Date();
+    return JSON.parse(JSON.stringify(expense));
+  }
 }

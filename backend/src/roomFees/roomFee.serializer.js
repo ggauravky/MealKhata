@@ -77,6 +77,8 @@ export function serializeRoomAssignment(assignment, roomMap = new Map()) {
     memberName: MEMBER_NAMES[assignment.memberId] ?? assignment.memberId,
     effectiveFromMonth: assignment.effectiveFromMonth,
     effectiveUntilMonth: assignment.effectiveUntilMonth,
+    effectiveFromDate: assignment.effectiveFromDate ?? (assignment.effectiveFromMonth ? `${assignment.effectiveFromMonth}-01` : null),
+    effectiveUntilDate: assignment.effectiveUntilDate ?? null,
     assignedAt: serializeDate(assignment.assignedAt),
     assignedByRole: assignment.assignedByRole,
   };

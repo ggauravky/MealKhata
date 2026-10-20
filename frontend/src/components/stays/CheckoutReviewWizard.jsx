@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { formatPaise } from '../../lib/money.js';
+import { getIndiaTodayLogicalDate } from '../../lib/logicalDate.js';
 import { Button } from '../ui/button.jsx';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card.jsx';
 import { Input } from '../ui/input.jsx';
@@ -30,7 +31,7 @@ export function CheckoutReviewWizard({
 }) {
   const [step, setStep] = useState(1);
   const [actualLeftOn, setActualLeftOn] = useState(
-    stay?.checkoutRequestedFor || new Date().toISOString().slice(0, 10)
+    stay?.checkoutRequestedFor || getIndiaTodayLogicalDate()
   );
   const [allowWithDues, setAllowWithDues] = useState(false);
   const [exceptionReason, setExceptionReason] = useState('');

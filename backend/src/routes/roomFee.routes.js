@@ -187,12 +187,14 @@ export function createRoomFeeRouter({
 
   router.post('/assignments', requireAdminOrAbove, async (req, res, next) => {
     try {
-      const { memberId, roomId, effectiveFromMonth, effectiveUntilMonth } = req.body || {};
+      const { memberId, roomId, effectiveFromMonth, effectiveUntilMonth, effectiveFromDate, effectiveUntilDate } = req.body || {};
       const assignment = await service.assignMemberToRoom({
         memberId,
         roomId,
         effectiveFromMonth,
         effectiveUntilMonth,
+        effectiveFromDate,
+        effectiveUntilDate,
         actorRole: req.auth.role,
       });
       notifyChange(effectiveFromMonth);

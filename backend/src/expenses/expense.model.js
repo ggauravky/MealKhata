@@ -50,6 +50,21 @@ const expenseCorrectionSchema = new mongoose.Schema(
       allocations: [expenseAllocationSchema],
       description: { type: String, default: '' },
     },
+    newSnapshot: {
+      title: { type: String, default: null },
+      category: { type: String, default: null },
+      date: { type: String, default: null },
+      month: { type: String, default: null },
+      amountPaise: { type: Number, default: null },
+      paidByMemberId: { type: String, default: null },
+      splitType: { type: String, default: null },
+      allocations: [expenseAllocationSchema],
+      description: { type: String, default: '' },
+    },
+    revision: {
+      type: String,
+      default: null,
+    },
   },
   { _id: false },
 );

@@ -54,3 +54,18 @@ export function formatIndiaTime(value) {
     timeZone: 'Asia/Kolkata',
   }).format(new Date(value));
 }
+
+export function getIndiaTodayLogicalDate(date = new Date()) {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  return formatter.format(date);
+}
+
+export function getIndiaCurrentLogicalMonth(date = new Date()) {
+  return getIndiaTodayLogicalDate(date).slice(0, 7);
+}
+

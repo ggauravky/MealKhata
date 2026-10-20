@@ -18,6 +18,8 @@ import { useMyRoomFeeHistory, useMyRoomFees, useRoomPaymentSettings } from '../h
 import { useServerToday } from '../hooks/useServerToday.js';
 import { addLogicalMonths, formatLogicalMonth, isValidLogicalMonth } from '../lib/logicalMonth.js';
 
+import { getIndiaCurrentLogicalMonth } from '../lib/logicalDate.js';
+
 export function RoomFeesPage() {
   useDocumentTitle('Room Fees');
   const auth = useAuth();
@@ -28,7 +30,7 @@ export function RoomFeesPage() {
   const queryMonth = searchParams.get('month');
   const [selectedMonth, setSelectedMonth] = useState('');
 
-  const currentLogicalMonth = serverToday.date ? serverToday.date.slice(0, 7) : new Date().toISOString().slice(0, 7);
+  const currentLogicalMonth = serverToday.date ? serverToday.date.slice(0, 7) : getIndiaCurrentLogicalMonth();
   const month =
     selectedMonth ||
     (isValidLogicalMonth(queryMonth) ? queryMonth : currentLogicalMonth);

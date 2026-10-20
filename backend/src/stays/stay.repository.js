@@ -424,6 +424,17 @@ export const stayRepository = {
   },
 
   async getNextClearanceSequence(stayId, { session } = {}) {
+    if (mongoose.connection && mongoose.connection.readyState === 1 && session) {
+      const latest = await HostelClearance.findOne({ stayId }).sort({ sequence: -1 }).session(session).lean();
+      const nextSeq = latest ? latest.sequence + 1 : 1;
+
+      await HostelStay.updateOne(
+        { stayId },
+        { $set: { clearanceSequence: nextSeq } },
+        { session },
+      );
+      return nextSeq;
+    }
     const q = HostelClearance.findOne({ stayId }).sort({ sequence: -1 });
     if (session) q.session(session);
     const latest = await q.lean();

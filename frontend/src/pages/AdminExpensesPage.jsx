@@ -49,6 +49,7 @@ import { useServerToday } from '../hooks/useServerToday.js';
 import { ROOMMATES } from '../lib/constants.js';
 import { addLogicalMonths, formatLogicalMonth } from '../lib/logicalMonth.js';
 import { formatPaise } from '../lib/money.js';
+import { getIndiaCurrentLogicalMonth } from '../lib/logicalDate.js';
 
 export function AdminExpensesPage() {
   useDocumentTitle('Admin · Expenses Management');
@@ -56,7 +57,7 @@ export function AdminExpensesPage() {
   const navigate = useNavigate();
   const serverToday = useServerToday();
 
-  const currentLogicalMonth = serverToday.date ? serverToday.date.slice(0, 7) : new Date().toISOString().slice(0, 7);
+  const currentLogicalMonth = serverToday.date ? serverToday.date.slice(0, 7) : getIndiaCurrentLogicalMonth();
   const [selectedMonth, setSelectedMonth] = useState(currentLogicalMonth);
   const [activeTab, setActiveTab] = useState('overview');
 
@@ -141,12 +142,18 @@ export function AdminExpensesPage() {
     }
     setDeleting(true);
     try {
-      await api.post(`/api/expenses/${targetExpenseForDelete.expenseId}/void`, {
+      const deletedId = targetExpenseForDelete.expenseId;
+      await api.post(`/api/expenses/${deletedId}/void`, {
         reason: deleteReason.trim(),
       });
       setDeleteDialogOpen(false);
       setDeleteReason('');
       setTargetExpenseForDelete(null);
+      if (selectedExpenseId === deletedId || selectedExpense?.expenseId === deletedId) {
+        setSelectedExpense(null);
+        setSelectedExpenseId(null);
+        setDetailsOpen(false);
+      }
       refreshAll();
     } catch (err) {
       setDeleteError(err?.message || 'Failed to delete expense.');
@@ -449,9 +456,14 @@ export function AdminExpensesPage() {
             setEditExpenseOpen(isOpen);
             if (!isOpen) setTargetExpenseForEdit(null);
           }}
-          expense={targetExpenseForEdit}
-          onSuccess={() => {
+          onSuccess={(updatedExpense) => {
             refreshAll();
+            if (updatedExpense?.month && updatedExpense.month !== selectedMonth) {
+              setSelectedMonth(updatedExpense.month);
+            }
+            if (updatedExpense && (selectedExpenseId === updatedExpense.expenseId || selectedExpense?.expenseId === updatedExpense.expenseId)) {
+              setSelectedExpense(updatedExpense);
+            }
             setTargetExpenseForEdit(null);
           }}
           onViewReimbursements={() => {

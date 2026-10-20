@@ -98,8 +98,10 @@ export const roomRepository = {
     return RoomFeePlan.findOne({ feePlanId }).lean();
   },
 
-  async findFeePlansForMember(memberId) {
-    return RoomFeePlan.find({ memberId }).sort({ effectiveFromMonth: -1 }).lean();
+  async findFeePlansForMember(memberId, { session } = {}) {
+    const q = RoomFeePlan.find({ memberId }).sort({ effectiveFromMonth: -1 });
+    if (session) q.session(session);
+    return q.lean();
   },
 
   async findActiveFeePlan(memberId, month) {
@@ -371,6 +373,152 @@ export const roomRepository = {
           await charge.save({ session });
           await session.commitTransaction();
           return charge.toObject();
+        } catch (err) {
+          if (session && session.inTransaction()) {
+            await session.abortTransaction();
+          }
+          const isTransient =
+            err.errorLabels?.has?.('TransientTransactionError') ||
+            err.errorLabelSet?.has?.('TransientTransactionError') ||
+            err.code === 112 ||
+            (typeof err.message === 'string' && (err.message.includes('WriteConflict') || err.message.includes('catalog changes')));
+
+          if (isTransient && attempt < maxRetries - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+            continue;
+          }
+
+          if (err.message && (err.message.includes('Transactions are not supported') || err.message.includes('replica set'))) {
+            const error = new Error('Financial transaction unavailable. Database transaction support is required.');
+            error.statusCode = 503;
+            throw error;
+          }
+          throw err;
+        } finally {
+          if (session) {
+            await session.endSession();
+          }
+        }
+      }
+    }
+
+    const err = new Error('Financial transaction unavailable. Database connection required.');
+    err.statusCode = 503;
+    throw err;
+  },
+
+  async executeAtomicCancelCharge({ chargeId, reason, actorRole }) {
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+      const maxRetries = 5;
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        let session = null;
+        try {
+          session = await mongoose.startSession();
+          session.startTransaction();
+
+          const charge = await RoomCharge.findOne({ chargeId }).session(session);
+          if (!charge) {
+            const err = new Error('Room charge not found.');
+            err.statusCode = 404;
+            throw err;
+          }
+          if (charge.status === 'cancelled') {
+            const err = new Error('Room charge is already cancelled.');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          // Guard / touch charge revision to conflict with concurrent payments
+          await RoomCharge.updateOne(
+            { chargeId },
+            { $inc: { __v: 1 } },
+            { session },
+          );
+
+          // Check active payments within session
+          const activePayments = await RoomPayment.find({ chargeId, status: 'verified' }).session(session);
+          if (activePayments.length > 0) {
+            const err = new Error('Cannot cancel a charge with active recorded payments. Void the payments first.');
+            err.statusCode = 409;
+            throw err;
+          }
+
+          charge.status = 'cancelled';
+          charge.cancelledAt = new Date();
+          charge.cancelReason = reason;
+          await charge.save({ session });
+
+          await session.commitTransaction();
+          return charge.toObject();
+        } catch (err) {
+          if (session && session.inTransaction()) {
+            await session.abortTransaction();
+          }
+          const isTransient =
+            err.errorLabels?.has?.('TransientTransactionError') ||
+            err.errorLabelSet?.has?.('TransientTransactionError') ||
+            err.code === 112 ||
+            (typeof err.message === 'string' && (err.message.includes('WriteConflict') || err.message.includes('catalog changes')));
+
+          if (isTransient && attempt < maxRetries - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+            continue;
+          }
+
+          if (err.message && (err.message.includes('Transactions are not supported') || err.message.includes('replica set'))) {
+            const error = new Error('Financial transaction unavailable. Database transaction support is required.');
+            error.statusCode = 503;
+            throw error;
+          }
+          throw err;
+        } finally {
+          if (session) {
+            await session.endSession();
+          }
+        }
+      }
+    }
+
+    const err = new Error('Financial transaction unavailable. Database connection required.');
+    err.statusCode = 503;
+    throw err;
+  },
+
+  async executeAtomicVoidPayment({ roomPaymentId, reason, actorRole }) {
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+      const maxRetries = 5;
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        let session = null;
+        try {
+          session = await mongoose.startSession();
+          session.startTransaction();
+
+          const payment = await RoomPayment.findOne({ roomPaymentId }).session(session);
+          if (!payment) {
+            const err = new Error('Room payment not found.');
+            err.statusCode = 404;
+            throw err;
+          }
+          if (payment.status === 'voided') {
+            await session.commitTransaction();
+            return payment.toObject();
+          }
+
+          // Guard / touch charge revision
+          await RoomCharge.updateOne(
+            { chargeId: payment.chargeId },
+            { $inc: { __v: 1 } },
+            { session },
+          );
+
+          payment.status = 'voided';
+          payment.voidedAt = new Date();
+          payment.voidedByRole = actorRole;
+          payment.voidReason = reason.trim();
+          await payment.save({ session });
+
+          await session.commitTransaction();
+          return payment.toObject();
         } catch (err) {
           if (session && session.inTransaction()) {
             await session.abortTransaction();

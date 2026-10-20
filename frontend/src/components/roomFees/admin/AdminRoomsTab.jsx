@@ -16,6 +16,7 @@ import { Select } from '../../ui/select.jsx';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../ui/table.jsx';
 import { ROOMMATES } from '../../../lib/constants.js';
 import { api } from '../../../lib/api.js';
+import { getIndiaCurrentLogicalMonth } from '../../../lib/logicalDate.js';
 
 export function AdminRoomsTab({ rooms = [], onRefresh, role, loading = false, error = '' }) {
   const [addDialogOpen, setAddDialogOpen] = useState(false);
@@ -40,7 +41,7 @@ export function AdminRoomsTab({ rooms = [], onRefresh, role, loading = false, er
   // Assign member state
   const [assignMemberId, setAssignMemberId] = useState('nikhil');
   const [assignRoomId, setAssignRoomId] = useState('');
-  const [assignFromMonth, setAssignFromMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [assignFromMonth, setAssignFromMonth] = useState(() => getIndiaCurrentLogicalMonth());
   const [assignUntilMonth, setAssignUntilMonth] = useState('');
 
   const handleCreateRoom = async (e) => {
@@ -378,6 +379,9 @@ export function AdminRoomsTab({ rooms = [], onRefresh, role, loading = false, er
                 value={editRoomLabel}
                 onChange={(e) => setEditRoomLabel(e.target.value)}
               />
+              <span className="text-[11px] text-slate-400 block">
+                Optional. Leave empty to reset to "Room {editingRoom?.roomNumber}".
+              </span>
             </div>
 
             <div className="space-y-1.5">

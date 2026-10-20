@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
 import { socket } from '../lib/socket.js';
+import { getIndiaCurrentLogicalMonth } from '../lib/logicalDate.js';
 
 /**
  * Hook for a Member to view their current month room fee statement & assignment
@@ -170,50 +171,104 @@ export function useMemberFeePlans(members = ['gaurav', 'nikhil', 'devansh'], tar
   const [plans, setPlans] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [memberErrors, setMemberErrors] = useState({});
   const [version, setVersion] = useState(0);
 
   const refresh = useCallback(() => {
     setLoading(true);
     setError('');
+    setMemberErrors({});
     setVersion((v) => v + 1);
   }, []);
 
-  const activeMonth = targetMonth || new Date().toISOString().slice(0, 7);
+  const activeMonth = targetMonth || getIndiaCurrentLogicalMonth();
 
   useEffect(() => {
     const controller = new AbortController();
-    Promise.all(
+    let isCancelled = false;
+
+    Promise.allSettled(
       members.map((id) =>
         api.get(`/api/room-fees/plans/${id}`, { signal: controller.signal })
           .then((res) => {
             const list = Array.isArray(res.data) ? res.data : (res.data?.plans || (res.data?.feePlan ? [res.data.feePlan] : []));
             // Sort by effectiveFromMonth desc
             const sorted = [...list].sort((a, b) => (b.effectiveFromMonth || '').localeCompare(a.effectiveFromMonth || ''));
-            // Find active plan for the activeMonth (effectiveFromMonth <= activeMonth and not superseded)
-            const activePlan = sorted.find((p) => p.effectiveFromMonth <= activeMonth && !p.supersededAt) || sorted[0] || null;
+            // Authoritative plan-selection rules:
+            // effectiveFromMonth <= activeMonth AND (effectiveUntilMonth is null OR effectiveUntilMonth >= activeMonth) AND supersededAt is null
+            const activePlan = sorted.find((p) =>
+              p.effectiveFromMonth <= activeMonth &&
+              (!p.effectiveUntilMonth || p.effectiveUntilMonth >= activeMonth) &&
+              !p.supersededAt
+            ) || null;
             const futurePlan = sorted.find((p) => p.effectiveFromMonth > activeMonth && !p.supersededAt) || null;
+            const historicalPlans = sorted.filter((p) =>
+              (p.effectiveUntilMonth && p.effectiveUntilMonth < activeMonth) || p.supersededAt
+            );
             return {
               memberId: id,
-              plan: activePlan ? { ...activePlan, activePlan, futurePlan, allPlans: sorted } : null,
+              activePlan,
+              futurePlan,
+              historicalPlans,
+              allPlans: sorted,
+              error: null,
             };
           })
-          .catch(() => ({ memberId: id, plan: null })),
+          .catch((err) => {
+            if (controller.signal.aborted) throw err;
+            return {
+              memberId: id,
+              error: err?.message || 'Failed to load fee plan.',
+              activePlan: null,
+              futurePlan: null,
+              historicalPlans: [],
+              allPlans: [],
+            };
+          }),
       ),
     )
-      .then((results) => {
-        const map = {};
-        for (const item of results) map[item.memberId] = item.plan;
-        setPlans(map);
+      .then((settled) => {
+        if (isCancelled) return;
+        const planMap = {};
+        const errorMap = {};
+        for (const item of settled) {
+          if (item.status === 'fulfilled') {
+            const val = item.value;
+            if (val.error) {
+              errorMap[val.memberId] = val.error;
+            } else {
+              planMap[val.memberId] = val.activePlan
+                ? {
+                    ...val.activePlan,
+                    activePlan: val.activePlan,
+                    futurePlan: val.futurePlan,
+                    historicalPlans: val.historicalPlans,
+                    allPlans: val.allPlans,
+                  }
+                : {
+                    activePlan: null,
+                    futurePlan: val.futurePlan,
+                    historicalPlans: val.historicalPlans,
+                    allPlans: val.allPlans,
+                  };
+            }
+          }
+        }
+        setPlans(planMap);
+        setMemberErrors(errorMap);
         setLoading(false);
       })
       .catch((err) => {
-        if (!controller.signal.aborted) {
+        if (!controller.signal.aborted && !isCancelled) {
           setError(err?.message || 'Unable to load fee plans.');
           setLoading(false);
         }
       });
 
-    return () => controller.abort();
+    return () => {
+      isCancelled = true;
+      controller.abort();
+    };
   }, [members.join(','), activeMonth, version]);
 
   useEffect(() => {
@@ -222,7 +277,7 @@ export function useMemberFeePlans(members = ['gaurav', 'nikhil', 'devansh'], tar
     return () => socket.off('room-fees:updated', handleRoomFees);
   }, [refresh]);
 
-  return { loading, error, plans, refresh };
+  return { loading, error, memberErrors, plans, refresh };
 }
 
 /**

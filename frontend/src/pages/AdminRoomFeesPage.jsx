@@ -32,6 +32,7 @@ import {
 } from '../hooks/useRoomFees.js';
 import { useServerToday } from '../hooks/useServerToday.js';
 import { addLogicalMonths, formatLogicalMonth, isValidLogicalMonth } from '../lib/logicalMonth.js';
+import { getIndiaCurrentLogicalMonth } from '../lib/logicalDate.js';
 
 const VALID_TABS = ['overview', 'rooms', 'plans', 'charges', 'payments', 'settings'];
 
@@ -42,7 +43,7 @@ export function AdminRoomFeesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const queryMonth = searchParams.get('month');
-  const currentLogicalMonth = serverToday.date ? serverToday.date.slice(0, 7) : new Date().toISOString().slice(0, 7);
+  const currentLogicalMonth = serverToday.date ? serverToday.date.slice(0, 7) : getIndiaCurrentLogicalMonth();
   const month = isValidLogicalMonth(queryMonth) ? queryMonth : currentLogicalMonth;
 
   const tabQuery = searchParams.get('tab');
@@ -78,6 +79,7 @@ export function AdminRoomFeesPage() {
     plans,
     loading: plansLoading,
     error: plansError,
+    memberErrors: plansMemberErrors,
     refresh: refreshPlans,
   } = useMemberFeePlans(['gaurav', 'nikhil', 'devansh'], month);
 
@@ -199,6 +201,8 @@ export function AdminRoomFeesPage() {
             onRefresh={handleRefreshAll}
             loading={plansLoading}
             error={plansError}
+            memberErrors={plansMemberErrors}
+            targetMonth={month}
           />
         </TabsContent>
 

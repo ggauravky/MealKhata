@@ -22,7 +22,7 @@ import { FinancialHouseholdSummary } from '../components/finance/FinancialHouseh
 import { DashboardStayCard } from '../components/dashboard/DashboardStayCard.jsx';
 import { usePwa } from '../hooks/usePwa.js';
 import { api } from '../lib/api.js';
-import { formatLogicalDate } from '../lib/logicalDate.js';
+import { formatLogicalDate, getIndiaCurrentLogicalMonth } from '../lib/logicalDate.js';
 
 export function DashboardPage() {
   useDocumentTitle('Dashboard');
@@ -79,7 +79,7 @@ export function DashboardPage() {
 
   const isMember = auth.role === 'member';
   const isAdminOrSuper = auth.role === 'admin' || auth.role === 'superadmin';
-  const currentMonth = data?.today ? data.today.slice(0, 7) : new Date().toISOString().slice(0, 7);
+  const currentMonth = data?.today ? data.today.slice(0, 7) : getIndiaCurrentLogicalMonth();
   const memberFinance = useMemberFinance(currentMonth);
   const householdFinance = useHouseholdFinance(currentMonth);
 
@@ -212,10 +212,10 @@ export function DashboardPage() {
           )}
 
           {/* Phase 1 Room Fees Card */}
-          <DashboardRoomFeeCard month={data.today ? data.today.slice(0, 7) : new Date().toISOString().slice(0, 7)} />
+          <DashboardRoomFeeCard month={data.today ? data.today.slice(0, 7) : getIndiaCurrentLogicalMonth()} />
 
           {/* Phase 2 Other Expenses Card */}
-          <DashboardExpenseCard month={data.today ? data.today.slice(0, 7) : new Date().toISOString().slice(0, 7)} />
+          <DashboardExpenseCard month={data.today ? data.today.slice(0, 7) : getIndiaCurrentLogicalMonth()} />
 
           {/* Reminder widget */}
           {data.reminders && (

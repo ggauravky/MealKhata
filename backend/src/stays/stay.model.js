@@ -108,6 +108,10 @@ export const hostelStaySchema = new mongoose.Schema(
       required: true,
       default: 0,
     },
+    clearanceSequence: {
+      type: Number,
+      default: 0,
+    },
     history: {
       type: [auditEntrySchema],
       default: [],

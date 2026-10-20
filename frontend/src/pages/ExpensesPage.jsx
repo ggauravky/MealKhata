@@ -23,6 +23,7 @@ import { useExpenses, useExpenseSummary } from '../hooks/useExpenses.js';
 import { usePwa } from '../hooks/usePwa.js';
 import { useServerToday } from '../hooks/useServerToday.js';
 import { addLogicalMonths, formatLogicalMonth } from '../lib/logicalMonth.js';
+import { getIndiaCurrentLogicalMonth } from '../lib/logicalDate.js';
 
 export function ExpensesPage() {
   useDocumentTitle('Other Expenses');
@@ -30,7 +31,7 @@ export function ExpensesPage() {
   const { isOnline } = usePwa();
   const serverToday = useServerToday();
 
-  const currentLogicalMonth = serverToday.date ? serverToday.date.slice(0, 7) : new Date().toISOString().slice(0, 7);
+  const currentLogicalMonth = serverToday.date ? serverToday.date.slice(0, 7) : getIndiaCurrentLogicalMonth();
   const [selectedMonth, setSelectedMonth] = useState(currentLogicalMonth);
   const [activeCategory, setActiveCategory] = useState('');
 

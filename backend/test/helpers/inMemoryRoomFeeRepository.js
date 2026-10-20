@@ -65,7 +65,17 @@ export class InMemoryRoomFeeRepository {
   async updateRoom(roomId, updates) {
     const room = this.rooms.get(roomId);
     if (!room) return null;
-    Object.assign(room, clone(updates), { updatedAt: new Date() });
+    if (updates.$inc) {
+      for (const [k, v] of Object.entries(updates.$inc)) {
+        room[k] = (room[k] || 0) + v;
+      }
+    }
+    if (updates.$set) {
+      Object.assign(room, clone(updates.$set));
+    } else if (!updates.$inc) {
+      Object.assign(room, clone(updates));
+    }
+    room.updatedAt = new Date();
     return clone(room);
   }
 
@@ -405,6 +415,51 @@ export class InMemoryRoomFeeRepository {
     charge.adjustments.push(adjustment);
     charge.updatedAt = new Date();
     return clone(charge);
+  }
+
+  async executeAtomicCancelCharge({ chargeId, reason, actorRole }) {
+    const charge = this.charges.get(chargeId);
+    if (!charge) {
+      const err = new Error('Room charge not found.');
+      err.statusCode = 404;
+      throw err;
+    }
+    if (charge.status === 'cancelled') {
+      const err = new Error('Room charge is already cancelled.');
+      err.statusCode = 400;
+      throw err;
+    }
+    const activePayments = Array.from(this.payments.values()).filter(
+      (p) => p.chargeId === chargeId && p.status === 'verified',
+    );
+    if (activePayments.length > 0) {
+      const err = new Error('Cannot cancel a charge with active recorded payments. Void the payments first.');
+      err.statusCode = 409;
+      throw err;
+    }
+    charge.status = 'cancelled';
+    charge.cancelledAt = new Date();
+    charge.cancelReason = reason;
+    charge.updatedAt = new Date();
+    return clone(charge);
+  }
+
+  async executeAtomicVoidPayment({ roomPaymentId, reason, actorRole }) {
+    const payment = this.payments.get(roomPaymentId);
+    if (!payment) {
+      const err = new Error('Room payment not found.');
+      err.statusCode = 404;
+      throw err;
+    }
+    if (payment.status === 'voided') {
+      return clone(payment);
+    }
+    payment.status = 'voided';
+    payment.voidedAt = new Date();
+    payment.voidedByRole = actorRole;
+    payment.voidReason = reason.trim();
+    payment.updatedAt = new Date();
+    return clone(payment);
   }
 
   // Settings
