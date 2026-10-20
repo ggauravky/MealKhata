@@ -162,79 +162,7 @@ export function createDepositService({ repository = stayRepository } = {}) {
         });
       }
 
-      // Fallback concurrency retry loop for balance check
-      const maxRetries = 3;
-      for (let attempt = 0; attempt < maxRetries; attempt++) {
-        const { account: freshAccount, summary } = await this.getDepositSummary(stayId);
-        if (!freshAccount) {
-          throw new DepositDomainError('Deposit account not found for this stay.', 404);
-        }
-
-        // Balance protection: refunds and deductions cannot exceed currently held balance
-        if (
-          (type === DEPOSIT_TRANSACTION_TYPES.REFUNDED ||
-            type === DEPOSIT_TRANSACTION_TYPES.DEDUCTED) &&
-          summary.heldPaise < amountPaise
-        ) {
-          const action = type === DEPOSIT_TRANSACTION_TYPES.REFUNDED ? 'refund' : 'deduct';
-          throw new DepositDomainError(
-            `Cannot ${action} ₹${(amountPaise / 100).toFixed(2)}: only ₹${(summary.heldPaise / 100).toFixed(2)} currently held.`,
-            400,
-            { heldPaise: summary.heldPaise, requestedPaise: amountPaise },
-          );
-        }
-
-        // Optimistic locking update on deposit account revision
-        const updatedAccount = await repository.updateDepositAccount(
-          freshAccount.depositAccountId,
-          {},
-          freshAccount.revision,
-        );
-
-        if (!updatedAccount) {
-          // Collision: retry
-          continue;
-        }
-
-        // Account acquired: create the transaction
-        const transactionId = randomUUID();
-        const transaction = await repository.createDepositTransaction({
-          depositTransactionId: transactionId,
-          depositAccountId: freshAccount.depositAccountId,
-          stayId,
-          memberId: freshAccount.memberId,
-          type,
-          amountPaise,
-          method,
-          reference: reference?.trim() || null,
-          reason: reason?.trim() || null,
-          idempotencyKey: idempotencyKey.trim(),
-          recordedAt: new Date(),
-          recordedByRole: actorRole,
-          status: 'recorded',
-        });
-
-        // Audit entry
-        await repository.addDepositAccountHistory(freshAccount.depositAccountId, {
-          event: `DEPOSIT_${type}`,
-          timestamp: new Date(),
-          actorRole,
-          note: `Recorded ${type} transaction of ${amountPaise} paise`,
-          details: { depositTransactionId: transactionId, amountPaise, method },
-        });
-
-        // Update settled status if balance now 0 and stay is checked out
-        const postSummary = await this.getDepositSummary(stayId);
-        if (postSummary.summary.heldPaise === 0 && postSummary.summary.receivedPaise > 0) {
-          await repository.updateDepositAccount(freshAccount.depositAccountId, {
-            status: DEPOSIT_ACCOUNT_STATUSES.SETTLED,
-          });
-        }
-
-        return transaction;
-      }
-
-      throw new DepositDomainError('Could not record deposit transaction due to concurrent modification. Please retry.', 409);
+      throw new DepositDomainError('Financial transaction unavailable. Database transaction support is required.', 503);
     },
 
     /**
@@ -248,46 +176,16 @@ export function createDepositService({ repository = stayRepository } = {}) {
         throw new DepositDomainError('Void reason is required.', 400);
       }
 
-      const tx = await repository.findDepositTransactionById(depositTransactionId);
-      if (!tx || (stayId && tx.stayId !== stayId)) {
-        throw new DepositDomainError('Deposit transaction not found or does not belong to this stay.', 404);
-      }
-      const targetStayId = tx.stayId || stayId;
-
-      if (tx.status === 'voided') {
-        throw new DepositDomainError('Deposit transaction is already voided.', 400);
-      }
-
-      // If voiding a RECEIVED transaction, verify that reducing received funds does not make heldPaise negative
-      if (tx.type === DEPOSIT_TRANSACTION_TYPES.RECEIVED) {
-        const { summary } = await this.getDepositSummary(targetStayId);
-        if (summary.heldPaise < tx.amountPaise) {
-          throw new DepositDomainError(
-            `Cannot void receipt: ₹${((tx.amountPaise - summary.heldPaise) / 100).toFixed(2)} has already been refunded or deducted.`,
-            400,
-          );
-        }
-      }
-
-      const voided = await repository.voidDepositTransaction(depositTransactionId, {
-        voidReason: reason.trim(),
-        voidedByRole: actorRole,
-        voidedAt: new Date(),
-      });
-
-      // Audit entry on deposit account using authoritative targetStayId
-      const account = await repository.findDepositAccountByStayId(targetStayId);
-      if (account) {
-        await repository.addDepositAccountHistory(account.depositAccountId, {
-          event: 'DEPOSIT_TRANSACTION_VOIDED',
-          timestamp: new Date(),
+      if (typeof repository.executeAtomicDepositVoid === 'function') {
+        return repository.executeAtomicDepositVoid({
+          stayId,
+          depositTransactionId,
+          reason: reason.trim(),
           actorRole,
-          note: `Voided transaction ${depositTransactionId}: ${reason}`,
-          details: { depositTransactionId, originalType: tx.type, amountPaise: tx.amountPaise },
         });
       }
 
-      return voided;
+      throw new DepositDomainError('Financial transaction unavailable. Database transaction support is required.', 503);
     },
 
     async recordDepositReceipt(params) {

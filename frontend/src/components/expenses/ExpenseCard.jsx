@@ -10,9 +10,13 @@ import {
   ShoppingCart,
   Users,
   Wallet,
+  Pencil,
+  Trash2,
+  History,
 } from 'lucide-react';
 import { Card } from '../ui/card.jsx';
 import { Badge } from '../ui/badge.jsx';
+import { Button } from '../ui/button.jsx';
 import { EXPENSE_CATEGORY_CONFIG } from '../../lib/constants.js';
 import { formatPaise } from '../../lib/money.js';
 
@@ -32,7 +36,15 @@ function formatDisplayDate(dateStr) {
   return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 }
 
-export function ExpenseCard({ expense, currentMemberId, onClick }) {
+export function ExpenseCard({
+  expense,
+  currentMemberId,
+  onClick,
+  onView,
+  onEdit,
+  onDelete,
+  isSuperAdmin = false,
+}) {
   if (!expense) return null;
 
   const config = EXPENSE_CATEGORY_CONFIG[expense.category] || EXPENSE_CATEGORY_CONFIG.other;
@@ -159,6 +171,68 @@ export function ExpenseCard({ expense, currentMemberId, onClick }) {
           )}
         </div>
       </div>
+
+      {/* Super Admin Action Controls */}
+      {isSuperAdmin && (
+        <div className="flex items-center justify-end gap-1.5 mt-3 pt-2.5 border-t border-slate-100 dark:border-slate-800/80">
+          {isVoided ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onView) onView(expense);
+                else if (onClick) onClick();
+              }}
+              className="h-7 px-2.5 text-xs text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 cursor-pointer"
+            >
+              <History className="h-3.5 w-3.5 mr-1" />
+              <span>View History</span>
+            </Button>
+          ) : (
+            <>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (onView) onView(expense);
+                  else if (onClick) onClick();
+                }}
+                className="h-7 px-2.5 text-xs text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100 cursor-pointer"
+              >
+                <span>View</span>
+              </Button>
+
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (onEdit) onEdit(expense);
+                }}
+                className="h-7 px-2.5 text-xs text-teal-700 dark:text-teal-400 border-teal-200 dark:border-teal-800/60 hover:bg-teal-50 dark:hover:bg-teal-950/40 cursor-pointer"
+              >
+                <Pencil className="h-3.5 w-3.5 mr-1" />
+                <span>Edit</span>
+              </Button>
+
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (onDelete) onDelete(expense);
+                }}
+                className="h-7 px-2.5 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+              >
+                <Trash2 className="h-3.5 w-3.5 mr-1" />
+                <span>Delete</span>
+              </Button>
+            </>
+          )}
+        </div>
+      )}
     </Card>
   );
 }

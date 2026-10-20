@@ -16,8 +16,11 @@ import {
   User,
   Users,
   Wallet,
+  History,
+  Pencil,
+  ShieldCheck,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Button } from '../ui/button.jsx';
 import {
   Dialog,
@@ -63,10 +66,43 @@ function getMemberName(id) {
 export function ExpenseDetailsDialog({
   open,
   onOpenChange,
-  expense,
+  expense: initialExpense,
+  expenseId: propExpenseId,
   role,
   onUpdated,
+  onEdit,
 }) {
+  const expenseId = propExpenseId || initialExpense?.expenseId;
+  const [expense, setExpense] = useState(initialExpense);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+
+  useEffect(() => {
+    if (initialExpense) {
+      setExpense(initialExpense);
+    }
+  }, [initialExpense]);
+
+  const fetchDetail = useCallback(async () => {
+    if (!expenseId) return;
+    try {
+      setLoadingDetail(true);
+      const res = await api.get(`/api/expenses/${expenseId}`);
+      if (res.data) {
+        setExpense(res.data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch authoritative expense detail', err);
+    } finally {
+      setLoadingDetail(false);
+    }
+  }, [expenseId]);
+
+  useEffect(() => {
+    if (open && expenseId) {
+      fetchDetail();
+    }
+  }, [open, expenseId, fetchDetail]);
+
   const [recordReimbursementOpen, setRecordReimbursementOpen] = useState(false);
   const [selectedOwingMemberId, setSelectedOwingMemberId] = useState('');
   const [voidDialogOpen, setVoidDialogOpen] = useState(false);
@@ -80,7 +116,7 @@ export function ExpenseDetailsDialog({
   const [voidingReimb, setVoidingReimb] = useState(false);
   const [voidReimbError, setVoidReimbError] = useState('');
 
-  if (!expense) return null;
+  if (!expense && !loadingDetail) return null;
 
   const isAdmin = role === 'admin' || role === 'superadmin';
   const isSuperAdmin = role === 'superadmin';
@@ -405,26 +441,84 @@ export function ExpenseDetailsDialog({
                 </div>
               </div>
             )}
+            {/* Correction & Audit History */}
+            {expense.corrections && expense.corrections.length > 0 && (
+              <div className="space-y-2">
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                  <History className="h-3.5 w-3.5 text-teal-600 dark:text-teal-400" />
+                  Correction & Audit History ({expense.corrections.length})
+                </h4>
+                <div className="space-y-2.5">
+                  {expense.corrections.map((corr, idx) => (
+                    <div
+                      key={corr.correctionId || idx}
+                      className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/40 text-xs space-y-1.5"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                          <ShieldCheck className="h-3.5 w-3.5 text-teal-600 dark:text-teal-400" />
+                          <span>Revision #{corr.revision}</span>
+                        </span>
+                        <span className="text-[11px] text-slate-400">
+                          {corr.changedAt ? new Date(corr.changedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : ''}
+                        </span>
+                      </div>
+                      <p className="text-slate-700 dark:text-slate-300">
+                        <strong className="text-slate-900 dark:text-slate-100">Reason:</strong> {corr.reason}
+                      </p>
+                      <div className="grid grid-cols-2 gap-2 text-[11px] pt-1.5 border-t border-slate-200/60 dark:border-slate-800">
+                        <div>
+                          <span className="text-slate-400 block">Previous:</span>
+                          <span className="font-medium text-slate-600 dark:text-slate-400">
+                            {corr.previousSnapshot?.title} · {formatPaise(corr.previousSnapshot?.amountPaise || 0)}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 block">Corrected to:</span>
+                          <span className="font-medium text-teal-800 dark:text-teal-300">
+                            {corr.newSnapshot?.title} · {formatPaise(corr.newSnapshot?.amountPaise || 0)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           <DialogFooter className="gap-2 sm:gap-0 pt-3 border-t border-slate-100 dark:border-slate-800">
             {isSuperAdmin && !isVoided && (
-              <div className="flex-1 flex justify-start">
+              <div className="flex-1 flex items-center justify-start gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    onOpenChange(false);
+                    if (onEdit) onEdit(expense);
+                  }}
+                  className="text-xs text-teal-700 dark:text-teal-400 border-teal-200 dark:border-teal-800 hover:bg-teal-50 dark:hover:bg-teal-950/40 cursor-pointer"
+                >
+                  <Pencil className="h-3.5 w-3.5 mr-1" />
+                  Edit Expense
+                </Button>
+
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
                   onClick={() => setVoidDialogOpen(true)}
                   disabled={!canVoidExpense}
-                  className="text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                  className="text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
                   title={
                     !canVoidExpense && activeReimbursements.length > 0
-                      ? 'Cannot void expense with active reimbursements. Void reimbursements first.'
+                      ? 'Cannot delete expense with active reimbursements. Resolve reimbursements first.'
                       : ''
                   }
                 >
                   <Trash2 className="h-3.5 w-3.5 mr-1" />
-                  Void Expense
+                  Delete Expense
                 </Button>
               </div>
             )}
@@ -453,63 +547,83 @@ export function ExpenseDetailsDialog({
         }}
       />
 
-      {/* Void Expense Dialog */}
+      {/* Delete / Void Expense Dialog */}
       <Dialog open={voidDialogOpen} onOpenChange={setVoidDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
               <AlertCircle className="h-5 w-5 text-rose-600" />
-              Void Expense
+              <span>DELETE EXPENSE?</span>
             </DialogTitle>
             <DialogDescription className="text-xs text-slate-500 dark:text-slate-400">
-              This action cannot be undone. The expense will be permanently marked as voided in the audit history and excluded from monthly totals.
+              <strong className="text-slate-700 dark:text-slate-200">{expense?.title}</strong> · {formatPaise(expense?.amountPaise || 0)}
+              <br />
+              This expense will be removed from active financial totals but retained in audit history.
             </DialogDescription>
           </DialogHeader>
 
-          <form onSubmit={handleVoidExpense} className="space-y-4 pt-1">
-            {voidError && (
-              <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs">
-                {voidError}
+          {activeReimbursements.length > 0 ? (
+            <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800 space-y-1">
+              <p className="font-semibold text-amber-900">Deletion Blocked</p>
+              <p>This Expense has recorded reimbursements. Resolve them before deleting the Expense.</p>
+              <div className="pt-2 flex justify-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setVoidDialogOpen(false)}
+                  className="text-xs"
+                >
+                  Close
+                </Button>
               </div>
-            )}
-
-            <div className="space-y-1">
-              <Label htmlFor="void-exp-reason" className="text-xs font-semibold">
-                Reason for voiding *
-              </Label>
-              <Input
-                id="void-exp-reason"
-                placeholder="e.g. Duplicate entry, Wrong amount entered by mistake"
-                value={voidReason}
-                onChange={(e) => setVoidReason(e.target.value)}
-                className="text-xs h-9"
-                required
-                maxLength={300}
-              />
             </div>
+          ) : (
+            <form onSubmit={handleVoidExpense} className="space-y-4 pt-1">
+              {voidError && (
+                <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs">
+                  {voidError}
+                </div>
+              )}
 
-            <DialogFooter className="gap-2 sm:gap-0 pt-2 border-t border-slate-100 dark:border-slate-800">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setVoidDialogOpen(false)}
-                disabled={voiding}
-                className="text-xs"
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                variant="destructive"
-                size="sm"
-                disabled={voiding || !voidReason.trim()}
-                className="text-xs"
-              >
-                {voiding ? 'Voiding...' : 'Confirm Void Expense'}
-              </Button>
-            </DialogFooter>
-          </form>
+              <div className="space-y-1">
+                <Label htmlFor="void-exp-reason" className="text-xs font-semibold">
+                  Reason for deletion *
+                </Label>
+                <Input
+                  id="void-exp-reason"
+                  placeholder="e.g. Entered twice by mistake, Duplicate entry"
+                  value={voidReason}
+                  onChange={(e) => setVoidReason(e.target.value)}
+                  className="text-xs h-9"
+                  required
+                  maxLength={300}
+                />
+              </div>
+
+              <DialogFooter className="gap-2 sm:gap-0 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setVoidDialogOpen(false)}
+                  disabled={voiding}
+                  className="text-xs"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  variant="destructive"
+                  size="sm"
+                  disabled={voiding || !voidReason.trim()}
+                  className="text-xs cursor-pointer"
+                >
+                  {voiding ? 'Deleting...' : 'Delete Expense'}
+                </Button>
+              </DialogFooter>
+            </form>
+          )}
         </DialogContent>
       </Dialog>
     </>

@@ -19,7 +19,7 @@ import { formatLogicalMonth } from '../../../lib/logicalMonth.js';
 import { formatPaise, rupeesToPaise } from '../../../lib/money.js';
 import { api } from '../../../lib/api.js';
 
-export function AdminMonthlyChargesTab({ month, summary, onRefresh, role }) {
+export function AdminMonthlyChargesTab({ month, summary, onRefresh, role, loading = false, error = '' }) {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewData, setPreviewData] = useState(null);
   const [previewError, setPreviewError] = useState('');
@@ -36,7 +36,8 @@ export function AdminMonthlyChargesTab({ month, summary, onRefresh, role }) {
   const [adjusting, setAdjusting] = useState(false);
   const [adjustError, setAdjustError] = useState('');
 
-  const members = summary?.members || {};
+  const membersList = Array.isArray(summary?.members) ? summary.members : Object.values(summary?.members || {});
+  const membersMap = new Map(membersList.map((m) => [m.memberId, m]));
 
   const handlePreview = async () => {
     setPreviewLoading(true);
@@ -104,6 +105,31 @@ export function AdminMonthlyChargesTab({ month, summary, onRefresh, role }) {
     }
   };
 
+  if (loading) {
+    return (
+      <Card className="border-slate-200 dark:border-slate-800 p-8 text-center">
+        <p className="text-xs text-slate-500 dark:text-slate-400">Loading monthly charges...</p>
+      </Card>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card className="border-rose-200 bg-rose-50/50 dark:border-rose-900 dark:bg-rose-950/20 p-6 text-center">
+        <p className="text-xs font-semibold text-rose-700 dark:text-rose-300">{error}</p>
+        {onRefresh && (
+          <Button onClick={onRefresh} size="sm" variant="outline" className="mt-3 text-xs">
+            Retry
+          </Button>
+        )}
+      </Card>
+    );
+  }
+
+  const previewMembers = previewData?.members || [];
+  const issuableCount = previewMembers.filter((m) => m.status === 'ready_to_issue').length;
+  const alreadyIssuedCount = previewMembers.filter((m) => m.status === 'already_issued').length;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -161,12 +187,17 @@ export function AdminMonthlyChargesTab({ month, summary, onRefresh, role }) {
             </TableHeader>
             <TableBody>
               {ROOMMATES.map((roommate) => {
-                const memberData = members[roommate.id];
+                const memberData = membersMap.get(roommate.id);
                 const charge = memberData?.charge;
-                const isIssued = Boolean(charge);
+                const isIssued = Boolean(charge && charge.status !== 'cancelled');
                 const roomInfo = memberData?.room;
                 const adjustments = charge?.adjustments || [];
                 const adjSum = adjustments.reduce((acc, a) => acc + a.amountPaise, 0);
+
+                const baseAmountPaise = charge?.baseAmountPaise ?? 0;
+                const finalBillAmountPaise = charge?.finalBillAmountPaise ?? memberData?.effectiveChargePaise ?? 0;
+                const paidAmountPaise = charge?.paidAmountPaise ?? memberData?.paidPaise ?? 0;
+                const remainingAmountPaise = charge?.remainingAmountPaise ?? memberData?.remainingPaise ?? 0;
 
                 return (
                   <TableRow key={roommate.id}>
@@ -177,7 +208,7 @@ export function AdminMonthlyChargesTab({ month, summary, onRefresh, role }) {
                       {roomInfo ? `Room ${roomInfo.roomNumber}` : '—'}
                     </TableCell>
                     <TableCell>
-                      {isIssued ? formatPaise(charge.baseAmountPaise) : (
+                      {isIssued ? formatPaise(baseAmountPaise) : (
                         <span className="text-xs text-slate-400 italic">Not issued</span>
                       )}
                     </TableCell>
@@ -191,17 +222,17 @@ export function AdminMonthlyChargesTab({ month, summary, onRefresh, role }) {
                       )}
                     </TableCell>
                     <TableCell className="font-bold text-slate-900 dark:text-slate-100">
-                      {isIssued ? formatPaise(memberData.effectiveChargePaise) : '—'}
+                      {isIssued ? formatPaise(finalBillAmountPaise) : '—'}
                     </TableCell>
                     <TableCell className="text-emerald-700 dark:text-emerald-400 font-medium">
-                      {formatPaise(memberData?.paidPaise || 0)}
+                      {isIssued ? formatPaise(paidAmountPaise) : '—'}
                     </TableCell>
                     <TableCell className="font-bold text-amber-700 dark:text-amber-400">
-                      {isIssued ? formatPaise(memberData.remainingPaise || 0) : '—'}
+                      {isIssued ? formatPaise(remainingAmountPaise) : '—'}
                     </TableCell>
                     <TableCell>
                       <Badge variant={isIssued ? 'taking' : 'outline'} className="text-[10px] py-0">
-                        {isIssued ? 'Issued' : 'Unissued'}
+                        {isIssued ? (charge.paymentStatus || 'Issued') : 'Unissued'}
                       </Badge>
                     </TableCell>
                     {role === 'superadmin' && (
@@ -229,7 +260,7 @@ export function AdminMonthlyChargesTab({ month, summary, onRefresh, role }) {
 
       {/* Preview & Issue Confirmation Dialog */}
       <Dialog open={issueConfirmOpen} onOpenChange={setIssueConfirmOpen}>
-        <DialogContent className="max-w-lg w-full p-6">
+        <DialogContent className="max-w-xl w-full p-6">
           <DialogHeader>
             <DialogTitle className="text-base font-bold text-slate-900 dark:text-slate-100">
               Review Proposed Room Charges — {formatLogicalMonth(month)}
@@ -247,24 +278,52 @@ export function AdminMonthlyChargesTab({ month, summary, onRefresh, role }) {
                     <TableRow>
                       <TableHead>Member</TableHead>
                       <TableHead>Room</TableHead>
-                      <TableHead className="text-right">Monthly Fee</TableHead>
+                      <TableHead>Monthly Fee</TableHead>
+                      <TableHead>Status & Note</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {previewData.preview?.map((item) => (
+                    {previewMembers.map((item) => (
                       <TableRow key={item.memberId}>
                         <TableCell className="font-semibold">{item.memberName}</TableCell>
                         <TableCell>{item.roomNumber ? `Room ${item.roomNumber}` : '—'}</TableCell>
-                        <TableCell className="text-right font-bold">
-                          {item.feePlan ? formatPaise(item.amountPaise) : (
-                            <span className="text-xs text-amber-600 font-normal">No plan</span>
+                        <TableCell className="font-bold">
+                          {item.amountPaise ? formatPaise(item.amountPaise) : (
+                            <span className="text-xs text-amber-600 font-normal">No rate</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {item.status === 'ready_to_issue' && (
+                            <Badge variant="taking" className="text-[10px] py-0">
+                              Ready to issue
+                            </Badge>
+                          )}
+                          {item.status === 'already_issued' && (
+                            <Badge variant="outline" className="text-[10px] py-0 text-slate-600">
+                              Already issued
+                            </Badge>
+                          )}
+                          {item.status === 'blocked_missing_room' && (
+                            <span className="text-[11px] text-amber-600 font-medium">
+                              Missing room assignment
+                            </span>
+                          )}
+                          {item.status === 'blocked_missing_fee_plan' && (
+                            <span className="text-[11px] text-amber-600 font-medium">
+                              Fee not configured
+                            </span>
+                          )}
+                          {item.blockingReason && item.status !== 'ready_to_issue' && (
+                            <span className="block text-[10px] text-slate-400 mt-0.5">
+                              {item.blockingReason}
+                            </span>
                           )}
                         </TableCell>
                       </TableRow>
                     ))}
                     <TableRow className="border-t-2 font-bold bg-white dark:bg-slate-950">
                       <TableCell colSpan={2}>Total Proposed Charges</TableCell>
-                      <TableCell className="text-right text-teal-700 dark:text-teal-400">
+                      <TableCell colSpan={2} className="text-teal-700 dark:text-teal-400 font-mono text-base">
                         {formatPaise(previewData.totalProposedPaise || 0)}
                       </TableCell>
                     </TableRow>
@@ -272,9 +331,9 @@ export function AdminMonthlyChargesTab({ month, summary, onRefresh, role }) {
                 </Table>
               </div>
 
-              {previewData.alreadyIssuedCount > 0 && (
+              {alreadyIssuedCount > 0 && (
                 <p className="text-xs text-amber-700 bg-amber-50 p-2.5 rounded border border-amber-200">
-                  Notice: {previewData.alreadyIssuedCount} member charges are already issued for this month and will not be duplicated.
+                  Notice: {alreadyIssuedCount} member charge(s) already issued for this month and will not be duplicated.
                 </p>
               )}
 
@@ -285,11 +344,11 @@ export function AdminMonthlyChargesTab({ month, summary, onRefresh, role }) {
                 <Button
                   size="sm"
                   onClick={handleIssue}
-                  disabled={issuing || previewData.issuableCount === 0}
+                  disabled={issuing || !previewData.canIssue || issuableCount === 0}
                   className="gap-1.5"
                 >
                   <Send className="h-4 w-4" />
-                  <span>{issuing ? 'Issuing...' : `Issue ${previewData.issuableCount || 0} Room Fees`}</span>
+                  <span>{issuing ? 'Issuing...' : `Issue ${issuableCount} Room Fee${issuableCount === 1 ? '' : 's'}`}</span>
                 </Button>
               </div>
             </div>

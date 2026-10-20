@@ -18,6 +18,18 @@ import { ROOMMATES } from '../../../lib/constants.js';
 import { formatLogicalMonth } from '../../../lib/logicalMonth.js';
 import { formatPaise, rupeesToPaise } from '../../../lib/money.js';
 import { api } from '../../../lib/api.js';
+import { useRoomPayments } from '../../../hooks/useRoomFees.js';
+
+function generateUuid() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
 
 function formatPaymentTime(value) {
   if (!value) return '';
@@ -35,11 +47,15 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
   const [voidDialogOpen, setVoidDialogOpen] = useState(false);
 
+  // Dedicated payments ledger hook
+  const { payments, loading: paymentsLoading, error: paymentsError, refresh: refreshPayments } = useRoomPayments(month);
+
   // Record payment form
   const [memberId, setMemberId] = useState('nikhil');
-  const [amountRupees, setAmountRupees] = useState('1000');
+  const [amountRupees, setAmountRupees] = useState('');
   const [method, setMethod] = useState('upi');
   const [reference, setReference] = useState('');
+  const [idempotencyKey, setIdempotencyKey] = useState('');
   const [recording, setRecording] = useState(false);
   const [formError, setFormError] = useState('');
 
@@ -49,17 +65,60 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
   const [voiding, setVoiding] = useState(false);
   const [voidError, setVoidError] = useState('');
 
-  const payments = summary?.payments || [];
-  const selectedMemberName = ROOMMATES.find((m) => m.id === memberId)?.name || memberId;
+  // Lookup active charge for selected member
+  const membersList = Array.isArray(summary?.members) ? summary.members : Object.values(summary?.members || {});
+  const selectedMemberSummary = membersList.find((m) => m.memberId === memberId);
+  const selectedCharge = selectedMemberSummary?.charge;
+  const isChargeEligible = Boolean(selectedCharge && selectedCharge.status !== 'cancelled');
+  const remainingAmountPaise = selectedCharge?.remainingAmountPaise ?? 0;
+  const isFullyPaid = isChargeEligible && remainingAmountPaise === 0;
+
+  const openRecordDialog = () => {
+    const initialMember = 'nikhil';
+    setMemberId(initialMember);
+    const mSummary = membersList.find((m) => m.memberId === initialMember);
+    const rem = mSummary?.charge?.remainingAmountPaise ?? 0;
+    setAmountRupees(rem > 0 ? String(Math.floor(rem / 100)) : '');
+    setMethod('upi');
+    setReference('');
+    setFormError('');
+    setIdempotencyKey(generateUuid());
+    setRecordDialogOpen(true);
+  };
+
+  const handleMemberChange = (newMemberId) => {
+    setMemberId(newMemberId);
+    setFormError('');
+    const mSummary = membersList.find((m) => m.memberId === newMemberId);
+    const rem = mSummary?.charge?.remainingAmountPaise ?? 0;
+    setAmountRupees(rem > 0 ? String(Math.floor(rem / 100)) : '');
+  };
 
   const handleOpenConfirm = (e) => {
     e.preventDefault();
     setFormError('');
-    const paise = rupeesToPaise(amountRupees);
-    if (!paise || paise <= 0) {
-      setFormError('Please enter a valid rupee amount.');
+
+    if (!isChargeEligible || !selectedCharge?.chargeId) {
+      setFormError(`No active issued room charge found for ${memberId} in ${formatLogicalMonth(month)}. Issue a charge first.`);
       return;
     }
+
+    if (isFullyPaid) {
+      setFormError('This room charge is already fully paid.');
+      return;
+    }
+
+    const paise = rupeesToPaise(amountRupees);
+    if (!paise || paise <= 0) {
+      setFormError('Please enter a valid rupee amount greater than 0.');
+      return;
+    }
+
+    if (paise > remainingAmountPaise) {
+      setFormError(`Amount cannot exceed remaining balance of ${formatPaise(remainingAmountPaise)}.`);
+      return;
+    }
+
     setRecordDialogOpen(false);
     setConfirmDialogOpen(true);
   };
@@ -69,8 +128,8 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
     setFormError('');
     try {
       const paise = rupeesToPaise(amountRupees);
-      const idempotencyKey = `pay-${memberId}-${month}-${Date.now()}`;
       await api.post('/api/room-fees/payments', {
+        chargeId: selectedCharge.chargeId,
         memberId,
         month,
         amountPaise: paise,
@@ -81,7 +140,9 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
       setConfirmDialogOpen(false);
       setAmountRupees('');
       setReference('');
+      setIdempotencyKey(generateUuid());
       onRefresh();
+      refreshPayments();
     } catch (err) {
       setFormError(err.message || 'Failed to record payment.');
       setConfirmDialogOpen(false);
@@ -114,12 +175,15 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
       });
       setVoidDialogOpen(false);
       onRefresh();
+      refreshPayments();
     } catch (err) {
       setVoidError(err.message || 'Failed to void payment.');
     } finally {
       setVoiding(false);
     }
   };
+
+  const selectedMemberName = ROOMMATES.find((m) => m.id === memberId)?.name || memberId;
 
   return (
     <div className="space-y-6">
@@ -135,10 +199,7 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
         <div>
           <Button
             size="sm"
-            onClick={() => {
-              setFormError('');
-              setRecordDialogOpen(true);
-            }}
+            onClick={openRecordDialog}
             className="gap-1.5 text-xs font-semibold"
           >
             <Plus className="h-4 w-4" />
@@ -147,10 +208,24 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
         </div>
       </div>
 
+      {paymentsError && (
+        <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-800 text-xs flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 text-red-600 shrink-0" />
+            <span>{paymentsError}</span>
+          </div>
+          <Button size="sm" variant="outline" onClick={refreshPayments} className="h-7 text-xs">
+            Retry
+          </Button>
+        </div>
+      )}
+
       {/* Payments Ledger Table */}
       <Card className="border-slate-200/90 dark:border-slate-800 shadow-xs">
         <CardContent className="p-0">
-          {payments.length === 0 ? (
+          {paymentsLoading ? (
+            <div className="p-8 text-center text-xs text-slate-400">Loading payments ledger...</div>
+          ) : payments.length === 0 ? (
             <div className="p-8 text-center">
               <CircleDollarSign className="h-8 w-8 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
               <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
@@ -165,6 +240,7 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
               <TableHeader>
                 <TableRow>
                   <TableHead>Resident</TableHead>
+                  <TableHead>Charge / Month</TableHead>
                   <TableHead>Amount</TableHead>
                   <TableHead>Method</TableHead>
                   <TableHead>Reference / Details</TableHead>
@@ -182,6 +258,9 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
                     <TableRow key={payment.roomPaymentId} className={isVoided ? 'opacity-50' : ''}>
                       <TableCell className="font-semibold text-slate-900 dark:text-slate-100">
                         {roommate?.name || payment.memberId}
+                      </TableCell>
+                      <TableCell className="text-xs text-slate-500 font-mono">
+                        {payment.month}
                       </TableCell>
                       <TableCell>
                         <span
@@ -248,7 +327,7 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
               Record Room Fee Payment
             </DialogTitle>
             <DialogDescription className="text-xs text-slate-500">
-              Record a verified payment received from a resident.
+              Record a verified payment received from a resident against their issued charge.
             </DialogDescription>
           </DialogHeader>
 
@@ -264,7 +343,7 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
               <Select
                 id="payMember"
                 value={memberId}
-                onChange={(e) => setMemberId(e.target.value)}
+                onChange={(e) => handleMemberChange(e.target.value)}
               >
                 {ROOMMATES.map((m) => (
                   <option key={m.id} value={m.id}>
@@ -272,6 +351,40 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
                   </option>
                 ))}
               </Select>
+            </div>
+
+            {/* Charge status card */}
+            <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900/60 border border-slate-200/80 dark:border-slate-800 text-xs space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">Charge for {formatLogicalMonth(month)}:</span>
+                <span className="font-semibold">
+                  {selectedCharge ? (
+                    <Badge variant={selectedCharge.status === 'cancelled' ? 'outline' : 'secondary'} className="text-[10px] py-0">
+                      {selectedCharge.status === 'cancelled' ? 'Cancelled' : selectedCharge.paymentStatus}
+                    </Badge>
+                  ) : (
+                    <span className="text-amber-600 font-medium">Not issued</span>
+                  )}
+                </span>
+              </div>
+              {selectedCharge && (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500">Total Billed:</span>
+                    <span className="font-bold">{formatPaise(selectedCharge.finalBillAmountPaise)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500">Already Paid:</span>
+                    <span className="text-emerald-700 dark:text-emerald-400 font-medium">{formatPaise(selectedCharge.paidAmountPaise)}</span>
+                  </div>
+                  <div className="flex items-center justify-between border-t pt-1 border-slate-200 dark:border-slate-700 font-bold">
+                    <span>Remaining Due:</span>
+                    <span className={remainingAmountPaise > 0 ? 'text-amber-700 dark:text-amber-400' : 'text-emerald-700 dark:text-emerald-400'}>
+                      {formatPaise(remainingAmountPaise)}
+                    </span>
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="space-y-1.5">
@@ -284,8 +397,14 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
                 placeholder="e.g. 1000"
                 value={amountRupees}
                 onChange={(e) => setAmountRupees(e.target.value)}
+                disabled={!isChargeEligible || isFullyPaid}
                 required
               />
+              {remainingAmountPaise > 0 && (
+                <span className="text-[11px] text-slate-400 block">
+                  Maximum payable: {formatPaise(remainingAmountPaise)}
+                </span>
+              )}
             </div>
 
             <div className="space-y-1.5">
@@ -294,6 +413,7 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
                 id="payMethod"
                 value={method}
                 onChange={(e) => setMethod(e.target.value)}
+                disabled={!isChargeEligible || isFullyPaid}
               >
                 <option value="upi">UPI (GPay / PhonePe / Paytm)</option>
                 <option value="cash">Cash</option>
@@ -309,6 +429,7 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
                 placeholder="e.g. UPI Ref / Cash receipt notes"
                 value={reference}
                 onChange={(e) => setReference(e.target.value)}
+                disabled={!isChargeEligible || isFullyPaid}
               />
             </div>
 
@@ -316,7 +437,7 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
               <Button type="button" variant="outline" size="sm" onClick={() => setRecordDialogOpen(false)}>
                 Cancel
               </Button>
-              <Button type="submit" size="sm">
+              <Button type="submit" size="sm" disabled={!isChargeEligible || isFullyPaid}>
                 Next: Confirm Payment
               </Button>
             </div>
@@ -324,7 +445,7 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
         </DialogContent>
       </Dialog>
 
-      {/* Confirmation Dialog (Section 13.5 Requirement) */}
+      {/* Confirmation Dialog */}
       <Dialog open={confirmDialogOpen} onOpenChange={setConfirmDialogOpen}>
         <DialogContent className="max-w-md w-full p-6">
           <DialogHeader>
@@ -342,6 +463,7 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
             <div className="p-3 bg-slate-50 dark:bg-slate-900/60 rounded border border-slate-200/80 dark:border-slate-800 text-xs space-y-1">
               <div>Method: <strong className="uppercase font-mono">{method}</strong></div>
               {reference && <div>Reference: <span className="font-mono">{reference}</span></div>}
+              <div>Charge ID: <span className="font-mono text-[10px] text-slate-500">{selectedCharge?.chargeId}</span></div>
               <div>Month: <strong>{month}</strong></div>
             </div>
 
@@ -392,6 +514,7 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
 
             {selectedPayment && (
               <div className="p-3 bg-slate-50 rounded border text-xs">
+                <div>Resident: <strong>{ROOMMATES.find((m) => m.id === selectedPayment.memberId)?.name || selectedPayment.memberId}</strong></div>
                 <div>Amount: <strong>{formatPaise(selectedPayment.amountPaise)}</strong></div>
                 <div>Recorded: {formatPaymentTime(selectedPayment.recordedAt)}</div>
               </div>

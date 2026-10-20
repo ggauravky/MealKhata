@@ -432,6 +432,16 @@ export function createRoomRouter({ service = roomFeeService, broadcast = broadca
     }
   });
 
+  router.put('/:roomId', requireAdminOrAbove, async (req, res, next) => {
+    try {
+      const room = await service.updateRoom(req.params.roomId, req.body || {}, req.auth.role);
+      notifyChange();
+      return res.json({ success: true, data: room });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   return router;
 }
 

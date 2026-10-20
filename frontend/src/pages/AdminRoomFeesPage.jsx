@@ -33,23 +33,60 @@ import {
 import { useServerToday } from '../hooks/useServerToday.js';
 import { addLogicalMonths, formatLogicalMonth, isValidLogicalMonth } from '../lib/logicalMonth.js';
 
+const VALID_TABS = ['overview', 'rooms', 'plans', 'charges', 'payments', 'settings'];
+
 export function AdminRoomFeesPage() {
   useDocumentTitle('Room Fee Administration');
   const auth = useAuth();
   const serverToday = useServerToday();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const queryMonth = searchParams.get('month');
   const currentLogicalMonth = serverToday.date ? serverToday.date.slice(0, 7) : new Date().toISOString().slice(0, 7);
-  const [selectedMonth, setSelectedMonth] = useState('');
-  const month = selectedMonth || (isValidLogicalMonth(queryMonth) ? queryMonth : currentLogicalMonth);
+  const month = isValidLogicalMonth(queryMonth) ? queryMonth : currentLogicalMonth;
 
-  const [activeTab, setActiveTab] = useState('overview');
+  const tabQuery = searchParams.get('tab');
+  const activeTab = VALID_TABS.includes(tabQuery) ? tabQuery : 'overview';
 
-  const { data: summary, refresh: refreshSummary } = useAdminRoomFeeSummary(month);
-  const { rooms, refresh: refreshRooms } = useRooms();
-  const { plans, refresh: refreshPlans } = useMemberFeePlans();
-  const { settings, refresh: refreshSettings } = useRoomPaymentSettings();
+  const setActiveTab = (newTab) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('tab', newTab);
+    setSearchParams(next);
+  };
+
+  const setMonth = (newMonth) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('month', newMonth);
+    setSearchParams(next);
+  };
+
+  const {
+    data: summary,
+    loading: summaryLoading,
+    error: summaryError,
+    refresh: refreshSummary,
+  } = useAdminRoomFeeSummary(month);
+
+  const {
+    rooms,
+    loading: roomsLoading,
+    error: roomsError,
+    refresh: refreshRooms,
+  } = useRooms();
+
+  const {
+    plans,
+    loading: plansLoading,
+    error: plansError,
+    refresh: refreshPlans,
+  } = useMemberFeePlans(['gaurav', 'nikhil', 'devansh'], month);
+
+  const {
+    settings,
+    loading: settingsLoading,
+    error: settingsError,
+    refresh: refreshSettings,
+  } = useRoomPaymentSettings();
 
   const handleRefreshAll = () => {
     refreshSummary();
@@ -71,7 +108,7 @@ export function AdminRoomFeesPage() {
             variant="outline"
             size="sm"
             className="h-8 w-8 p-0"
-            onClick={() => setSelectedMonth(addLogicalMonths(month, -1))}
+            onClick={() => setMonth(addLogicalMonths(month, -1))}
             aria-label="Previous month"
           >
             <ChevronLeft className="h-4 w-4" />
@@ -80,7 +117,7 @@ export function AdminRoomFeesPage() {
             variant="outline"
             size="sm"
             className="h-8 px-2.5 text-xs font-medium"
-            onClick={() => setSelectedMonth(currentLogicalMonth)}
+            onClick={() => setMonth(currentLogicalMonth)}
           >
             Current
           </Button>
@@ -88,7 +125,7 @@ export function AdminRoomFeesPage() {
             variant="outline"
             size="sm"
             className="h-8 w-8 p-0"
-            onClick={() => setSelectedMonth(addLogicalMonths(month, 1))}
+            onClick={() => setMonth(addLogicalMonths(month, 1))}
             aria-label="Next month"
           >
             <ChevronRight className="h-4 w-4" />
@@ -96,7 +133,7 @@ export function AdminRoomFeesPage() {
           <input
             type="month"
             value={month}
-            onChange={(e) => setSelectedMonth(e.target.value)}
+            onChange={(e) => setMonth(e.target.value)}
             className="h-8 rounded-sm border border-slate-200 bg-white px-2 text-xs text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 ml-1 cursor-pointer"
             aria-label="Select month"
           />
@@ -139,6 +176,9 @@ export function AdminRoomFeesPage() {
             summary={summary}
             month={month}
             onSwitchTab={setActiveTab}
+            loading={summaryLoading}
+            error={summaryError}
+            onRefresh={refreshSummary}
           />
         </TabsContent>
 
@@ -147,6 +187,8 @@ export function AdminRoomFeesPage() {
             rooms={rooms}
             onRefresh={handleRefreshAll}
             role={auth.role}
+            loading={roomsLoading}
+            error={roomsError}
           />
         </TabsContent>
 
@@ -155,6 +197,8 @@ export function AdminRoomFeesPage() {
             plans={plans}
             rooms={rooms}
             onRefresh={handleRefreshAll}
+            loading={plansLoading}
+            error={plansError}
           />
         </TabsContent>
 
@@ -164,6 +208,8 @@ export function AdminRoomFeesPage() {
             summary={summary}
             onRefresh={handleRefreshAll}
             role={auth.role}
+            loading={summaryLoading}
+            error={summaryError}
           />
         </TabsContent>
 
@@ -180,6 +226,8 @@ export function AdminRoomFeesPage() {
           <AdminSettingsTab
             settings={settings}
             onRefresh={handleRefreshAll}
+            loading={settingsLoading}
+            error={settingsError}
           />
         </TabsContent>
       </Tabs>

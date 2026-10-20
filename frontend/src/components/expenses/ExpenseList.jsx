@@ -12,6 +12,10 @@ export function ExpenseList({
   canAdd = false,
   onAddClick,
   onSelectExpense,
+  onView,
+  onEdit,
+  onDelete,
+  isSuperAdmin = false,
 }) {
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -80,7 +84,11 @@ export function ExpenseList({
               key={exp.expenseId}
               expense={exp}
               currentMemberId={currentMemberId}
-              onClick={() => onSelectExpense(exp)}
+              onClick={() => (onView ? onView(exp) : onSelectExpense ? onSelectExpense(exp) : null)}
+              onView={onView || onSelectExpense}
+              onEdit={onEdit}
+              onDelete={onDelete}
+              isSuperAdmin={isSuperAdmin}
             />
           ))}
         </div>

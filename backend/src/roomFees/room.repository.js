@@ -1,3 +1,5 @@
+import mongoose from 'mongoose';
+import { randomUUID } from 'node:crypto';
 import { Room } from './room.model.js';
 import { RoomAssignment } from './roomAssignment.model.js';
 import { RoomFeePlan } from './roomFeePlan.model.js';
@@ -12,12 +14,16 @@ export const roomRepository = {
     return Room.create(data);
   },
 
-  async findRoomById(roomId) {
-    return Room.findOne({ roomId }).lean();
+  async findRoomById(roomId, { session } = {}) {
+    const q = Room.findOne({ roomId });
+    if (session) q.session(session);
+    return q.lean();
   },
 
-  async findRoomByNumber(roomNumber) {
-    return Room.findOne({ roomNumber: roomNumber.trim() }).lean();
+  async findRoomByNumber(roomNumber, { session } = {}) {
+    const q = Room.findOne({ roomNumber: roomNumber.trim() });
+    if (session) q.session(session);
+    return q.lean();
   },
 
   async findAllRooms({ activeOnly = false } = {}) {
@@ -25,12 +31,19 @@ export const roomRepository = {
     return Room.find(query).sort({ roomNumber: 1 }).lean();
   },
 
-  async updateRoom(roomId, updates) {
-    return Room.findOneAndUpdate({ roomId }, { $set: updates }, { new: true, runValidators: true }).lean();
+  async updateRoom(roomId, updates, { session } = {}) {
+    const opts = { returnDocument: 'after', runValidators: true };
+    if (session) opts.session = session;
+    const updateDoc = updates.$set || updates.$inc ? updates : { $set: updates };
+    return Room.findOneAndUpdate({ roomId }, updateDoc, opts).lean();
   },
 
   // Assignments
-  async createAssignment(data) {
+  async createAssignment(data, { session } = {}) {
+    if (session) {
+      const res = await RoomAssignment.create([data], { session });
+      return res[0].toObject();
+    }
     return RoomAssignment.create(data);
   },
 
@@ -38,12 +51,16 @@ export const roomRepository = {
     return RoomAssignment.findOne({ assignmentId }).lean();
   },
 
-  async findAssignmentsForMember(memberId) {
-    return RoomAssignment.find({ memberId }).sort({ effectiveFromMonth: -1 }).lean();
+  async findAssignmentsForMember(memberId, { session } = {}) {
+    const q = RoomAssignment.find({ memberId }).sort({ effectiveFromMonth: -1 });
+    if (session) q.session(session);
+    return q.lean();
   },
 
-  async findAssignmentsForRoom(roomId) {
-    return RoomAssignment.find({ roomId }).sort({ effectiveFromMonth: -1 }).lean();
+  async findAssignmentsForRoom(roomId, { session } = {}) {
+    const q = RoomAssignment.find({ roomId }).sort({ effectiveFromMonth: -1 });
+    if (session) q.session(session);
+    return q.lean();
   },
 
   async findAllAssignments() {
@@ -62,12 +79,18 @@ export const roomRepository = {
     return RoomAssignment.findOneAndDelete({ assignmentId }).lean();
   },
 
-  async updateAssignment(assignmentId, updates) {
-    return RoomAssignment.findOneAndUpdate({ assignmentId }, { $set: updates }, { new: true, runValidators: true }).lean();
+  async updateAssignment(assignmentId, updates, { session } = {}) {
+    const options = { returnDocument: 'after', runValidators: true };
+    if (session) options.session = session;
+    return RoomAssignment.findOneAndUpdate({ assignmentId }, { $set: updates }, options).lean();
   },
 
   // Fee Plans
-  async createFeePlan(data) {
+  async createFeePlan(data, { session } = {}) {
+    if (session) {
+      const res = await RoomFeePlan.create([data], { session });
+      return res[0].toObject();
+    }
     return RoomFeePlan.create(data);
   },
 
@@ -88,12 +111,18 @@ export const roomRepository = {
     }).sort({ effectiveFromMonth: -1 }).lean();
   },
 
-  async updateFeePlan(feePlanId, updates) {
-    return RoomFeePlan.findOneAndUpdate({ feePlanId }, { $set: updates }, { new: true, runValidators: true }).lean();
+  async updateFeePlan(feePlanId, updates, { session } = {}) {
+    const options = { returnDocument: 'after', runValidators: true };
+    if (session) options.session = session;
+    return RoomFeePlan.findOneAndUpdate({ feePlanId }, { $set: updates }, options).lean();
   },
 
   // Charges
-  async createCharge(data) {
+  async createCharge(data, { session } = {}) {
+    if (session) {
+      const res = await RoomCharge.create([data], { session });
+      return res[0].toObject();
+    }
     return RoomCharge.create(data);
   },
 
@@ -113,12 +142,18 @@ export const roomRepository = {
     return RoomCharge.find({ memberId }).sort({ month: -1 }).lean();
   },
 
-  async updateCharge(chargeId, updates) {
-    return RoomCharge.findOneAndUpdate({ chargeId }, { $set: updates }, { new: true, runValidators: true }).lean();
+  async updateCharge(chargeId, updates, { session } = {}) {
+    const options = { returnDocument: 'after', runValidators: true };
+    if (session) options.session = session;
+    return RoomCharge.findOneAndUpdate({ chargeId }, { $set: updates }, options).lean();
   },
 
   // Payments
-  async createPayment(data) {
+  async createPayment(data, { session } = {}) {
+    if (session) {
+      const res = await RoomPayment.create([data], { session });
+      return res[0].toObject();
+    }
     return RoomPayment.create(data);
   },
 
@@ -146,8 +181,228 @@ export const roomRepository = {
     return RoomPayment.find({}).sort({ recordedAt: -1 }).limit(limit).lean();
   },
 
-  async updatePayment(roomPaymentId, updates) {
-    return RoomPayment.findOneAndUpdate({ roomPaymentId }, { $set: updates }, { new: true, runValidators: true }).lean();
+  async updatePayment(roomPaymentId, updates, { session } = {}) {
+    const options = { returnDocument: 'after', runValidators: true };
+    if (session) options.session = session;
+    return RoomPayment.findOneAndUpdate({ roomPaymentId }, { $set: updates }, options).lean();
+  },
+
+  // Atomic Room Payment with Session Concurrency Guard
+  async executeAtomicRoomPayment({
+    chargeId,
+    memberId,
+    month,
+    amountPaise,
+    method,
+    reference,
+    recipientSnapshot,
+    idempotencyKey,
+    actorRole,
+  }) {
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+      const maxRetries = 5;
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        let session = null;
+        try {
+          session = await mongoose.startSession();
+          session.startTransaction();
+
+          // 1. Fetch charge with session
+          const charge = await RoomCharge.findOne({ chargeId }).session(session);
+          if (!charge) {
+            const err = new Error('Room charge not found.');
+            err.statusCode = 404;
+            throw err;
+          }
+
+          if (charge.status === 'cancelled') {
+            const err = new Error('Cannot record payment against a cancelled room charge.');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const targetMemberId = memberId || charge.memberId;
+          const targetMonth = month || charge.month;
+
+          if (memberId && charge.memberId !== memberId) {
+            const err = new Error('Charge member or month does not match payment payload.');
+            err.statusCode = 400;
+            throw err;
+          }
+          if (month && charge.month !== month) {
+            const err = new Error('Charge member or month does not match payment payload.');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          // 2. Check idempotency within transaction session
+          const existingKey = await RoomPayment.findOne({ idempotencyKey }).session(session);
+          if (existingKey) {
+            const isMatch =
+              existingKey.chargeId === chargeId &&
+              existingKey.memberId === targetMemberId &&
+              existingKey.month === targetMonth &&
+              existingKey.amountPaise === amountPaise &&
+              existingKey.method === method;
+
+            if (!isMatch) {
+              const err = new Error('Idempotency key reused with conflicting payment payload.');
+              err.statusCode = 409;
+              throw err;
+            }
+            await session.commitTransaction();
+            return existingKey.toObject();
+          }
+
+          // 3. Concurrency guard: serialize concurrent payments on this charge
+          await RoomCharge.updateOne(
+            { chargeId },
+            { $inc: { __v: 1 } },
+            { session },
+          );
+
+          // 4. Compute remaining balance within session
+          const activePayments = await RoomPayment.find({ chargeId, status: 'verified' }).session(session);
+          const alreadyPaid = activePayments.reduce((sum, p) => sum + p.amountPaise, 0);
+          const adjustmentsTotal = (charge.adjustments || []).reduce((sum, a) => sum + a.amountPaise, 0);
+          const finalBillPaise = Math.max(0, charge.baseAmountPaise + adjustmentsTotal);
+          const remainingPaise = Math.max(0, finalBillPaise - alreadyPaid);
+
+          if (amountPaise > remainingPaise) {
+            const err = new Error(`Payment amount (₹${(amountPaise / 100).toFixed(2)}) exceeds remaining balance of ₹${(remainingPaise / 100).toFixed(2)}.`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          // 4. Create verified payment within session
+          const roomPaymentId = randomUUID();
+          const paymentData = {
+            roomPaymentId,
+            chargeId,
+            memberId: targetMemberId,
+            month: targetMonth,
+            amountPaise,
+            method,
+            reference,
+            recipientSnapshot,
+            idempotencyKey,
+            recordedAt: new Date(),
+            recordedByRole: actorRole,
+            status: 'verified',
+          };
+
+          const created = await RoomPayment.create([paymentData], { session });
+          await session.commitTransaction();
+          return created[0].toObject();
+        } catch (err) {
+          if (session && session.inTransaction()) {
+            await session.abortTransaction();
+          }
+          const isTransient =
+            err.errorLabels?.has?.('TransientTransactionError') ||
+            err.errorLabelSet?.has?.('TransientTransactionError') ||
+            err.code === 112 ||
+            (typeof err.message === 'string' && (err.message.includes('WriteConflict') || err.message.includes('catalog changes')));
+
+          if (isTransient && attempt < maxRetries - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+            continue;
+          }
+
+          if (err.message && (err.message.includes('Transactions are not supported') || err.message.includes('replica set'))) {
+            const error = new Error('Financial transaction unavailable. Database transaction support is required.');
+            error.statusCode = 503;
+            throw error;
+          }
+          throw err;
+        } finally {
+          if (session) {
+            await session.endSession();
+          }
+        }
+      }
+    }
+
+    const err = new Error('Financial transaction unavailable. Database connection required.');
+    err.statusCode = 503;
+    throw err;
+  },
+
+  // Atomic Charge Adjustment with optimistic concurrency or session
+  async atomicAdjustCharge({ chargeId, numAmount, reason, actorRole }) {
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+      const maxRetries = 5;
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        let session = null;
+        try {
+          session = await mongoose.startSession();
+          session.startTransaction();
+
+          const charge = await RoomCharge.findOne({ chargeId }).session(session);
+          if (!charge) {
+            const err = new Error('Room charge not found.');
+            err.statusCode = 404;
+            throw err;
+          }
+          if (charge.status === 'cancelled') {
+            const err = new Error('Cannot adjust a cancelled room charge.');
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const currentAdjustments = charge.adjustments || [];
+          const currentTotal = currentAdjustments.reduce((sum, a) => sum + a.amountPaise, 0);
+          const newFinalBill = charge.baseAmountPaise + currentTotal + numAmount;
+          if (newFinalBill < 0) {
+            const err = new Error(`Adjustment cannot reduce the total charge below ₹0 (current: ₹${(charge.baseAmountPaise + currentTotal) / 100}).`);
+            err.statusCode = 400;
+            throw err;
+          }
+
+          const adjustment = {
+            adjustmentId: randomUUID(),
+            amountPaise: numAmount,
+            reason: reason.trim(),
+            createdAt: new Date(),
+            createdByRole: actorRole,
+          };
+
+          charge.adjustments.push(adjustment);
+          await charge.save({ session });
+          await session.commitTransaction();
+          return charge.toObject();
+        } catch (err) {
+          if (session && session.inTransaction()) {
+            await session.abortTransaction();
+          }
+          const isTransient =
+            err.errorLabels?.has?.('TransientTransactionError') ||
+            err.errorLabelSet?.has?.('TransientTransactionError') ||
+            err.code === 112 ||
+            (typeof err.message === 'string' && (err.message.includes('WriteConflict') || err.message.includes('catalog changes')));
+
+          if (isTransient && attempt < maxRetries - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+            continue;
+          }
+
+          if (err.message && (err.message.includes('Transactions are not supported') || err.message.includes('replica set'))) {
+            const error = new Error('Financial transaction unavailable. Database transaction support is required.');
+            error.statusCode = 503;
+            throw error;
+          }
+          throw err;
+        } finally {
+          if (session) {
+            await session.endSession();
+          }
+        }
+      }
+    }
+
+    const err = new Error('Financial transaction unavailable. Database connection required.');
+    err.statusCode = 503;
+    throw err;
   },
 
   // Settings
@@ -155,7 +410,7 @@ export const roomRepository = {
     return RoomPaymentSettings.findOneAndUpdate(
       { settingsId: ROOM_SETTINGS_KEY },
       { $setOnInsert: { settingsId: ROOM_SETTINGS_KEY } },
-      { new: true, upsert: true, setDefaultsOnInsert: true }
+      { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true },
     ).lean();
   },
 
@@ -163,7 +418,7 @@ export const roomRepository = {
     return RoomPaymentSettings.findOneAndUpdate(
       { settingsId: ROOM_SETTINGS_KEY },
       { $set: updates },
-      { new: true, upsert: true, runValidators: true }
+      { returnDocument: 'after', upsert: true, runValidators: true },
     ).lean();
   },
 };

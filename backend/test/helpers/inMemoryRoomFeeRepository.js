@@ -293,6 +293,120 @@ export class InMemoryRoomFeeRepository {
     return clone(payment);
   }
 
+  async executeAtomicRoomPayment({
+    chargeId,
+    memberId,
+    month,
+    amountPaise,
+    method,
+    reference,
+    recipientSnapshot,
+    idempotencyKey,
+    actorRole,
+  }) {
+    if (idempotencyKey) {
+      const existing = Array.from(this.payments.values()).find((p) => p.idempotencyKey === idempotencyKey);
+      if (existing) {
+        const isMatch =
+          existing.chargeId === chargeId &&
+          existing.memberId === memberId &&
+          existing.month === month &&
+          existing.amountPaise === amountPaise &&
+          existing.method === method;
+        if (!isMatch) {
+          const err = new Error('Idempotency key reused with conflicting payment payload.');
+          err.statusCode = 409;
+          throw err;
+        }
+        return clone(existing);
+      }
+    }
+
+    const charge = this.charges.get(chargeId);
+    if (!charge) {
+      const err = new Error('Room charge not found.');
+      err.statusCode = 404;
+      throw err;
+    }
+    if (charge.status === 'cancelled') {
+      const err = new Error('Cannot record payment against a cancelled room charge.');
+      err.statusCode = 400;
+      throw err;
+    }
+    if (charge.memberId !== memberId || charge.month !== month) {
+      const err = new Error('Charge member or month does not match payment payload.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const activePayments = Array.from(this.payments.values()).filter(
+      (p) => p.chargeId === chargeId && p.status === 'verified',
+    );
+    const alreadyPaid = activePayments.reduce((sum, p) => sum + p.amountPaise, 0);
+    const adjustmentsTotal = (charge.adjustments || []).reduce((sum, a) => sum + a.amountPaise, 0);
+    const finalBillPaise = Math.max(0, charge.baseAmountPaise + adjustmentsTotal);
+    const remainingPaise = Math.max(0, finalBillPaise - alreadyPaid);
+
+    if (amountPaise > remainingPaise) {
+      const err = new Error(`Payment amount (₹${(amountPaise / 100).toFixed(2)}) exceeds remaining balance of ₹${(remainingPaise / 100).toFixed(2)}.`);
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const roomPaymentId = `pay_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const payment = {
+      roomPaymentId,
+      chargeId,
+      memberId,
+      month,
+      amountPaise,
+      method,
+      reference,
+      recipientSnapshot,
+      idempotencyKey,
+      status: 'verified',
+      recordedAt: new Date(),
+      recordedByRole: actorRole,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.payments.set(roomPaymentId, payment);
+    return clone(payment);
+  }
+
+  async atomicAdjustCharge({ chargeId, numAmount, reason, actorRole }) {
+    const charge = this.charges.get(chargeId);
+    if (!charge) {
+      const err = new Error('Room charge not found.');
+      err.statusCode = 404;
+      throw err;
+    }
+    if (charge.status === 'cancelled') {
+      const err = new Error('Cannot adjust a cancelled room charge.');
+      err.statusCode = 400;
+      throw err;
+    }
+    charge.adjustments = charge.adjustments || [];
+    const currentTotal = charge.adjustments.reduce((sum, a) => sum + a.amountPaise, 0);
+    const newFinalBill = charge.baseAmountPaise + currentTotal + numAmount;
+    if (newFinalBill < 0) {
+      const err = new Error(`Adjustment cannot reduce the total charge below ₹0 (current: ₹${(charge.baseAmountPaise + currentTotal) / 100}).`);
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const adjustment = {
+      adjustmentId: `adj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      amountPaise: numAmount,
+      reason: reason.trim(),
+      createdAt: new Date(),
+      createdByRole: actorRole,
+    };
+    charge.adjustments.push(adjustment);
+    charge.updatedAt = new Date();
+    return clone(charge);
+  }
+
   // Settings
   async getPaymentSettings() {
     return clone(this.settings);

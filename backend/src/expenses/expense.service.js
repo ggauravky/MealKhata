@@ -17,6 +17,7 @@ import {
 } from './expense.constants.js';
 import {
   canCreateExpense,
+  canEditExpense,
   canMemberAccessExpense,
   canRecordReimbursement,
   canViewHouseholdExpenses,
@@ -289,6 +290,157 @@ export class ExpenseService {
   }
 
   /**
+   * Correct / Edit an expense (Super Admin only).
+   */
+  async correctExpense(expenseId, { reason, changes = {}, expectedRevision = null, actorRole }) {
+    if (!canEditExpense(actorRole)) {
+      throw new ExpenseDomainError('Only Super Admin can correct or edit an expense.', 403);
+    }
+
+    if (!isValidUuid(expenseId)) {
+      throw new ExpenseDomainError('Invalid expense ID format.', 400);
+    }
+
+    if (!reason || typeof reason !== 'string' || !reason.trim() || reason.trim().length > MAX_VOID_REASON_LENGTH) {
+      throw new ExpenseDomainError('A mandatory correction reason is required (up to 300 characters).', 400);
+    }
+
+    const expense = await this.repository.findExpenseById(expenseId);
+    if (!expense) {
+      throw new ExpenseDomainError('Expense not found.', 404);
+    }
+
+    if (expense.status === EXPENSE_STATUSES.VOIDED) {
+      throw new ExpenseDomainError('Cannot edit or correct a voided expense.', 409);
+    }
+
+    if (expectedRevision && expense.revision !== expectedRevision) {
+      throw new ExpenseDomainError('The expense was modified concurrently. Please refresh and try again.', 409);
+    }
+
+    const reimbursements = await this.repository.findReimbursementsByExpenseId(expenseId);
+    const activeReimbursements = (reimbursements || []).filter((r) => r.status !== REIMBURSEMENT_STATUSES.VOIDED);
+
+    const newTitle = changes.title !== undefined ? String(changes.title).trim() : expense.title;
+    const newCategory = changes.category !== undefined ? changes.category : expense.category;
+    const newDate = changes.date !== undefined ? changes.date : expense.date;
+    const newDescription = changes.description !== undefined ? String(changes.description).trim() : expense.description;
+
+    const newAmountPaise = changes.amountPaise !== undefined ? Number(changes.amountPaise) : expense.amountPaise;
+    const newPaidByMemberId = changes.paidByMemberId !== undefined ? changes.paidByMemberId : expense.paidByMemberId;
+    const newSplitType = changes.splitType !== undefined ? changes.splitType : expense.splitType;
+    const newParticipants = changes.participants !== undefined ? changes.participants : (expense.allocations || []).map((a) => a.memberId);
+    const newCustomAllocations = changes.customAllocations !== undefined ? changes.customAllocations : null;
+
+    if (!isValidLogicalDate(newDate)) {
+      throw new ExpenseDomainError('Expense date must be in valid YYYY-MM-DD format.', 400);
+    }
+    const newMonth = newDate.slice(0, 7);
+
+    if (typeof newTitle !== 'string' || !newTitle || newTitle.length > MAX_EXPENSE_TITLE_LENGTH) {
+      throw new ExpenseDomainError(`Title is required and must not exceed ${MAX_EXPENSE_TITLE_LENGTH} characters.`, 400);
+    }
+
+    if (!EXPENSE_CATEGORIES.includes(newCategory)) {
+      throw new ExpenseDomainError(`Invalid expense category: ${newCategory}`, 400);
+    }
+
+    if (newDescription && newDescription.length > MAX_EXPENSE_NOTE_LENGTH) {
+      throw new ExpenseDomainError(`Note must not exceed ${MAX_EXPENSE_NOTE_LENGTH} characters.`, 400);
+    }
+
+    // Determine if financial fields changed
+    const isFinancialChange =
+      newAmountPaise !== expense.amountPaise ||
+      newPaidByMemberId !== expense.paidByMemberId ||
+      newSplitType !== expense.splitType ||
+      newMonth !== expense.month ||
+      changes.participants !== undefined ||
+      changes.customAllocations !== undefined;
+
+    if (isFinancialChange && activeReimbursements.length > 0) {
+      throw new ExpenseDomainError(
+        'This Expense has recorded reimbursements. Financial details cannot be changed until the existing reimbursements are reconciled.',
+        409,
+      );
+    }
+
+    let finalAllocations = expense.allocations;
+    let finalSplitType = expense.splitType;
+    let finalAmountPaise = expense.amountPaise;
+
+    if (isFinancialChange) {
+      const splitResult = calculateExpenseSplit({
+        amountPaise: newAmountPaise,
+        paidByMemberId: newPaidByMemberId,
+        splitType: newSplitType,
+        participants: newParticipants,
+        customAllocations: newCustomAllocations,
+      });
+      finalAllocations = splitResult.allocations;
+      finalSplitType = splitResult.splitType;
+      finalAmountPaise = splitResult.amountPaise;
+    }
+
+    const previousSnapshot = {
+      title: expense.title,
+      category: expense.category,
+      date: expense.date,
+      month: expense.month,
+      amountPaise: expense.amountPaise,
+      paidByMemberId: expense.paidByMemberId,
+      splitType: expense.splitType,
+      allocations: (expense.allocations || []).map((a) => ({ memberId: a.memberId, amountPaise: a.amountPaise })),
+      description: expense.description || '',
+    };
+
+    const correctionRecord = {
+      correctionId: crypto.randomUUID(),
+      correctedAt: new Date(),
+      correctedByRole: actorRole,
+      reason: reason.trim(),
+      previousSnapshot,
+    };
+
+    const updateData = {
+      title: newTitle,
+      category: newCategory,
+      date: newDate,
+      month: newMonth,
+      description: newDescription,
+      amountPaise: finalAmountPaise,
+      paidByMemberId: newPaidByMemberId,
+      splitType: finalSplitType,
+      allocations: finalAllocations,
+    };
+
+    const updated = await this.repository.recordExpenseCorrection(expenseId, {
+      updateData,
+      correctionRecord,
+      expectedRevision,
+    });
+
+    if (!updated) {
+      throw new ExpenseDomainError('The expense was modified concurrently. Please refresh and try again.', 409);
+    }
+
+    broadcastExpensesUpdated({
+      scope: 'expenses',
+      month: newMonth,
+      revision: updated.revision,
+    });
+    if (newMonth !== expense.month) {
+      broadcastExpensesUpdated({
+        scope: 'expenses',
+        month: expense.month,
+        revision: updated.revision,
+      });
+    }
+
+    return serializeExpense({ expense: updated, reimbursements, role: actorRole });
+  }
+
+  /**
    * Record a confirmed reimbursement for an expense.
    */
   async recordReimbursement({
@@ -398,93 +550,7 @@ export class ExpenseService {
       }
     }
 
-    const maxRetries = 3;
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      const expense = await this.repository.findExpenseById(expenseId);
-      if (!expense) {
-        throw new ExpenseDomainError('Expense not found.', 404);
-      }
-
-      if (expense.status === EXPENSE_STATUSES.VOIDED) {
-        throw new ExpenseDomainError('Cannot record reimbursement against a voided expense.', 409);
-      }
-
-      if (fromMemberId === expense.paidByMemberId) {
-        throw new ExpenseDomainError('Payer cannot reimburse themselves for their own purchase.', 400);
-      }
-
-      // Find allocation for the member owing
-      const allocation = (expense.allocations || []).find((a) => a.memberId === fromMemberId);
-      if (!allocation) {
-        throw new ExpenseDomainError(`Member ${fromMemberId} is not a beneficiary of this expense.`, 400);
-      }
-
-      // Concurrency-safe calculation of remaining debt
-      const existingReimbursements = await this.repository.findReimbursementsByExpenseId(expenseId);
-      const activeReimbursements = existingReimbursements.filter(
-        (r) => r.status !== REIMBURSEMENT_STATUSES.VOIDED && r.fromMemberId === fromMemberId,
-      );
-
-      const alreadyReimbursedPaise = activeReimbursements.reduce((sum, r) => sum + r.amountPaise, 0);
-      const remainingOwedPaise = Math.max(0, allocation.amountPaise - alreadyReimbursedPaise);
-
-      if (remainingOwedPaise === 0) {
-        throw new ExpenseDomainError(
-          `Member ${fromMemberId}'s share of this expense is already fully reimbursed.`,
-          409,
-        );
-      }
-
-      if (amountPaise > remainingOwedPaise) {
-        const remainingRupees = (remainingOwedPaise / 100).toFixed(2);
-        throw new ExpenseDomainError(
-          `Payment of ₹${(amountPaise / 100).toFixed(2)} exceeds remaining due of ₹${remainingRupees}.`,
-          409,
-        );
-      }
-
-      // Atomic revision transition guard
-      const newRevision = crypto.randomUUID();
-      const acquired = await this.repository.acquireExpenseRevision(
-        expenseId,
-        expense.revision,
-        newRevision,
-      );
-
-      if (!acquired) {
-        // Revision conflict from concurrent request; retry with refreshed state
-        continue;
-      }
-
-      const reimbursementId = crypto.randomUUID();
-      const newReimbursement = await this.repository.createReimbursement({
-        reimbursementId,
-        expenseId,
-        expenseMonth: expense.month,
-        fromMemberId,
-        toMemberId: expense.paidByMemberId,
-        amountPaise,
-        method,
-        reference: reference ? reference.trim() : null,
-        idempotencyKey: idempotencyKey || null,
-        status: REIMBURSEMENT_STATUSES.RECORDED,
-        recordedAt: new Date(),
-        recordedByRole: actorRole,
-      });
-
-      broadcastExpensesUpdated({
-        scope: 'expenses',
-        month: expense.month,
-        revision: newRevision,
-      });
-
-      return serializeReimbursement(newReimbursement);
-    }
-
-    throw new ExpenseDomainError(
-      'Could not record reimbursement due to concurrent update conflict. Please retry.',
-      409,
-    );
+    throw new ExpenseDomainError('Financial transaction unavailable. Database transaction support is required.', 503);
   }
 
   /**
@@ -503,29 +569,30 @@ export class ExpenseService {
       throw new ExpenseDomainError('A mandatory void reason is required (up to 300 characters).', 400);
     }
 
-    const reimbursement = await this.repository.findReimbursementById(reimbursementId);
-    if (!reimbursement) {
-      throw new ExpenseDomainError('Reimbursement not found.', 404);
+    if (typeof this.repository.executeAtomicReimbursementVoid === 'function') {
+      try {
+        const updated = await this.repository.executeAtomicReimbursementVoid({
+          reimbursementId,
+          reason: reason.trim(),
+          actorRole,
+        });
+
+        broadcastExpensesUpdated({
+          scope: 'expenses',
+          month: updated.expenseMonth,
+          revision: new Date().toISOString(),
+        });
+
+        return serializeReimbursement(updated);
+      } catch (err) {
+        if (err.statusCode) {
+          throw new ExpenseDomainError(err.message, err.statusCode);
+        }
+        throw err;
+      }
     }
 
-    if (reimbursement.status === REIMBURSEMENT_STATUSES.VOIDED) {
-      throw new ExpenseDomainError('Reimbursement is already voided.', 409);
-    }
-
-    const updated = await this.repository.updateReimbursement(reimbursementId, {
-      status: REIMBURSEMENT_STATUSES.VOIDED,
-      voidedAt: new Date(),
-      voidedByRole: actorRole,
-      voidReason: reason.trim(),
-    });
-
-    broadcastExpensesUpdated({
-      scope: 'expenses',
-      month: reimbursement.expenseMonth,
-      revision: new Date().toISOString(),
-    });
-
-    return serializeReimbursement(updated);
+    throw new ExpenseDomainError('Financial transaction unavailable. Database transaction support is required.', 503);
   }
 
   async getMemberExpenseSummary(arg1, arg2) {
@@ -670,3 +737,4 @@ export class ExpenseService {
 }
 
 export const defaultExpenseService = new ExpenseService();
+export const expenseService = defaultExpenseService;

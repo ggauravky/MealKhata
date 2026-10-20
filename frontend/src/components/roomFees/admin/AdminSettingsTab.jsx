@@ -7,7 +7,7 @@ import { Label } from '../../ui/label.jsx';
 import { Select } from '../../ui/select.jsx';
 import { api } from '../../../lib/api.js';
 
-export function AdminSettingsTab({ settings, onRefresh }) {
+export function AdminSettingsTab({ settings, onRefresh, loading = false, error = '' }) {
   const [recipientMode, setRecipientMode] = useState(settings?.recipientMode || 'hostel_owner');
   const [recipientName, setRecipientName] = useState(settings?.recipientName || 'Hostel Owner');
   const [upiId, setUpiId] = useState(settings?.upiId || '');
@@ -33,13 +33,14 @@ export function AdminSettingsTab({ settings, onRefresh }) {
     setSaveSuccess('');
     setSaving(true);
     try {
-      await api.put('/api/room-fees/settings', {
+      const payload = {
         recipientMode,
         recipientName: recipientName.trim(),
-        upiId: upiId.trim() || undefined,
-        paymentInstructions: paymentInstructions.trim() || undefined,
+        upiId: upiId.trim() ? upiId.trim() : null,
+        paymentInstructions: paymentInstructions.trim() ? paymentInstructions.trim() : null,
         defaultDueDay: Number(defaultDueDay) || 5,
-      });
+      };
+      await api.put('/api/room-fees/settings', payload);
       setSaveSuccess('Room fee payment instructions and recipient settings saved successfully.');
       onRefresh();
     } catch (err) {
@@ -48,6 +49,27 @@ export function AdminSettingsTab({ settings, onRefresh }) {
       setSaving(false);
     }
   };
+
+  if (loading) {
+    return (
+      <Card className="border-slate-200 dark:border-slate-800 p-8 text-center max-w-2xl">
+        <p className="text-xs text-slate-500 dark:text-slate-400">Loading payment recipient settings...</p>
+      </Card>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card className="border-rose-200 bg-rose-50/50 dark:border-rose-900 dark:bg-rose-950/20 p-6 text-center max-w-2xl">
+        <p className="text-xs font-semibold text-rose-700 dark:text-rose-300">{error}</p>
+        {onRefresh && (
+          <Button onClick={onRefresh} size="sm" variant="outline" className="mt-3 text-xs">
+            Retry
+          </Button>
+        )}
+      </Card>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -117,7 +139,7 @@ export function AdminSettingsTab({ settings, onRefresh }) {
                 placeholder="e.g. landlord@okhdfcbank or 9876543210@upi"
               />
               <span className="text-[11px] text-slate-400 block">
-                Residents will see a direct UPI payment launch link if a valid UPI ID is configured.
+                Residents will see a direct UPI payment launch link if a valid UPI ID is configured. Leave empty to clear.
               </span>
             </div>
 

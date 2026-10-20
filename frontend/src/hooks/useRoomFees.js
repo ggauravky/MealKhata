@@ -142,7 +142,10 @@ export function useRooms() {
   useEffect(() => {
     const controller = new AbortController();
     api.get('/api/rooms', { signal: controller.signal })
-      .then((res) => setState({ loading: false, error: '', rooms: res.data?.rooms || [] }))
+      .then((res) => {
+        const roomsList = Array.isArray(res.data) ? res.data : (Array.isArray(res.data?.rooms) ? res.data.rooms : []);
+        setState({ loading: false, error: '', rooms: roomsList });
+      })
       .catch((err) => {
         if (!controller.signal.aborted) {
           setState({ loading: false, error: err?.message || 'Unable to load rooms.', rooms: [] });
@@ -163,7 +166,7 @@ export function useRooms() {
 /**
  * Hook for Admin to view and manage Fee Plans for all members
  */
-export function useMemberFeePlans(members = ['gaurav', 'nikhil', 'devansh']) {
+export function useMemberFeePlans(members = ['gaurav', 'nikhil', 'devansh'], targetMonth = null) {
   const [plans, setPlans] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -175,12 +178,25 @@ export function useMemberFeePlans(members = ['gaurav', 'nikhil', 'devansh']) {
     setVersion((v) => v + 1);
   }, []);
 
+  const activeMonth = targetMonth || new Date().toISOString().slice(0, 7);
+
   useEffect(() => {
     const controller = new AbortController();
     Promise.all(
       members.map((id) =>
         api.get(`/api/room-fees/plans/${id}`, { signal: controller.signal })
-          .then((res) => ({ memberId: id, plan: res.data?.feePlan || null }))
+          .then((res) => {
+            const list = Array.isArray(res.data) ? res.data : (res.data?.plans || (res.data?.feePlan ? [res.data.feePlan] : []));
+            // Sort by effectiveFromMonth desc
+            const sorted = [...list].sort((a, b) => (b.effectiveFromMonth || '').localeCompare(a.effectiveFromMonth || ''));
+            // Find active plan for the activeMonth (effectiveFromMonth <= activeMonth and not superseded)
+            const activePlan = sorted.find((p) => p.effectiveFromMonth <= activeMonth && !p.supersededAt) || sorted[0] || null;
+            const futurePlan = sorted.find((p) => p.effectiveFromMonth > activeMonth && !p.supersededAt) || null;
+            return {
+              memberId: id,
+              plan: activePlan ? { ...activePlan, activePlan, futurePlan, allPlans: sorted } : null,
+            };
+          })
           .catch(() => ({ memberId: id, plan: null })),
       ),
     )
@@ -198,7 +214,7 @@ export function useMemberFeePlans(members = ['gaurav', 'nikhil', 'devansh']) {
       });
 
     return () => controller.abort();
-  }, [members.join(','), version]);
+  }, [members.join(','), activeMonth, version]);
 
   useEffect(() => {
     const handleRoomFees = () => refresh();
@@ -207,6 +223,51 @@ export function useMemberFeePlans(members = ['gaurav', 'nikhil', 'devansh']) {
   }, [refresh]);
 
   return { loading, error, plans, refresh };
+}
+
+/**
+ * Hook for Admin to view Room Fee Payments for a specific month
+ */
+export function useRoomPayments(month) {
+  const [state, setState] = useState({ key: null, loading: true, error: '', payments: [] });
+  const [version, setVersion] = useState(0);
+
+  const refresh = useCallback(() => {
+    setState((curr) => ({ ...curr, loading: true, error: '' }));
+    setVersion((v) => v + 1);
+  }, []);
+
+  useEffect(() => {
+    if (!month) return undefined;
+    const controller = new AbortController();
+    api.get(`/api/room-fees/payments/${encodeURIComponent(month)}`, { signal: controller.signal })
+      .then((res) => {
+        const list = Array.isArray(res.data) ? res.data : (res.data?.payments || []);
+        setState({ key: month, loading: false, error: '', payments: list });
+      })
+      .catch((err) => {
+        if (!controller.signal.aborted) {
+          setState({ key: month, loading: false, error: err?.message || 'Unable to load payments.', payments: [] });
+        }
+      });
+    return () => controller.abort();
+  }, [month, version]);
+
+  useEffect(() => {
+    const handleRoomFees = (event) => {
+      if (!event?.month || event.month === month) refresh();
+    };
+    socket.on('room-fees:updated', handleRoomFees);
+    return () => socket.off('room-fees:updated', handleRoomFees);
+  }, [month, refresh]);
+
+  const isCurrent = state.key === month;
+  return {
+    loading: !isCurrent || state.loading,
+    error: isCurrent ? state.error : '',
+    payments: isCurrent ? state.payments : [],
+    refresh,
+  };
 }
 
 /**
@@ -228,7 +289,7 @@ export function useRoomPaymentSettings() {
     const controller = new AbortController();
     api.get('/api/room-fees/settings', { signal: controller.signal })
       .then((res) => {
-        setSettings(res.data?.settings || null);
+        setSettings(res.data?.settings ?? res.data ?? null);
         setLoading(false);
       })
       .catch((err) => {

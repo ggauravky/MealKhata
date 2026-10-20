@@ -15,17 +15,23 @@ export const stayRepository = {
   // ----------------------------------------------------
   // Hostel Stay Operations
   // ----------------------------------------------------
-  async createStay(data) {
+  async createStay(data, { session } = {}) {
+    if (session) {
+      const res = await HostelStay.create([data], { session });
+      return res[0].toObject();
+    }
     const stay = await HostelStay.create(data);
     return stay.toObject();
   },
 
-  async findStayById(stayId) {
-    return HostelStay.findOne({ stayId }).lean();
+  async findStayById(stayId, { session } = {}) {
+    const q = HostelStay.findOne({ stayId });
+    if (session) q.session(session);
+    return q.lean();
   },
 
-  async findActiveStayForMember(memberId) {
-    return HostelStay.findOne({
+  async findActiveStayForMember(memberId, { session } = {}) {
+    const q = HostelStay.findOne({
       memberId,
       status: {
         $in: [
@@ -34,11 +40,15 @@ export const stayRepository = {
           STAY_STATUSES.CHECKOUT_PENDING,
         ],
       },
-    }).lean();
+    });
+    if (session) q.session(session);
+    return q.lean();
   },
 
-  async findStaysByMember(memberId) {
-    return HostelStay.find({ memberId }).sort({ joinedOn: -1 }).lean();
+  async findStaysByMember(memberId, { session } = {}) {
+    const q = HostelStay.find({ memberId }).sort({ joinedOn: -1 });
+    if (session) q.session(session);
+    return q.lean();
   },
 
   async listAllStays({ status = null, memberId = null } = {}) {
@@ -48,11 +58,14 @@ export const stayRepository = {
     return HostelStay.find(filter).sort({ joinedOn: -1 }).lean();
   },
 
-  async updateStay(stayId, updates, expectedRevision = null) {
+  async updateStay(stayId, updates, expectedRevision = null, { session } = {}) {
     const query = { stayId };
     if (typeof expectedRevision === 'number') {
       query.revision = expectedRevision;
     }
+
+    const options = { returnDocument: 'after', runValidators: true };
+    if (session) options.session = session;
 
     const doc = await HostelStay.findOneAndUpdate(
       query,
@@ -60,17 +73,19 @@ export const stayRepository = {
         $set: updates,
         $inc: { revision: 1 },
       },
-      { returnDocument: 'after', runValidators: true },
+      options,
     ).lean();
 
     return doc;
   },
 
-  async addStayHistory(stayId, entry) {
+  async addStayHistory(stayId, entry, { session } = {}) {
+    const options = { returnDocument: 'after' };
+    if (session) options.session = session;
     return HostelStay.findOneAndUpdate(
       { stayId },
       { $push: { history: entry } },
-      { returnDocument: 'after' },
+      options,
     ).lean();
   },
 
@@ -81,7 +96,11 @@ export const stayRepository = {
   // ----------------------------------------------------
   // Security Deposit Account Operations
   // ----------------------------------------------------
-  async createDepositAccount(data) {
+  async createDepositAccount(data, { session } = {}) {
+    if (session) {
+      const res = await HostelDepositAccount.create([data], { session });
+      return res[0].toObject();
+    }
     const account = await HostelDepositAccount.create(data);
     return account.toObject();
   },
@@ -90,19 +109,26 @@ export const stayRepository = {
     return HostelDepositAccount.findOneAndDelete({ depositAccountId }).lean();
   },
 
-  async findDepositAccountByStayId(stayId) {
-    return HostelDepositAccount.findOne({ stayId }).lean();
+  async findDepositAccountByStayId(stayId, { session } = {}) {
+    const q = HostelDepositAccount.findOne({ stayId });
+    if (session) q.session(session);
+    return q.lean();
   },
 
-  async findDepositAccountById(depositAccountId) {
-    return HostelDepositAccount.findOne({ depositAccountId }).lean();
+  async findDepositAccountById(depositAccountId, { session } = {}) {
+    const q = HostelDepositAccount.findOne({ depositAccountId });
+    if (session) q.session(session);
+    return q.lean();
   },
 
-  async updateDepositAccount(depositAccountId, updates, expectedRevision = null) {
+  async updateDepositAccount(depositAccountId, updates, expectedRevision = null, { session } = {}) {
     const query = { depositAccountId };
     if (typeof expectedRevision === 'number') {
       query.revision = expectedRevision;
     }
+
+    const options = { returnDocument: 'after', runValidators: true };
+    if (session) options.session = session;
 
     return HostelDepositAccount.findOneAndUpdate(
       query,
@@ -110,41 +136,55 @@ export const stayRepository = {
         $set: updates,
         $inc: { revision: 1 },
       },
-      { returnDocument: 'after', runValidators: true },
+      options,
     ).lean();
   },
 
-  async addDepositAccountHistory(depositAccountId, entry) {
+  async addDepositAccountHistory(depositAccountId, entry, { session } = {}) {
+    const options = { returnDocument: 'after' };
+    if (session) options.session = session;
     return HostelDepositAccount.findOneAndUpdate(
       { depositAccountId },
       { $push: { history: entry } },
-      { returnDocument: 'after' },
+      options,
     ).lean();
   },
 
   // ----------------------------------------------------
   // Security Deposit Transaction Operations
   // ----------------------------------------------------
-  async createDepositTransaction(data) {
+  async createDepositTransaction(data, { session } = {}) {
+    if (session) {
+      const res = await HostelDepositTransaction.create([data], { session });
+      return res[0].toObject();
+    }
     const tx = await HostelDepositTransaction.create(data);
     return tx.toObject();
   },
 
-  async findDepositTransactionById(depositTransactionId) {
-    return HostelDepositTransaction.findOne({ depositTransactionId }).lean();
+  async findDepositTransactionById(depositTransactionId, { session } = {}) {
+    const q = HostelDepositTransaction.findOne({ depositTransactionId });
+    if (session) q.session(session);
+    return q.lean();
   },
 
-  async findDepositTransactionByIdempotencyKey(idempotencyKey) {
-    return HostelDepositTransaction.findOne({ idempotencyKey }).lean();
+  async findDepositTransactionByIdempotencyKey(idempotencyKey, { session } = {}) {
+    const q = HostelDepositTransaction.findOne({ idempotencyKey });
+    if (session) q.session(session);
+    return q.lean();
   },
 
-  async listDepositTransactionsByStayId(stayId, { includeVoided = false } = {}) {
+  async listDepositTransactionsByStayId(stayId, { includeVoided = false, session = null } = {}) {
     const filter = { stayId };
     if (!includeVoided) filter.status = 'recorded';
-    return HostelDepositTransaction.find(filter).sort({ recordedAt: -1 }).lean();
+    const q = HostelDepositTransaction.find(filter).sort({ recordedAt: -1 });
+    if (session) q.session(session);
+    return q.lean();
   },
 
-  async voidDepositTransaction(depositTransactionId, { voidReason, voidedByRole, voidedAt = new Date() }) {
+  async voidDepositTransaction(depositTransactionId, { voidReason, voidedByRole, voidedAt = new Date() }, { session } = {}) {
+    const options = { returnDocument: 'after' };
+    if (session) options.session = session;
     return HostelDepositTransaction.findOneAndUpdate(
       { depositTransactionId, status: 'recorded' },
       {
@@ -155,7 +195,7 @@ export const stayRepository = {
           voidedAt,
         },
       },
-      { returnDocument: 'after' },
+      options,
     ).lean();
   },
 
@@ -171,6 +211,29 @@ export const stayRepository = {
       try {
         session = await mongoose.startSession();
         session.startTransaction();
+
+        // 1. Idempotency check with payload verification inside transaction
+        if (transactionData.idempotencyKey) {
+          const existing = await HostelDepositTransaction.findOne({
+            idempotencyKey: transactionData.idempotencyKey,
+          }).session(session);
+
+          if (existing) {
+            const isMatch =
+              existing.stayId === stayId &&
+              existing.type === type &&
+              existing.amountPaise === amountPaise &&
+              existing.method === transactionData.method;
+
+            if (!isMatch) {
+              const err = new Error('Deposit transaction idempotency key reused with different payload.');
+              err.statusCode = 409;
+              throw err;
+            }
+            await session.commitTransaction();
+            return existing.toObject();
+          }
+        }
 
         const account = await HostelDepositAccount.findOne({ stayId }).session(session);
         if (!account) {
@@ -226,10 +289,11 @@ export const stayRepository = {
           await session.abortTransaction();
         }
         if (err.message && (err.message.includes('Transactions are not supported') || err.message.includes('replica set'))) {
-          // Fall through to non-session fallback
-        } else {
-          throw err;
+          const error = new Error('Financial transaction unavailable. Database transaction support is required.');
+          error.statusCode = 503;
+          throw error;
         }
+        throw err;
       } finally {
         if (session) {
           await session.endSession();
@@ -237,65 +301,132 @@ export const stayRepository = {
       }
     }
 
-    const account = await HostelDepositAccount.findOne({ stayId });
-    if (!account) {
-      const err = new Error('Deposit account not found for this stay.');
-      err.statusCode = 404;
-      throw err;
+    const err = new Error('Financial transaction unavailable. Database connection required.');
+    err.statusCode = 503;
+    throw err;
+  },
+
+  async executeAtomicDepositVoid({
+    stayId,
+    depositTransactionId,
+    reason,
+    actorRole,
+  }) {
+    if (mongoose.connection && mongoose.connection.readyState === 1) {
+      let session = null;
+      try {
+        session = await mongoose.startSession();
+        session.startTransaction();
+
+        const tx = await HostelDepositTransaction.findOne({ depositTransactionId }).session(session);
+        if (!tx || (stayId && tx.stayId !== stayId)) {
+          const err = new Error('Deposit transaction not found or does not belong to this stay.');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        if (tx.status === 'voided') {
+          const err = new Error('Deposit transaction is already voided.');
+          err.statusCode = 400;
+          throw err;
+        }
+
+        const targetStayId = tx.stayId || stayId;
+
+        // If voiding a RECEIVED transaction, verify that reducing received funds does not make heldPaise negative
+        if (tx.type === 'RECEIVED') {
+          const allActive = await HostelDepositTransaction.find({
+            stayId: targetStayId,
+            status: 'recorded',
+          }).session(session);
+
+          let received = 0;
+          let refunded = 0;
+          let deducted = 0;
+          for (const item of allActive) {
+            if (item.type === 'RECEIVED') received += item.amountPaise;
+            else if (item.type === 'REFUNDED') refunded += item.amountPaise;
+            else if (item.type === 'DEDUCTED') deducted += item.amountPaise;
+          }
+          const currentHeld = received - refunded - deducted;
+          if (currentHeld < tx.amountPaise) {
+            const err = new Error(`Cannot void receipt: ₹${((tx.amountPaise - currentHeld) / 100).toFixed(2)} has already been refunded or deducted.`);
+            err.statusCode = 400;
+            throw err;
+          }
+        }
+
+        tx.status = 'voided';
+        tx.voidReason = reason.trim();
+        tx.voidedByRole = actorRole;
+        tx.voidedAt = new Date();
+        await tx.save({ session });
+
+        const account = await HostelDepositAccount.findOne({ stayId: targetStayId }).session(session);
+        if (account) {
+          account.revision += 1;
+          account.history.push({
+            event: 'DEPOSIT_TRANSACTION_VOIDED',
+            timestamp: new Date(),
+            actorRole,
+            note: `Voided transaction ${depositTransactionId}: ${reason}`,
+            details: { depositTransactionId, originalType: tx.type, amountPaise: tx.amountPaise },
+          });
+          await account.save({ session });
+        }
+
+        await session.commitTransaction();
+        return tx.toObject();
+      } catch (err) {
+        if (session && session.inTransaction()) {
+          await session.abortTransaction();
+        }
+        if (err.message && (err.message.includes('Transactions are not supported') || err.message.includes('replica set'))) {
+          const error = new Error('Financial transaction unavailable. Database transaction support is required.');
+          error.statusCode = 503;
+          throw error;
+        }
+        throw err;
+      } finally {
+        if (session) {
+          await session.endSession();
+        }
+      }
     }
-    const transactions = await HostelDepositTransaction.find({ stayId, status: 'recorded' });
-    let received = 0;
-    let refunded = 0;
-    let deducted = 0;
-    for (const tx of transactions) {
-      if (tx.type === 'RECEIVED') received += tx.amountPaise;
-      else if (tx.type === 'REFUNDED') refunded += tx.amountPaise;
-      else if (tx.type === 'DEDUCTED') deducted += tx.amountPaise;
-    }
-    const heldPaise = received - refunded - deducted;
-    if ((type === 'REFUNDED' || type === 'DEDUCTED') && heldPaise < amountPaise) {
-      const action = type === 'REFUNDED' ? 'refund' : 'deduct';
-      const err = new Error(`Cannot ${action} ₹${(amountPaise / 100).toFixed(2)}: only ₹${(heldPaise / 100).toFixed(2)} currently held.`);
-      err.statusCode = 400;
-      err.details = { heldPaise, requestedPaise: amountPaise };
-      throw err;
-    }
-    account.revision += 1;
-    account.history.push({
-      event: `DEPOSIT_${type}`,
-      timestamp: new Date(),
-      actorRole,
-      note: `Recorded ${type} transaction of ${amountPaise} paise`,
-      details: { depositTransactionId: transactionData.depositTransactionId, amountPaise, method: transactionData.method },
-    });
-    const nextHeld = heldPaise + (type === 'RECEIVED' ? amountPaise : -amountPaise);
-    const nextReceived = received + (type === 'RECEIVED' ? amountPaise : 0);
-    if (nextHeld === 0 && nextReceived > 0) {
-      account.status = 'SETTLED';
-    }
-    await account.save();
-    const created = await HostelDepositTransaction.create(transactionData);
-    return created.toObject();
+
+    const err = new Error('Financial transaction unavailable. Database connection required.');
+    err.statusCode = 503;
+    throw err;
   },
 
   // ----------------------------------------------------
   // Hostel Clearance Operations
   // ----------------------------------------------------
-  async createClearance(data) {
+  async createClearance(data, { session } = {}) {
+    if (session) {
+      const res = await HostelClearance.create([data], { session });
+      return res[0].toObject();
+    }
     const clearance = await HostelClearance.create(data);
     return clearance.toObject();
   },
 
-  async findClearancesByStayId(stayId) {
-    return HostelClearance.find({ stayId }).sort({ sequence: -1 }).lean();
+  async findClearancesByStayId(stayId, { session } = {}) {
+    const q = HostelClearance.find({ stayId }).sort({ sequence: -1 });
+    if (session) q.session(session);
+    return q.lean();
   },
 
-  async findClearanceById(clearanceId) {
-    return HostelClearance.findOne({ clearanceId }).lean();
+  async findClearanceById(clearanceId, { session } = {}) {
+    const q = HostelClearance.findOne({ clearanceId });
+    if (session) q.session(session);
+    return q.lean();
   },
 
-  async getNextClearanceSequence(stayId) {
-    const latest = await HostelClearance.findOne({ stayId }).sort({ sequence: -1 }).lean();
+  async getNextClearanceSequence(stayId, { session } = {}) {
+    const q = HostelClearance.findOne({ stayId }).sort({ sequence: -1 });
+    if (session) q.session(session);
+    const latest = await q.lean();
     return latest ? latest.sequence + 1 : 1;
   },
 };

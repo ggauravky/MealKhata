@@ -10,6 +10,10 @@ export function canRecordReimbursement(role) {
   return role === 'admin' || role === 'superadmin';
 }
 
+export function canEditExpense(role) {
+  return role === 'superadmin';
+}
+
 export function canVoidExpense(role) {
   return role === 'superadmin';
 }

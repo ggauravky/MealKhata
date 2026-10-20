@@ -6,20 +6,48 @@ import { ROOMMATES } from '../../../lib/constants.js';
 import { formatLogicalMonth } from '../../../lib/logicalMonth.js';
 import { formatPaise } from '../../../lib/money.js';
 
-export function AdminOverviewTab({ summary, month, onSwitchTab }) {
-  if (!summary) {
+export function AdminOverviewTab({ summary, month, onSwitchTab, loading = false, error = '', onRefresh }) {
+  if (loading) {
     return (
       <Card className="border-slate-200 dark:border-slate-800 p-8 text-center">
-        <p className="text-xs text-slate-400">Loading monthly overview...</p>
+        <p className="text-xs text-slate-500 dark:text-slate-400">Loading monthly overview...</p>
       </Card>
     );
   }
 
-  const { household = {}, members = {} } = summary;
-  const billedPaise = household.billedPaise || 0;
-  const collectedPaise = household.collectedPaise || 0;
-  const outstandingPaise = household.outstandingPaise || 0;
-  const billedCount = household.billedCount || 0;
+  if (error) {
+    return (
+      <Card className="border-rose-200 bg-rose-50/50 dark:border-rose-900 dark:bg-rose-950/20 p-6 text-center">
+        <AlertCircle className="h-6 w-6 text-rose-600 dark:text-rose-400 mx-auto mb-2" />
+        <p className="text-xs font-semibold text-rose-700 dark:text-rose-300">{error}</p>
+        {onRefresh && (
+          <button
+            onClick={onRefresh}
+            className="mt-3 px-3 py-1.5 rounded text-xs font-medium bg-rose-600 text-white hover:bg-rose-700"
+          >
+            Retry
+          </button>
+        )}
+      </Card>
+    );
+  }
+
+  if (!summary) {
+    return (
+      <Card className="border-slate-200 dark:border-slate-800 p-8 text-center">
+        <p className="text-xs text-slate-400">No room fee summary available for this month.</p>
+      </Card>
+    );
+  }
+
+  const { household = {}, members = [] } = summary;
+  const billedPaise = household.totalBilledPaise ?? household.billedPaise ?? 0;
+  const collectedPaise = household.totalCollectedPaise ?? household.collectedPaise ?? 0;
+  const outstandingPaise = household.totalOutstandingPaise ?? household.outstandingPaise ?? 0;
+  const billedCount = household.membersBilledCount ?? household.billedCount ?? 0;
+
+  const membersList = Array.isArray(members) ? members : Object.values(members);
+  const memberMap = new Map(membersList.map((m) => [m.memberId, m]));
 
   return (
     <div className="space-y-6">
@@ -105,10 +133,14 @@ export function AdminOverviewTab({ summary, month, onSwitchTab }) {
             </TableHeader>
             <TableBody>
               {ROOMMATES.map((roommate) => {
-                const memberData = members[roommate.id];
-                const hasCharge = Boolean(memberData?.charge);
+                const memberData = memberMap.get(roommate.id);
+                const charge = memberData?.charge;
+                const hasCharge = Boolean(charge && charge.status !== 'cancelled');
                 const roomInfo = memberData?.room;
-                const status = memberData?.status || 'not_issued';
+                const status = memberData?.status || (hasCharge ? charge.paymentStatus : 'not_issued');
+                const effectiveChargePaise = charge?.finalBillAmountPaise ?? memberData?.effectiveChargePaise ?? 0;
+                const paidPaise = charge?.paidAmountPaise ?? memberData?.paidPaise ?? 0;
+                const remainingPaise = charge?.remainingAmountPaise ?? memberData?.remainingPaise ?? 0;
 
                 return (
                   <TableRow key={roommate.id}>
@@ -121,21 +153,21 @@ export function AdminOverviewTab({ summary, month, onSwitchTab }) {
                       )}
                     </TableCell>
                     <TableCell>
-                      {hasCharge ? formatPaise(memberData.effectiveChargePaise) : (
+                      {hasCharge ? formatPaise(effectiveChargePaise) : (
                         <span className="text-slate-400 italic">Not issued</span>
                       )}
                     </TableCell>
                     <TableCell className="text-emerald-700 dark:text-emerald-400 font-medium">
-                      {formatPaise(memberData?.paidPaise || 0)}
+                      {hasCharge ? formatPaise(paidPaise) : '—'}
                     </TableCell>
                     <TableCell
                       className={
-                        (memberData?.remainingPaise || 0) > 0
+                        hasCharge && remainingPaise > 0
                           ? 'font-bold text-amber-700 dark:text-amber-400'
                           : 'text-slate-600 dark:text-slate-400'
                       }
                     >
-                      {hasCharge ? formatPaise(memberData.remainingPaise || 0) : '—'}
+                      {hasCharge ? formatPaise(remainingPaise) : '—'}
                     </TableCell>
                     <TableCell>
                       <Badge

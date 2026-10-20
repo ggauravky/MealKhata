@@ -18,6 +18,28 @@ function isDuplicateKeyError(error) {
   return error?.code === 11000;
 }
 
+async function assertMemberNotCheckedOut(memberId, date, stays) {
+  if (!stays) return;
+  const activeStay = typeof stays.getActiveStayForMember === 'function'
+    ? await stays.getActiveStayForMember(memberId)
+    : (typeof stays.findActiveStayForMember === 'function' ? await stays.findActiveStayForMember(memberId) : null);
+
+  if (!activeStay) {
+    const memberStays = typeof stays.listStaysForMember === 'function'
+      ? await stays.listStaysForMember(memberId)
+      : (typeof stays.findStaysByMember === 'function' ? await stays.findStaysByMember(memberId) : []);
+
+    const checkedOutStays = (memberStays || []).filter((s) => s.status === 'CHECKED_OUT' && s.actualLeftOn);
+    if (checkedOutStays.length > 0) {
+      checkedOutStays.sort((a, b) => (b.actualLeftOn || '').localeCompare(a.actualLeftOn || ''));
+      const lastStay = checkedOutStays[0];
+      if (date > lastStay.actualLeftOn) {
+        throw new HttpError(400, `Meal participation is blocked after hostel checkout on ${lastStay.actualLeftOn}.`);
+      }
+    }
+  }
+}
+
 export function createMealService({
   repository = mealRepository,
   settlements = null,
@@ -57,24 +79,7 @@ export function createMealService({
       }
 
       if (status === 'taking' && stays) {
-        const activeStay = typeof stays.getActiveStayForMember === 'function'
-          ? await stays.getActiveStayForMember(memberId)
-          : (typeof stays.findActiveStayForMember === 'function' ? await stays.findActiveStayForMember(memberId) : null);
-
-        if (!activeStay) {
-          const memberStays = typeof stays.listStaysForMember === 'function'
-            ? await stays.listStaysForMember(memberId)
-            : (typeof stays.findStaysByMember === 'function' ? await stays.findStaysByMember(memberId) : []);
-
-          const checkedOutStays = (memberStays || []).filter((s) => s.status === 'CHECKED_OUT' && s.actualLeftOn);
-          if (checkedOutStays.length > 0) {
-            checkedOutStays.sort((a, b) => (b.actualLeftOn || '').localeCompare(a.actualLeftOn || ''));
-            const lastStay = checkedOutStays[0];
-            if (date > lastStay.actualLeftOn) {
-              throw new HttpError(400, `Meal participation is blocked after hostel checkout on ${lastStay.actualLeftOn}.`);
-            }
-          }
-        }
+        await assertMemberNotCheckedOut(memberId, date, stays);
       }
 
       const path = getMealPath(mealType, memberId);
@@ -205,6 +210,14 @@ export function createMealService({
 
       const validatedAllocation = validatePlateAllocation(allocation);
       const derivedStatuses = deriveParticipationStatuses(validatedAllocation);
+
+      if (stays && validatedAllocation.plates) {
+        for (const [mId, plates] of Object.entries(validatedAllocation.plates)) {
+          if (plates > 0) {
+            await assertMemberNotCheckedOut(mId, date, stays);
+          }
+        }
+      }
 
       try {
         for (let attempt = 0; attempt < MAX_CONCURRENT_RETRIES; attempt += 1) {

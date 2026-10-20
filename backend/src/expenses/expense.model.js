@@ -17,6 +17,43 @@ const expenseAllocationSchema = new mongoose.Schema(
   { _id: false },
 );
 
+const expenseCorrectionSchema = new mongoose.Schema(
+  {
+    correctionId: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    correctedAt: {
+      type: Date,
+      required: true,
+      default: Date.now,
+    },
+    correctedByRole: {
+      type: String,
+      required: true,
+    },
+    reason: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 300,
+    },
+    previousSnapshot: {
+      title: { type: String, required: true },
+      category: { type: String, required: true },
+      date: { type: String, required: true },
+      month: { type: String, required: true },
+      amountPaise: { type: Number, required: true },
+      paidByMemberId: { type: String, required: true },
+      splitType: { type: String, required: true },
+      allocations: [expenseAllocationSchema],
+      description: { type: String, default: '' },
+    },
+  },
+  { _id: false },
+);
+
 const expenseSchema = new mongoose.Schema(
   {
     expenseId: {
@@ -119,6 +156,10 @@ const expenseSchema = new mongoose.Schema(
       type: String,
       default: null,
       maxlength: 300,
+    },
+    corrections: {
+      type: [expenseCorrectionSchema],
+      default: [],
     },
     revision: {
       type: String,

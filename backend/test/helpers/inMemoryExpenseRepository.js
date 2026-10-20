@@ -61,6 +61,27 @@ export class InMemoryExpenseRepository {
     return JSON.parse(JSON.stringify(this.expenses[index]));
   }
 
+  async recordExpenseCorrection(expenseId, { updateData, correctionRecord, expectedRevision }) {
+    const index = this.expenses.findIndex(
+      (e) =>
+        e.expenseId === expenseId &&
+        e.status === 'recorded' &&
+        (!expectedRevision || e.revision === expectedRevision),
+    );
+    if (index === -1) return null;
+    const existing = this.expenses[index];
+    const corrections = Array.isArray(existing.corrections) ? [...existing.corrections] : [];
+    corrections.push(correctionRecord);
+    this.expenses[index] = {
+      ...existing,
+      ...updateData,
+      corrections,
+      revision: new Date().toISOString(),
+      updatedAt: new Date(),
+    };
+    return JSON.parse(JSON.stringify(this.expenses[index]));
+  }
+
   async acquireExpenseRevision(expenseId, expectedRevision, newRevision) {
     const index = this.expenses.findIndex(
       (e) =>
@@ -186,5 +207,32 @@ export class InMemoryExpenseRepository {
     };
     this.reimbursements.push(doc);
     return JSON.parse(JSON.stringify(doc));
+  }
+
+  async executeAtomicReimbursementVoid({ reimbursementId, reason, actorRole }) {
+    const reimbursement = this.reimbursements.find((r) => r.reimbursementId === reimbursementId);
+    if (!reimbursement) {
+      const err = new Error('Reimbursement not found.');
+      err.statusCode = 404;
+      throw err;
+    }
+    if (reimbursement.status === 'voided') {
+      const err = new Error('Reimbursement is already voided.');
+      err.statusCode = 409;
+      throw err;
+    }
+    const expense = this.expenses.find((e) => e.expenseId === reimbursement.expenseId);
+    if (!expense) {
+      const err = new Error('Expense not found.');
+      err.statusCode = 404;
+      throw err;
+    }
+    expense.revision = new Date().toISOString();
+    reimbursement.status = 'voided';
+    reimbursement.voidedAt = new Date();
+    reimbursement.voidedByRole = actorRole;
+    reimbursement.voidReason = reason.trim();
+    reimbursement.updatedAt = new Date();
+    return JSON.parse(JSON.stringify(reimbursement));
   }
 }

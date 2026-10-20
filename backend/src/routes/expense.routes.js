@@ -186,6 +186,49 @@ export function createExpenseRouter({ service = defaultExpenseService } = {}) {
     }
   });
 
+  // --- GET EXPENSE REVISION HISTORY ---
+  router.get('/:expenseId/history', requireAuthenticated, async (req, res, next) => {
+    try {
+      if (req.auth.role === ROLES.VIEWER) {
+        return res.status(403).json({ success: false, message: 'Viewer role cannot access expense records.' });
+      }
+
+      const expense = await service.getExpenseById(req.params.expenseId, {
+        actorRole: req.auth.role,
+        actorMemberId: req.auth.memberId || null,
+      });
+
+      return res.json({ success: true, data: expense.corrections || [] });
+    } catch (error) {
+      if (error instanceof ExpenseDomainError) {
+        return res.status(error.statusCode).json({ success: false, message: error.message });
+      }
+      return next(error);
+    }
+  });
+
+  // --- EDIT / CORRECT EXPENSE (Super Admin only) ---
+  const handleCorrection = async (req, res, next) => {
+    try {
+      const { reason, changes, expectedRevision } = req.body || {};
+      const updated = await service.correctExpense(req.params.expenseId, {
+        reason,
+        changes: changes || req.body,
+        expectedRevision,
+        actorRole: req.auth.role,
+      });
+      return res.json({ success: true, data: updated });
+    } catch (error) {
+      if (error instanceof ExpenseDomainError) {
+        return res.status(error.statusCode).json({ success: false, message: error.message });
+      }
+      return next(error);
+    }
+  };
+
+  router.post('/:expenseId/corrections', requireSuperAdmin, handleCorrection);
+  router.patch('/:expenseId', requireSuperAdmin, handleCorrection);
+
   // --- VOID EXPENSE (Super Admin only) ---
   router.post('/:expenseId/void', requireSuperAdmin, async (req, res, next) => {
     try {

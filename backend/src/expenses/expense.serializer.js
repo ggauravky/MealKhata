@@ -131,6 +131,13 @@ export function serializeExpense({ expense, reimbursements = [], currentMemberId
     voidedAt: expense.voidedAt?.toISOString ? expense.voidedAt.toISOString() : expense.voidedAt,
     voidedByRole: expense.voidedByRole || null,
     voidReason: expense.voidReason || null,
+    corrections: (expense.corrections || []).map((c) => ({
+      correctionId: c.correctionId,
+      correctedAt: c.correctedAt?.toISOString ? c.correctedAt.toISOString() : c.correctedAt,
+      correctedByRole: c.correctedByRole,
+      reason: c.reason,
+      previousSnapshot: c.previousSnapshot,
+    })),
     revision: expense.revision,
   };
 }

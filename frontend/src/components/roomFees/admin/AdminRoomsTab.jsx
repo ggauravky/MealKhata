@@ -17,10 +17,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { ROOMMATES } from '../../../lib/constants.js';
 import { api } from '../../../lib/api.js';
 
-export function AdminRoomsTab({ rooms = [], onRefresh, role }) {
+export function AdminRoomsTab({ rooms = [], onRefresh, role, loading = false, error = '' }) {
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
-  const [selectedRoom, setSelectedRoom] = useState(null);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editingRoom, setEditingRoom] = useState(null);
 
   // Add room state
   const [newRoomNumber, setNewRoomNumber] = useState('');
@@ -28,6 +29,13 @@ export function AdminRoomsTab({ rooms = [], onRefresh, role }) {
   const [newRoomCapacity, setNewRoomCapacity] = useState('2');
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
+
+  // Edit room state
+  const [editRoomLabel, setEditRoomLabel] = useState('');
+  const [editRoomCapacity, setEditRoomCapacity] = useState('2');
+  const [editRoomActive, setEditRoomActive] = useState(true);
+  const [editSubmitting, setEditSubmitting] = useState(false);
+  const [editError, setEditError] = useState('');
 
   // Assign member state
   const [assignMemberId, setAssignMemberId] = useState('nikhil');
@@ -53,6 +61,43 @@ export function AdminRoomsTab({ rooms = [], onRefresh, role }) {
       setFormError(err.message || 'Failed to create room.');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const openEditRoom = (room) => {
+    setEditingRoom(room);
+    setEditRoomLabel(room.roomLabel || '');
+    setEditRoomCapacity(String(room.capacity || 2));
+    setEditRoomActive(Boolean(room.active));
+    setEditError('');
+    setEditDialogOpen(true);
+  };
+
+  const handleUpdateRoom = async (e) => {
+    e.preventDefault();
+    if (!editingRoom) return;
+    setEditError('');
+
+    const occupantsCount = editingRoom.currentOccupancyCount ?? (editingRoom.currentOccupants || []).length;
+    const newCap = Number(editRoomCapacity);
+    if (newCap < occupantsCount) {
+      setEditError(`Cannot reduce capacity to ${newCap}. Room currently has ${occupantsCount} active occupant(s).`);
+      return;
+    }
+
+    setEditSubmitting(true);
+    try {
+      await api.patch(`/api/rooms/${editingRoom.roomId}`, {
+        roomLabel: editRoomLabel.trim() || '',
+        capacity: newCap,
+        active: editRoomActive,
+      });
+      setEditDialogOpen(false);
+      onRefresh();
+    } catch (err) {
+      setEditError(err.message || 'Failed to update room.');
+    } finally {
+      setEditSubmitting(false);
     }
   };
 
@@ -86,6 +131,27 @@ export function AdminRoomsTab({ rooms = [], onRefresh, role }) {
       alert(err.message || 'Failed to update room.');
     }
   };
+
+  if (loading) {
+    return (
+      <Card className="border-slate-200 dark:border-slate-800 p-8 text-center">
+        <p className="text-xs text-slate-500 dark:text-slate-400">Loading hostel rooms...</p>
+      </Card>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card className="border-rose-200 bg-rose-50/50 dark:border-rose-900 dark:bg-rose-950/20 p-6 text-center">
+        <p className="text-xs font-semibold text-rose-700 dark:text-rose-300">{error}</p>
+        {onRefresh && (
+          <Button onClick={onRefresh} size="sm" variant="outline" className="mt-3 text-xs">
+            Retry
+          </Button>
+        )}
+      </Card>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -176,8 +242,8 @@ export function AdminRoomsTab({ rooms = [], onRefresh, role }) {
                             {occupants.map((occ) => {
                               const r = ROOMMATES.find((m) => m.id === occ.memberId);
                               return (
-                                <Badge key={occ.assignmentId} variant="secondary" className="text-xs py-0 px-2 font-medium">
-                                  {r?.name || occ.memberId}
+                                <Badge key={occ.memberId} variant="secondary" className="text-xs py-0 px-2 font-medium">
+                                  {r?.name || occ.name || occ.memberId}
                                 </Badge>
                               );
                             })}
@@ -191,6 +257,15 @@ export function AdminRoomsTab({ rooms = [], onRefresh, role }) {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="compact"
+                            onClick={() => openEditRoom(room)}
+                            className="text-xs text-teal-700 hover:text-teal-800"
+                          >
+                            <Edit2 className="h-3.5 w-3.5 mr-1" />
+                            <span>Edit</span>
+                          </Button>
                           <Button
                             variant="ghost"
                             size="compact"
@@ -259,6 +334,8 @@ export function AdminRoomsTab({ rooms = [], onRefresh, role }) {
               >
                 <option value="1">1 person (Single)</option>
                 <option value="2">2 persons (Double)</option>
+                <option value="3">3 persons (Triple)</option>
+                <option value="4">4 persons (Quad)</option>
               </Select>
             </div>
 
@@ -268,6 +345,78 @@ export function AdminRoomsTab({ rooms = [], onRefresh, role }) {
               </Button>
               <Button type="submit" size="sm" disabled={submitting}>
                 {submitting ? 'Creating...' : 'Create Room'}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Room Dialog */}
+      <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
+        <DialogContent className="max-w-md w-full p-6">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-slate-900 dark:text-slate-100">
+              Edit Room {editingRoom?.roomNumber}
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Update room label, capacity, and active status.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleUpdateRoom} className="space-y-4 pt-2">
+            {editError && (
+              <div className="p-2.5 rounded bg-red-50 text-red-700 text-xs border border-red-200">
+                {editError}
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <Label htmlFor="editRoomLabel">Display Label</Label>
+              <Input
+                id="editRoomLabel"
+                placeholder="e.g. Second Floor Balcony Room"
+                value={editRoomLabel}
+                onChange={(e) => setEditRoomLabel(e.target.value)}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="editRoomCapacity">Occupancy Capacity *</Label>
+              <Select
+                id="editRoomCapacity"
+                value={editRoomCapacity}
+                onChange={(e) => setEditRoomCapacity(e.target.value)}
+              >
+                <option value="1">1 person (Single)</option>
+                <option value="2">2 persons (Double)</option>
+                <option value="3">3 persons (Triple)</option>
+                <option value="4">4 persons (Quad)</option>
+              </Select>
+              {editingRoom && (
+                <span className="text-[11px] text-slate-400 block">
+                  Current active occupants: {editingRoom.currentOccupancyCount ?? (editingRoom.currentOccupants || []).length}. Capacity cannot be set lower.
+                </span>
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="editRoomStatus">Room Status</Label>
+              <Select
+                id="editRoomStatus"
+                value={editRoomActive ? 'active' : 'archived'}
+                onChange={(e) => setEditRoomActive(e.target.value === 'active')}
+              >
+                <option value="active">Active (available for stays)</option>
+                <option value="archived">Archived (inactive)</option>
+              </Select>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => setEditDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" size="sm" disabled={editSubmitting}>
+                {editSubmitting ? 'Saving...' : 'Save Changes'}
               </Button>
             </div>
           </form>

@@ -19,8 +19,10 @@ import { formatLogicalMonth } from '../../../lib/logicalMonth.js';
 import { formatPaise, rupeesToPaise } from '../../../lib/money.js';
 import { api } from '../../../lib/api.js';
 
-export function AdminFeePlansTab({ plans = {}, rooms = [], onRefresh }) {
+export function AdminFeePlansTab({ plans = {}, rooms = [], onRefresh, loading = false, error = '' }) {
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
+  const [historyMemberId, setHistoryMemberId] = useState('nikhil');
   const [selectedMemberId, setSelectedMemberId] = useState('nikhil');
   const [rupeesAmount, setRupeesAmount] = useState('2800');
   const [effectiveFromMonth, setEffectiveFromMonth] = useState(() => new Date().toISOString().slice(0, 7));
@@ -41,6 +43,11 @@ export function AdminFeePlansTab({ plans = {}, rooms = [], onRefresh }) {
     }
     setFormError('');
     setDialogOpen(true);
+  };
+
+  const openHistory = (memberId) => {
+    setHistoryMemberId(memberId);
+    setHistoryDialogOpen(true);
   };
 
   const handleSavePlan = async (e) => {
@@ -69,6 +76,30 @@ export function AdminFeePlansTab({ plans = {}, rooms = [], onRefresh }) {
       setSubmitting(false);
     }
   };
+
+  if (loading) {
+    return (
+      <Card className="border-slate-200 dark:border-slate-800 p-8 text-center">
+        <p className="text-xs text-slate-500 dark:text-slate-400">Loading fee plans...</p>
+      </Card>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card className="border-rose-200 bg-rose-50/50 dark:border-rose-900 dark:bg-rose-950/20 p-6 text-center">
+        <p className="text-xs font-semibold text-rose-700 dark:text-rose-300">{error}</p>
+        {onRefresh && (
+          <Button onClick={onRefresh} size="sm" variant="outline" className="mt-3 text-xs">
+            Retry
+          </Button>
+        )}
+      </Card>
+    );
+  }
+
+  const historyPlans = plans[historyMemberId]?.allPlans || [];
+  const historyMemberName = ROOMMATES.find((m) => m.id === historyMemberId)?.name || historyMemberId;
 
   return (
     <div className="space-y-6">
@@ -99,7 +130,8 @@ export function AdminFeePlansTab({ plans = {}, rooms = [], onRefresh }) {
             <TableBody>
               {ROOMMATES.map((roommate) => {
                 const plan = plans[roommate.id];
-                const hasPlan = Boolean(plan);
+                const hasPlan = Boolean(plan && plan.amountPaise);
+                const hasFuture = Boolean(plan?.futurePlan);
 
                 return (
                   <TableRow key={roommate.id}>
@@ -108,9 +140,16 @@ export function AdminFeePlansTab({ plans = {}, rooms = [], onRefresh }) {
                     </TableCell>
                     <TableCell>
                       {hasPlan ? (
-                        <span className="text-base font-bold text-slate-900 dark:text-slate-100">
-                          {formatPaise(plan.amountPaise)}
-                        </span>
+                        <div>
+                          <span className="text-base font-bold text-slate-900 dark:text-slate-100">
+                            {formatPaise(plan.amountPaise)}
+                          </span>
+                          {hasFuture && (
+                            <span className="block text-[11px] text-teal-600 dark:text-teal-400 font-medium">
+                              Future: {formatPaise(plan.futurePlan.amountPaise)} from {formatLogicalMonth(plan.futurePlan.effectiveFromMonth)}
+                            </span>
+                          )}
+                        </div>
                       ) : (
                         <span className="text-xs text-amber-600 dark:text-amber-400 italic font-medium">
                           Fee not configured
@@ -129,15 +168,29 @@ export function AdminFeePlansTab({ plans = {}, rooms = [], onRefresh }) {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => openConfigure(roommate.id)}
-                        className="gap-1.5 text-xs font-semibold"
-                      >
-                        <Edit className="h-3.5 w-3.5" />
-                        <span>{hasPlan ? 'Update / Change Rate' : 'Configure Fee'}</span>
-                      </Button>
+                      <div className="flex items-center justify-end gap-1.5">
+                        {plan?.allPlans && plan.allPlans.length > 0 && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => openHistory(roommate.id)}
+                            className="text-xs text-slate-500 hover:text-slate-800"
+                            title="View pricing history"
+                          >
+                            <History className="h-3.5 w-3.5 mr-1" />
+                            <span>History</span>
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => openConfigure(roommate.id)}
+                          className="gap-1.5 text-xs font-semibold"
+                        >
+                          <Edit className="h-3.5 w-3.5" />
+                          <span>{hasPlan ? 'Update / Change Rate' : 'Configure Fee'}</span>
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 );
@@ -230,6 +283,54 @@ export function AdminFeePlansTab({ plans = {}, rooms = [], onRefresh }) {
               </Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* History Dialog */}
+      <Dialog open={historyDialogOpen} onOpenChange={setHistoryDialogOpen}>
+        <DialogContent className="max-w-lg w-full p-6">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              <History className="h-4 w-4 text-teal-600" />
+              <span>Fee Plan History — {historyMemberName}</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Immutable historical pricing records. Older rates are preserved for accurate past bills.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="pt-2">
+            {historyPlans.length === 0 ? (
+              <p className="text-xs text-slate-400 py-4 text-center">No fee plan history found.</p>
+            ) : (
+              <div className="divide-y divide-slate-100 dark:divide-slate-800 border rounded-lg overflow-hidden">
+                {historyPlans.map((hp) => (
+                  <div key={hp.feePlanId} className="p-3 text-xs flex items-center justify-between">
+                    <div>
+                      <div className="font-bold text-slate-900 dark:text-slate-100">
+                        {formatPaise(hp.amountPaise)} / month
+                      </div>
+                      <div className="text-slate-500 text-[11px] mt-0.5">
+                        Effective: {formatLogicalMonth(hp.effectiveFromMonth)} {hp.effectiveUntilMonth ? `to ${formatLogicalMonth(hp.effectiveUntilMonth)}` : '(ongoing)'}
+                        {hp.reason && ` · Note: ${hp.reason}`}
+                      </div>
+                    </div>
+                    <div>
+                      <Badge variant={hp.supersededAt ? 'outline' : 'taking'} className="text-[10px] py-0">
+                        {hp.supersededAt ? 'Superseded' : 'Active / Scheduled'}
+                      </Badge>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex justify-end pt-4">
+              <Button size="sm" variant="outline" onClick={() => setHistoryDialogOpen(false)}>
+                Close
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

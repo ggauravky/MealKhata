@@ -10,11 +10,13 @@ import {
   RotateCcw,
   ShieldCheck,
   Users,
+  AlertCircle,
 } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { PageHeader } from '../components/common/PageHeader.jsx';
 import { AddExpenseDialog } from '../components/expenses/AddExpenseDialog.jsx';
+import { EditExpenseDialog } from '../components/expenses/EditExpenseDialog.jsx';
 import { AdminExpenseHistory } from '../components/expenses/AdminExpenseHistory.jsx';
 import { AdminExpenseOverview } from '../components/expenses/AdminExpenseOverview.jsx';
 import { ExpenseCategoryFilter } from '../components/expenses/ExpenseCategoryFilter.jsx';
@@ -24,6 +26,16 @@ import { RecordReimbursementDialog } from '../components/expenses/RecordReimburs
 import { Badge } from '../components/ui/badge.jsx';
 import { Button } from '../components/ui/button.jsx';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card.jsx';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../components/ui/dialog.jsx';
+import { Input } from '../components/ui/input.jsx';
+import { Label } from '../components/ui/label.jsx';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs.jsx';
 import { useAuth } from '../hooks/useAuth.js';
 import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
@@ -32,6 +44,7 @@ import {
   useExpenses,
   useExpenseSummary,
 } from '../hooks/useExpenses.js';
+import { api } from '../lib/api.js';
 import { useServerToday } from '../hooks/useServerToday.js';
 import { ROOMMATES } from '../lib/constants.js';
 import { addLogicalMonths, formatLogicalMonth } from '../lib/logicalMonth.js';
@@ -52,8 +65,20 @@ export function AdminExpensesPage() {
   const [includeVoided, setIncludeVoided] = useState(true);
 
   const [addExpenseOpen, setAddExpenseOpen] = useState(false);
+  const [selectedExpenseId, setSelectedExpenseId] = useState(null);
   const [selectedExpense, setSelectedExpense] = useState(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
+
+  // Edit Expense flow (Super Admin)
+  const [editExpenseOpen, setEditExpenseOpen] = useState(false);
+  const [targetExpenseForEdit, setTargetExpenseForEdit] = useState(null);
+
+  // Delete Expense flow (Super Admin)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [targetExpenseForDelete, setTargetExpenseForDelete] = useState(null);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
 
   // Reimbursement flow
   const [recordReimbursementOpen, setRecordReimbursementOpen] = useState(false);
@@ -87,6 +112,51 @@ export function AdminExpensesPage() {
     refreshSummary();
     refreshReimbursements();
   };
+
+  const handleOpenDetails = (exp) => {
+    setSelectedExpenseId(exp.expenseId);
+    setSelectedExpense(exp);
+    setDetailsOpen(true);
+  };
+
+  const handleOpenEdit = (exp) => {
+    setTargetExpenseForEdit(exp);
+    setEditExpenseOpen(true);
+  };
+
+  const handleOpenDelete = (exp) => {
+    setTargetExpenseForDelete(exp);
+    setDeleteReason('');
+    setDeleteError('');
+    setDeleteDialogOpen(true);
+  };
+
+  const handleDeleteExpense = async (e) => {
+    e.preventDefault();
+    if (!targetExpenseForDelete) return;
+    setDeleteError('');
+    if (!deleteReason.trim()) {
+      setDeleteError('A mandatory deletion reason is required.');
+      return;
+    }
+    setDeleting(true);
+    try {
+      await api.post(`/api/expenses/${targetExpenseForDelete.expenseId}/void`, {
+        reason: deleteReason.trim(),
+      });
+      setDeleteDialogOpen(false);
+      setDeleteReason('');
+      setTargetExpenseForDelete(null);
+      refreshAll();
+    } catch (err) {
+      setDeleteError(err?.message || 'Failed to delete expense.');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const currentSelectedExpense =
+    (expenses || []).find((e) => e.expenseId === selectedExpenseId) || selectedExpense;
 
   // Filter expenses by member or voided
   const filteredExpenses = (expenses || []).filter((exp) => {
@@ -278,10 +348,11 @@ export function AdminExpensesPage() {
             currentMemberId={auth.memberId}
             canAdd={true}
             onAddClick={() => setAddExpenseOpen(true)}
-            onSelectExpense={(exp) => {
-              setSelectedExpense(exp);
-              setDetailsOpen(true);
-            }}
+            onSelectExpense={handleOpenDetails}
+            onView={handleOpenDetails}
+            onEdit={handleOpenEdit}
+            onDelete={handleOpenDelete}
+            isSuperAdmin={auth.role === 'superadmin'}
           />
         </TabsContent>
 
@@ -370,14 +441,135 @@ export function AdminExpensesPage() {
         initialPayerId={auth.memberId || 'gaurav'}
       />
 
+      {/* Edit Expense Dialog (Super Admin) */}
+      {targetExpenseForEdit && (
+        <EditExpenseDialog
+          open={editExpenseOpen}
+          onOpenChange={(isOpen) => {
+            setEditExpenseOpen(isOpen);
+            if (!isOpen) setTargetExpenseForEdit(null);
+          }}
+          expense={targetExpenseForEdit}
+          onSuccess={() => {
+            refreshAll();
+            setTargetExpenseForEdit(null);
+          }}
+          onViewReimbursements={() => {
+            setEditExpenseOpen(false);
+            setActiveTab('reimbursements');
+          }}
+        />
+      )}
+
+      {/* Delete Expense Dialog (Super Admin) */}
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              <AlertCircle className="h-5 w-5 text-rose-600" />
+              <span>DELETE EXPENSE?</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500 dark:text-slate-400">
+              <strong className="text-slate-700 dark:text-slate-200">{targetExpenseForDelete?.title}</strong> · {formatPaise(targetExpenseForDelete?.amountPaise || 0)}
+              <br />
+              This expense will be removed from active financial totals but retained in audit history.
+            </DialogDescription>
+          </DialogHeader>
+
+          {targetExpenseForDelete?.reimbursements?.some((r) => r.status !== 'voided') ? (
+            <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800 space-y-2">
+              <p className="font-semibold text-amber-900">Deletion Blocked</p>
+              <p>This Expense has recorded reimbursements. Resolve them before deleting the Expense.</p>
+              <div className="flex justify-end gap-2 pt-1">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setDeleteDialogOpen(false);
+                    setActiveTab('reimbursements');
+                  }}
+                  className="text-xs cursor-pointer"
+                >
+                  View Reimbursements
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setDeleteDialogOpen(false)}
+                  className="text-xs cursor-pointer"
+                >
+                  Close
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <form onSubmit={handleDeleteExpense} className="space-y-4 pt-1">
+              {deleteError && (
+                <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs">
+                  {deleteError}
+                </div>
+              )}
+
+              <div className="space-y-1">
+                <Label htmlFor="delete-expense-reason" className="text-xs font-semibold">
+                  Reason for deletion *
+                </Label>
+                <Input
+                  id="delete-expense-reason"
+                  placeholder="e.g. Entered twice by mistake"
+                  value={deleteReason}
+                  onChange={(e) => setDeleteReason(e.target.value)}
+                  className="text-xs h-9"
+                  required
+                  maxLength={300}
+                />
+              </div>
+
+              <DialogFooter className="gap-2 sm:gap-0 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setDeleteDialogOpen(false)}
+                  disabled={deleting}
+                  className="text-xs"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  variant="destructive"
+                  size="sm"
+                  disabled={deleting || !deleteReason.trim()}
+                  className="text-xs cursor-pointer"
+                >
+                  {deleting ? 'Deleting...' : 'Delete Expense'}
+                </Button>
+              </DialogFooter>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
+
       {/* Expense Details Dialog */}
-      {selectedExpense && (
+      {(currentSelectedExpense || selectedExpenseId) && (
         <ExpenseDetailsDialog
           open={detailsOpen}
-          onOpenChange={setDetailsOpen}
-          expense={selectedExpense}
+          onOpenChange={(isOpen) => {
+            setDetailsOpen(isOpen);
+            if (!isOpen) {
+              setSelectedExpenseId(null);
+              setSelectedExpense(null);
+            }
+          }}
+          expense={currentSelectedExpense}
+          expenseId={selectedExpenseId}
           role={auth.role}
           onUpdated={refreshAll}
+          onEdit={(exp) => {
+            setTargetExpenseForEdit(exp);
+            setEditExpenseOpen(true);
+          }}
         />
       )}
 

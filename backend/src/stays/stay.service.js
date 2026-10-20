@@ -4,6 +4,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import mongoose from 'mongoose';
 import { MEMBER_IDS } from '../config/members.js';
 import { isValidLogicalDate, getLogicalDateInTimeZone } from '../utils/date.js';
 import { isValidLogicalMonth } from '../utils/month.js';
@@ -109,11 +110,20 @@ export function createStayService({
       const stayId = randomUUID();
       const depositAccountId = randomUUID();
 
-      // Transactional onboarding: assign room first, then create stay & deposit, then fee plan
       let createdAssignment = null;
       let createdStay = null;
       let createdDepositAccount = null;
       let createdFeePlan = null;
+      let session = null;
+
+      if (mongoose.connection && mongoose.connection.readyState === 1) {
+        try {
+          session = await mongoose.startSession();
+          session.startTransaction();
+        } catch (_err) {
+          session = null;
+        }
+      }
 
       try {
         if (roomFees && typeof roomFees.assignMemberToRoom === 'function') {
@@ -124,6 +134,7 @@ export function createStayService({
             effectiveFromDate: joinedOn,
             actorRole,
             isAdmission: true,
+            session,
           });
         }
 
@@ -145,7 +156,7 @@ export function createStayService({
               details: { initialRoomId, monthlyFeePaise, expectedDepositPaise: expectedDepositPaise || 0 },
             },
           ],
-        });
+        }, { session });
 
         createdDepositAccount = await repository.createDepositAccount({
           depositAccountId,
@@ -164,7 +175,7 @@ export function createStayService({
               details: { expectedDepositPaise: expectedDepositPaise || 0 },
             },
           ],
-        });
+        }, { session });
 
         if (monthlyFeePaise && roomFees && typeof roomFees.createFeePlan === 'function') {
           createdFeePlan = await roomFees.createFeePlan({
@@ -174,25 +185,42 @@ export function createStayService({
             reason: `Initial fee plan on admission in Room ${initialRoomId}`,
             actorRole,
             isAdmission: true,
+            session,
           });
+        }
+
+        if (session) {
+          await session.commitTransaction();
         }
 
         return createdStay;
       } catch (err) {
-        // Rollback all created entities on failure
-        if (createdFeePlan?.feePlanId && typeof roomFees?.deleteFeePlan === 'function') {
-          try { await roomFees.deleteFeePlan(createdFeePlan.feePlanId); } catch (_err) { /* rollback best-effort */ }
+        if (session && session.inTransaction()) {
+          await session.abortTransaction();
         }
-        if (createdDepositAccount && typeof repository?.deleteDepositAccount === 'function') {
-          try { await repository.deleteDepositAccount(depositAccountId); } catch (_err) { /* rollback best-effort */ }
+        if (!session) {
+          // Rollback all created entities on in-memory / non-transactional test environments
+          if (createdFeePlan?.feePlanId && typeof roomFees?.deleteFeePlan === 'function') {
+            try { await roomFees.deleteFeePlan(createdFeePlan.feePlanId); } catch (_err) { /* rollback best-effort */ }
+          }
+          if (createdDepositAccount && typeof repository?.deleteDepositAccount === 'function') {
+            try { await repository.deleteDepositAccount(depositAccountId); } catch (_err) { /* rollback best-effort */ }
+          }
+          if (createdStay && typeof repository?.deleteStay === 'function') {
+            try { await repository.deleteStay(stayId); } catch (_err) { /* rollback best-effort */ }
+          }
+          if (createdAssignment?.assignmentId && typeof roomFees?.deleteAssignment === 'function') {
+            try { await roomFees.deleteAssignment(createdAssignment.assignmentId, 'superadmin'); } catch (_err) { /* rollback best-effort */ }
+          }
         }
-        if (createdStay && typeof repository?.deleteStay === 'function') {
-          try { await repository.deleteStay(stayId); } catch (_err) { /* rollback best-effort */ }
-        }
-        if (createdAssignment?.assignmentId && typeof roomFees?.deleteAssignment === 'function') {
-          try { await roomFees.deleteAssignment(createdAssignment.assignmentId, 'superadmin'); } catch (_err) { /* rollback best-effort */ }
+        if (err.message && (err.message.includes('Transactions are not supported') || err.message.includes('replica set'))) {
+          throw new StayDomainError('Financial transaction unavailable. Database transaction support is required.', 503);
         }
         throw err;
+      } finally {
+        if (session) {
+          await session.endSession();
+        }
       }
     },
 
@@ -371,14 +399,25 @@ export function createStayService({
 
       let newAssignment = null;
       let newPlan = null;
+      let session = null;
+      if (mongoose.connection && mongoose.connection.readyState === 1) {
+        try {
+          session = await mongoose.startSession();
+          session.startTransaction();
+        } catch (_err) {
+          session = null;
+        }
+      }
+
       try {
-        // 1. Assign to new room via roomFeeService (which validates capacity BEFORE modifying old assignments)
+        // 1. Assign to new room via roomFeeService (which validates capacity and closes old assignment)
         newAssignment = await roomFees.assignMemberToRoom({
           roomId: newRoomId.trim(),
           memberId: stay.memberId,
           effectiveFromMonth: transferMonth,
           effectiveFromDate: effectiveDate,
           actorRole,
+          session,
         });
 
         // 2. Update fee plan if provided
@@ -389,6 +428,7 @@ export function createStayService({
             amountPaise: finalMonthlyRate,
             reason: `Updated rate upon room transfer from Room ${oldRoomId} to ${newRoomId}`,
             actorRole,
+            session,
           });
         }
 
@@ -399,6 +439,7 @@ export function createStayService({
             currentRoomId: newRoomId.trim(),
           },
           stay.revision,
+          { session },
         );
 
         if (!updated) {
@@ -411,18 +452,34 @@ export function createStayService({
           actorRole,
           note: `Transferred from Room ${oldRoomId} to Room ${newRoomId} effective ${effectiveDate}${reason ? `: ${reason}` : ''}`,
           details: { oldRoomId, newRoomId, effectiveDate, newMonthlyRatePaise: finalMonthlyRate },
-        });
+        }, { session });
+
+        if (session) {
+          await session.commitTransaction();
+        }
 
         return updated;
       } catch (err) {
-        // Rollback any partial updates
-        if (newPlan?.feePlanId && typeof roomFees?.deleteFeePlan === 'function') {
-          try { await roomFees.deleteFeePlan(newPlan.feePlanId); } catch (_err) { /* rollback best-effort */ }
+        if (session && session.inTransaction()) {
+          await session.abortTransaction();
         }
-        if (newAssignment?.assignmentId && typeof roomFees?.deleteAssignment === 'function') {
-          try { await roomFees.deleteAssignment(newAssignment.assignmentId, 'superadmin'); } catch (_err) { /* rollback best-effort */ }
+        if (!session) {
+          // Rollback any partial updates on in-memory environments
+          if (newPlan?.feePlanId && typeof roomFees?.deleteFeePlan === 'function') {
+            try { await roomFees.deleteFeePlan(newPlan.feePlanId); } catch (_err) { /* rollback best-effort */ }
+          }
+          if (newAssignment?.assignmentId && typeof roomFees?.deleteAssignment === 'function') {
+            try { await roomFees.deleteAssignment(newAssignment.assignmentId, 'superadmin'); } catch (_err) { /* rollback best-effort */ }
+          }
+        }
+        if (err.message && (err.message.includes('Transactions are not supported') || err.message.includes('replica set'))) {
+          throw new StayDomainError('Financial transaction unavailable. Database transaction support is required.', 503);
         }
         throw err;
+      } finally {
+        if (session) {
+          await session.endSession();
+        }
       }
     },
 
@@ -496,7 +553,7 @@ export function createStayService({
       const memberId = stay.memberId;
       const currentMonth = getLogicalDateInTimeZone(new Date(), 'Asia/Kolkata').slice(0, 7);
       const startMonth = stay.joinedOn.slice(0, 7);
-      const endMonth = stay.actualLeftOn ? (stay.actualLeftOn.slice(0, 7) > currentMonth ? stay.actualLeftOn.slice(0, 7) : currentMonth) : currentMonth;
+      const endMonth = stay.actualLeftOn ? stay.actualLeftOn.slice(0, 7) : currentMonth;
 
       const months = getMonthsRange(startMonth, endMonth);
       const monthlyOverviews = [];
@@ -696,78 +753,119 @@ export function createStayService({
         clearanceStatus = CLEARANCE_STATUSES.OUTSTANDING_DUES;
       }
 
-      const sequence = await repository.getNextClearanceSequence(stayId);
-      const clearanceId = randomUUID();
-
-      // 1. End active room assignment and release capacity
-      await roomFees.endActiveRoomAssignment({
-        memberId: stay.memberId,
-        endMonth: actualLeftOn.slice(0, 7),
-      });
-
-      // 2. Transition Stay to CHECKED_OUT
-      const updatedStay = await repository.updateStay(
-        stayId,
-        {
-          status: STAY_STATUSES.CHECKED_OUT,
-          actualLeftOn,
-          checkoutFinalizedAt: new Date(),
-          checkoutFinalizedByRole: actorRole,
-        },
-        stay.revision,
-      );
-
-      if (!updatedStay) {
-        throw new StayDomainError('Stay modified concurrently. Please retry.', 409);
+      let session = null;
+      if (mongoose.connection && mongoose.connection.readyState === 1) {
+        try {
+          session = await mongoose.startSession();
+          session.startTransaction();
+        } catch (_err) {
+          session = null;
+        }
       }
 
-      // 3. Create Immutable Clearance Snapshot
-      const clearance = await repository.createClearance({
-        clearanceId,
-        stayId,
-        memberId: stay.memberId,
-        sequence,
-        snapshotVersion: sequence,
-        joinedOn: stay.joinedOn,
-        actualLeftOn,
-        lastRoomId: stay.currentRoomId || stay.initialRoomId,
-        financialAsOf: new Date(),
-        messSummary: {
-          billPaise: review.totalMessBilledPaise ?? review.financialOverview.mess.billPaise,
-          paidPaise: review.totalMessPaidPaise ?? review.financialOverview.mess.paidPaise,
-          remainingPaise: review.totalMessRemainingPaise ?? review.financialOverview.mess.remainingPaise,
-        },
-        roomFeeSummary: {
-          issuedChargePaise: review.totalRoomBilledPaise ?? review.financialOverview.room.issuedChargePaise,
-          paidPaise: review.totalRoomPaidPaise ?? review.financialOverview.room.paidPaise,
-          remainingPaise: review.totalRoomRemainingPaise ?? review.financialOverview.room.remainingPaise,
-        },
-        expenseSummary: {
-          spendingSharePaise: review.totalExpenseSharePaise ?? review.financialOverview.expenses.spendingSharePaise,
-          owedToOthersPaise: review.totalExpenseOwedPaise ?? review.financialOverview.expenses.owedToOthersPaise,
-          owedToMePaise: review.totalExpenseReceivablePaise ?? review.financialOverview.expenses.owedToMePaise,
-        },
-        depositSummary: review.depositOverview.summary,
-        outstandingObligations: review.outstandingObligations,
-        clearanceStatus,
-        exceptionReason: exceptionReason?.trim() || null,
-        finalizedAt: new Date(),
-        finalizedByRole: actorRole,
-      });
+      try {
+        // Concurrency guard: verify fresh stay status inside session
+        const freshStay = await repository.findStayById(stayId, { session });
+        if (!freshStay || freshStay.status === STAY_STATUSES.CHECKED_OUT) {
+          throw new StayDomainError('Stay has already been checked out.', 409);
+        }
+        if (freshStay.revision !== stay.revision) {
+          throw new StayDomainError('Stay modified concurrently. Please retry.', 409);
+        }
 
-      // 4. Audit trail
-      await repository.addStayHistory(stayId, {
-        event: 'CHECKOUT_FINALIZED',
-        timestamp: new Date(),
-        actorRole,
-        note: `Stay finalized as ${clearanceStatus} on ${actualLeftOn}${exceptionReason ? `: ${exceptionReason}` : ''}`,
-        details: { clearanceId, sequence, clearanceStatus },
-      });
+        // 1. End active room assignment and release capacity with exact departure date
+        await roomFees.endActiveRoomAssignment({
+          memberId: stay.memberId,
+          endDate: actualLeftOn,
+          endMonth: actualLeftOn.slice(0, 7),
+          session,
+        });
 
-      return {
-        stay: updatedStay,
-        clearance,
-      };
+        // 2. Safely allocate clearance sequence
+        const sequence = await repository.getNextClearanceSequence(stayId, { session });
+        const clearanceId = randomUUID();
+
+        // 3. Transition Stay to CHECKED_OUT with revision guard
+        const updatedStay = await repository.updateStay(
+          stayId,
+          {
+            status: STAY_STATUSES.CHECKED_OUT,
+            actualLeftOn,
+            checkoutFinalizedAt: new Date(),
+            checkoutFinalizedByRole: actorRole,
+          },
+          freshStay.revision,
+          { session },
+        );
+
+        if (!updatedStay) {
+          throw new StayDomainError('Stay modified concurrently. Please retry.', 409);
+        }
+
+        // 4. Create Immutable Clearance Snapshot
+        const clearance = await repository.createClearance({
+          clearanceId,
+          stayId,
+          memberId: stay.memberId,
+          sequence,
+          snapshotVersion: sequence,
+          joinedOn: stay.joinedOn,
+          actualLeftOn,
+          lastRoomId: stay.currentRoomId || stay.initialRoomId,
+          financialAsOf: new Date(),
+          messSummary: {
+            billPaise: review.totalMessBilledPaise ?? review.financialOverview.mess.billPaise,
+            paidPaise: review.totalMessPaidPaise ?? review.financialOverview.mess.paidPaise,
+            remainingPaise: review.totalMessRemainingPaise ?? review.financialOverview.mess.remainingPaise,
+          },
+          roomFeeSummary: {
+            issuedChargePaise: review.totalRoomBilledPaise ?? review.financialOverview.room.issuedChargePaise,
+            paidPaise: review.totalRoomPaidPaise ?? review.financialOverview.room.paidPaise,
+            remainingPaise: review.totalRoomRemainingPaise ?? review.financialOverview.room.remainingPaise,
+          },
+          expenseSummary: {
+            spendingSharePaise: review.totalExpenseSharePaise ?? review.financialOverview.expenses.spendingSharePaise,
+            owedToOthersPaise: review.totalExpenseOwedPaise ?? review.financialOverview.expenses.owedToOthersPaise,
+            owedToMePaise: review.totalExpenseReceivablePaise ?? review.financialOverview.expenses.owedToMePaise,
+          },
+          depositSummary: review.depositOverview.summary,
+          outstandingObligations: review.outstandingObligations,
+          clearanceStatus,
+          exceptionReason: exceptionReason?.trim() || null,
+          finalizedAt: new Date(),
+          finalizedByRole: actorRole,
+        }, { session });
+
+        // 5. Audit trail
+        await repository.addStayHistory(stayId, {
+          event: 'CHECKOUT_FINALIZED',
+          timestamp: new Date(),
+          actorRole,
+          note: `Stay finalized as ${clearanceStatus} on ${actualLeftOn}${exceptionReason ? `: ${exceptionReason}` : ''}`,
+          details: { clearanceId, sequence, clearanceStatus },
+        }, { session });
+
+        if (session) {
+          await session.commitTransaction();
+        }
+
+        return {
+          stay: updatedStay,
+          clearance,
+        };
+      } catch (err) {
+        if (session && session.inTransaction()) {
+          await session.abortTransaction();
+        }
+        if (err.message && (err.message.includes('Transactions are not supported') || err.message.includes('replica set'))) {
+          throw new StayDomainError('Financial transaction unavailable. Database transaction support is required.', 503);
+        }
+        throw err;
+      } finally {
+        if (session) {
+          await session.endSession();
+        }
+      }
     },
 
     /**
@@ -792,51 +890,79 @@ export function createStayService({
         clearanceStatus = CLEARANCE_STATUSES.OUTSTANDING_DUES;
       }
 
-      const sequence = await repository.getNextClearanceSequence(stayId);
-      const clearanceId = randomUUID();
+      let session = null;
+      if (mongoose.connection && mongoose.connection.readyState === 1) {
+        try {
+          session = await mongoose.startSession();
+          session.startTransaction();
+        } catch (_err) {
+          session = null;
+        }
+      }
 
-      const clearance = await repository.createClearance({
-        clearanceId,
-        stayId,
-        memberId: stay.memberId,
-        sequence,
-        snapshotVersion: sequence,
-        joinedOn: stay.joinedOn,
-        actualLeftOn: stay.actualLeftOn,
-        lastRoomId: stay.currentRoomId || stay.initialRoomId,
-        financialAsOf: new Date(),
-        messSummary: {
-          billPaise: review.totalMessBilledPaise ?? review.financialOverview.mess.billPaise,
-          paidPaise: review.totalMessPaidPaise ?? review.financialOverview.mess.paidPaise,
-          remainingPaise: review.totalMessRemainingPaise ?? review.financialOverview.mess.remainingPaise,
-        },
-        roomFeeSummary: {
-          issuedChargePaise: review.totalRoomBilledPaise ?? review.financialOverview.room.issuedChargePaise,
-          paidPaise: review.totalRoomPaidPaise ?? review.financialOverview.room.paidPaise,
-          remainingPaise: review.totalRoomRemainingPaise ?? review.financialOverview.room.remainingPaise,
-        },
-        expenseSummary: {
-          spendingSharePaise: review.totalExpenseSharePaise ?? review.financialOverview.expenses.spendingSharePaise,
-          owedToOthersPaise: review.totalExpenseOwedPaise ?? review.financialOverview.expenses.owedToOthersPaise,
-          owedToMePaise: review.totalExpenseReceivablePaise ?? review.financialOverview.expenses.owedToMePaise,
-        },
-        depositSummary: review.depositOverview.summary,
-        outstandingObligations: review.outstandingObligations,
-        clearanceStatus,
-        exceptionReason: reissueReason.trim(),
-        finalizedAt: new Date(),
-        finalizedByRole: actorRole,
-      });
+      try {
+        const sequence = await repository.getNextClearanceSequence(stayId, { session });
+        const clearanceId = randomUUID();
 
-      await repository.addStayHistory(stayId, {
-        event: 'CLEARANCE_REISSUED',
-        timestamp: new Date(),
-        actorRole,
-        note: `Clearance #${sequence} reissued: ${reissueReason.trim()}`,
-        details: { clearanceId, sequence, clearanceStatus, reissueReason: reissueReason.trim() },
-      });
+        const clearance = await repository.createClearance({
+          clearanceId,
+          stayId,
+          memberId: stay.memberId,
+          sequence,
+          snapshotVersion: sequence,
+          joinedOn: stay.joinedOn,
+          actualLeftOn: stay.actualLeftOn,
+          lastRoomId: stay.currentRoomId || stay.initialRoomId,
+          financialAsOf: new Date(),
+          messSummary: {
+            billPaise: review.totalMessBilledPaise ?? review.financialOverview.mess.billPaise,
+            paidPaise: review.totalMessPaidPaise ?? review.financialOverview.mess.paidPaise,
+            remainingPaise: review.totalMessRemainingPaise ?? review.financialOverview.mess.remainingPaise,
+          },
+          roomFeeSummary: {
+            issuedChargePaise: review.totalRoomBilledPaise ?? review.financialOverview.room.issuedChargePaise,
+            paidPaise: review.totalRoomPaidPaise ?? review.financialOverview.room.paidPaise,
+            remainingPaise: review.totalRoomRemainingPaise ?? review.financialOverview.room.remainingPaise,
+          },
+          expenseSummary: {
+            spendingSharePaise: review.totalExpenseSharePaise ?? review.financialOverview.expenses.spendingSharePaise,
+            owedToOthersPaise: review.totalExpenseOwedPaise ?? review.financialOverview.expenses.owedToOthersPaise,
+            owedToMePaise: review.totalExpenseReceivablePaise ?? review.financialOverview.expenses.owedToMePaise,
+          },
+          depositSummary: review.depositOverview.summary,
+          outstandingObligations: review.outstandingObligations,
+          clearanceStatus,
+          exceptionReason: reissueReason.trim(),
+          finalizedAt: new Date(),
+          finalizedByRole: actorRole,
+        }, { session });
 
-      return clearance;
+        await repository.addStayHistory(stayId, {
+          event: 'CLEARANCE_REISSUED',
+          timestamp: new Date(),
+          actorRole,
+          note: `Clearance #${sequence} reissued: ${reissueReason.trim()}`,
+          details: { clearanceId, sequence, clearanceStatus, reissueReason: reissueReason.trim() },
+        }, { session });
+
+        if (session) {
+          await session.commitTransaction();
+        }
+
+        return clearance;
+      } catch (err) {
+        if (session && session.inTransaction()) {
+          await session.abortTransaction();
+        }
+        if (err.message && (err.message.includes('Transactions are not supported') || err.message.includes('replica set'))) {
+          throw new StayDomainError('Financial transaction unavailable. Database transaction support is required.', 503);
+        }
+        throw err;
+      } finally {
+        if (session) {
+          await session.endSession();
+        }
+      }
     },
 
     /**

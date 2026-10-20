@@ -276,6 +276,66 @@ export class InMemoryStayRepository {
     return JSON.parse(JSON.stringify(doc));
   }
 
+  async executeAtomicDepositVoid({
+    stayId,
+    depositTransactionId,
+    reason,
+    actorRole,
+  }) {
+    const tx = this.transactions.find((t) => t.depositTransactionId === depositTransactionId);
+    if (!tx || (stayId && tx.stayId !== stayId)) {
+      const err = new Error('Deposit transaction not found or does not belong to this stay.');
+      err.statusCode = 404;
+      throw err;
+    }
+    if (tx.status === 'voided') {
+      const err = new Error('Deposit transaction is already voided.');
+      err.statusCode = 400;
+      throw err;
+    }
+    const targetStayId = tx.stayId || stayId;
+    if (tx.type === 'RECEIVED') {
+      const allActive = this.transactions.filter(
+        (t) => t.stayId === targetStayId && t.status === 'recorded',
+      );
+      let received = 0;
+      let refunded = 0;
+      let deducted = 0;
+      for (const item of allActive) {
+        if (item.type === 'RECEIVED') received += item.amountPaise;
+        else if (item.type === 'REFUNDED') refunded += item.amountPaise;
+        else if (item.type === 'DEDUCTED') deducted += item.amountPaise;
+      }
+      const currentHeld = received - refunded - deducted;
+      if (currentHeld < tx.amountPaise) {
+        const err = new Error(`Cannot void receipt: ₹${((tx.amountPaise - currentHeld) / 100).toFixed(2)} has already been refunded or deducted.`);
+        err.statusCode = 400;
+        throw err;
+      }
+    }
+
+    tx.status = 'voided';
+    tx.voidReason = reason.trim();
+    tx.voidedByRole = actorRole;
+    tx.voidedAt = new Date();
+    tx.updatedAt = new Date();
+
+    const account = this.accounts.find((a) => a.stayId === targetStayId);
+    if (account) {
+      account.revision = (account.revision || 1) + 1;
+      account.history = account.history || [];
+      account.history.push({
+        event: 'DEPOSIT_TRANSACTION_VOIDED',
+        timestamp: new Date(),
+        actorRole,
+        note: `Voided transaction ${depositTransactionId}: ${reason}`,
+        details: { depositTransactionId, originalType: tx.type, amountPaise: tx.amountPaise },
+      });
+    }
+
+    return JSON.parse(JSON.stringify(tx));
+  }
+
   // --- Clearance Operations ---
   async createClearance(data) {
     const doc = {

@@ -39,6 +39,11 @@ export const roomSchema = new mongoose.Schema(
       required: true,
       default: true,
     },
+    occupancyRevision: {
+      type: Number,
+      required: false,
+      default: 0,
+    },
   },
   {
     collection: 'rooms',
