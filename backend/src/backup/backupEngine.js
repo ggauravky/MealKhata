@@ -14,6 +14,12 @@ export const BACKUP_COLLECTIONS = Object.freeze([
   'monthly_settlements',
   'push_subscriptions',
   'push_deliveries',
+  'rooms',
+  'room_assignments',
+  'room_fee_plans',
+  'room_charges',
+  'room_payments',
+  'room_payment_settings',
 ]);
 
 /**

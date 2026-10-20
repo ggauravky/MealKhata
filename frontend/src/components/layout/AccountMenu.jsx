@@ -1,4 +1,4 @@
-import { ChevronDown, Download, LogIn, LogOut, ShieldCheck } from 'lucide-react';
+import { BedDouble, ChevronDown, Download, LogIn, LogOut, ShieldCheck } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth.js';
@@ -92,12 +92,20 @@ export function AccountMenu({ mobile = false }) {
         <DropdownMenuSeparator />
 
         {canAccessAdmin && (
-          <DropdownMenuItem asChild>
-            <Link to="/admin" className="flex items-center gap-2 cursor-pointer">
-              <ShieldCheck className="h-4 w-4 text-teal-600 dark:text-teal-400" />
-              <span>Admin panel</span>
-            </Link>
-          </DropdownMenuItem>
+          <>
+            <DropdownMenuItem asChild>
+              <Link to="/admin/room-fees" className="flex items-center gap-2 cursor-pointer">
+                <BedDouble className="h-4 w-4 text-teal-600 dark:text-teal-400" />
+                <span>Room fee admin</span>
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link to="/admin" className="flex items-center gap-2 cursor-pointer">
+                <ShieldCheck className="h-4 w-4 text-teal-600 dark:text-teal-400" />
+                <span>Admin panel</span>
+              </Link>
+            </DropdownMenuItem>
+          </>
         )}
 
         {canInstall && (

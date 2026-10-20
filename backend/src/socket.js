@@ -95,3 +95,13 @@ export function broadcastSettlementUpdated(payload) {
   activeSocketServer.emit('settlement:updated', payload);
   return true;
 }
+
+export function broadcastRoomFeesUpdated(payload) {
+  if (!activeSocketServer) {
+    return false;
+  }
+
+  activeSocketServer.emit('room-fees:updated', payload);
+  return true;
+}
+

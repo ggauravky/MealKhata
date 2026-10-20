@@ -13,10 +13,11 @@ export const MEAL_TYPES = Object.freeze([
 ]);
 
 export const NAV_ITEMS = [
-  { label: 'Dashboard', path: '/' },
-  { label: 'Calendar', path: '/calendar' },
-  { label: 'Reports', path: '/reports' },
+  { label: 'Home', path: '/' },
+  { label: 'Mess', path: '/calendar' },
+  { label: 'Room Fees', path: '/room-fees' },
   { label: 'Payments', path: '/payments' },
+  { label: 'Reports', path: '/reports' },
 ];
 
 export const ROLE_LABELS = Object.freeze({

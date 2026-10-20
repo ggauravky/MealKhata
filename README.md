@@ -35,12 +35,31 @@ MealKhata simplifies daily household meal coordination and monthly shared-expens
 
 ## Screens / Workflow
 
-1. **Dashboard (`/`)**: Daily home view. Members toggle today's meals; Admins oversee roommate plate requirements; Super Admin monitors settlement and rate configuration attention items.
-2. **Calendar (`/calendar?month=YYYY-MM`)**: Household monthly view. Inspect any past, current, or future month with date-level plate counts.
-3. **Reports (`/reports?month=YYYY-MM`)**: Monthly financial report detailing breakfast/dinner plate counts, current rates, total bill, paid amounts, and projected month-end totals.
-4. **Payments (`/payments?month=YYYY-MM`)**: Financial ledger page. Members prepare and confirm personal payments via UPI deep links or copy-and-pay details; Super Admin can void mistaken entries with an audit reason.
-5. **Admin Panel (`/admin`)**: Administrative controls for configuring monthly rates, managing payment receiver details, setting reminder schedules, and closing/reopening monthly settlements.
-6. **Login (`/login`)**: Secure role-aware authentication with 7-day persistent HttpOnly sessions for Admin and Super Admin, and 12-hour sessions for Members. Sessions persist across browser closures while remaining subject to active account status and session version revocation.
+1. **Dashboard (`/`)**: Daily home view. Members toggle today's meals; authenticated members view their current month Room Fee preview; Admins oversee roommate plate requirements and have shortcuts to Room Fee Administration.
+2. **Mess Calendar (`/calendar?month=YYYY-MM`)**: Household monthly view. Inspect any past, current, or future month with date-level plate counts.
+3. **Room Fees (`/room-fees?month=YYYY-MM`)**: Member room fee portal with current month charge, payment progress bar, month-wise fee history, payment breakdown dialog, summary metrics, and verified recipient UPI instructions.
+4. **Payments (`/payments?month=YYYY-MM`)**: Dual-ledger financial center with independent `[ Mess ]` and `[ Room Fees ]` tabs.
+5. **Reports (`/reports?month=YYYY-MM`)**: Monthly mess financial report detailing plate counts, rates, total bill, paid amounts, and projected month-end totals.
+6. **Mess Admin Panel (`/admin`)**: Administrative controls for mess monthly rates, mess receiver settings, reminders, and mess monthly settlements.
+7. **Room Fee Administration (`/admin/room-fees`)**: Dedicated hostel room admin center with Overview, Room Registry & Occupancy, Individual Fee Plans, Monthly Charge Issuance, Verified Payments, and Recipient Configuration.
+8. **Login (`/login`)**: Secure role-aware authentication with 7-day persistent HttpOnly sessions for Admin and Super Admin, and 12-hour sessions for Members.
+
+---
+
+## MealKhata 2.0 — Phase 1: Room Fees & Hostel Management Foundation
+
+Phase 1 introduces a dedicated, independent financial domain for hostel room fees that coexists with the existing mess domain without altering any mess records or calculations:
+
+- **Room & Occupancy Registry (`rooms`, `room_assignments`)**: Configurable rooms, occupancy limits (1 or 2 persons), and historical resident assignments with month-level effective dates.
+- **Individual Member Fee Plans (`room_fee_plans`)**: Independent monthly pricing per resident. Roommates sharing a room (e.g. Room 204) can pay different rates without automatic equal splitting. Rates support forward effective dates without retroactively altering historical charges.
+- **Explicit Monthly Charge Generation (`room_charges`)**: Idempotent preview and manual charge issuance by Admin. Unissued months never generate fake debts. Super Admin can record auditable adjustments (+/-) or cancellations.
+- **Dedicated Room Payment Ledger (`room_payments`)**: Separate collection for room payments with manual methods (UPI, Cash, Bank Transfer, Other), partial payment tracking, overpayment guards, idempotency keys, and Super Admin voiding with mandatory audit reasons.
+- **Configurable Recipient Instructions (`room_payment_settings`)**: Dynamic configuration for `hostel_owner` vs. `admin_collector`, recipient display name, optional official UPI ID (generates deep links), and custom bank instructions.
+- **Redesigned Navigation**:
+  - **Desktop**: `MealKhata Home | Mess | Room Fees | Payments | Reports` + Theme Toggle + Account Menu.
+  - **Mobile**: Clean 5-item bottom bar (`Home | Mess | Room | Payments | More`), where More exposes Reports, Admin Panels, Theme, App Install, and Sign Out.
+- **Separation of Concerns**: Existing `meal_days`, `payments`, `monthly_settlements`, and `monthly_meal_rates` remain completely untouched. Mess payments and room payments are strictly segregated.
+- **Backup & Verification Integration**: All 6 new collections (`rooms`, `room_assignments`, `room_fee_plans`, `room_charges`, `room_payments`, `room_payment_settings`) are included in encrypted backups, `verify-indexes`, and `verify-data` checks.
 
 ---
 

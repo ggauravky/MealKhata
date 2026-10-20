@@ -1,5 +1,7 @@
 import {
   AlertCircle,
+  BedDouble,
+  CalendarDays,
   ChevronLeft,
   ChevronRight,
   CircleDollarSign,
@@ -13,10 +15,12 @@ import { PageHeader } from '../components/common/PageHeader.jsx';
 import { PaymentFlowDialog } from '../components/payments/PaymentFlowDialog.jsx';
 import { PaymentSettingsPanel } from '../components/payments/PaymentSettingsPanel.jsx';
 import { VoidPaymentDialog } from '../components/payments/VoidPaymentDialog.jsx';
+import { RoomFeesPaymentTab } from '../components/roomFees/RoomFeesPaymentTab.jsx';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card.jsx';
 import { Button } from '../components/ui/button.jsx';
 import { Badge } from '../components/ui/badge.jsx';
 import { MemberAvatar } from '../components/ui/avatar.jsx';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs.jsx';
 import { ErrorState } from '../components/ui/ErrorState.jsx';
 import { Skeleton } from '../components/ui/skeleton.jsx';
 import { useAuth } from '../hooks/useAuth.js';
@@ -180,6 +184,8 @@ export function PaymentsPage() {
   const { isOnline } = usePwa();
   const [searchParams] = useSearchParams();
   const queryMonth = searchParams.get('month');
+  const queryTab = searchParams.get('tab');
+  const [activeTab, setActiveTab] = useState(queryTab === 'room' ? 'room' : 'mess');
   const [selectedMonth, setSelectedMonth] = useState('');
   const [payingMember, setPayingMember] = useState(null);
   const [voidingPayment, setVoidingPayment] = useState(null);
@@ -215,64 +221,82 @@ export function PaymentsPage() {
     <div className="space-y-6 max-w-4xl mx-auto">
       <PageHeader
         title="Payments"
-        description="Monthly room bills, peer-to-peer UPI payments, and auditable history."
+        description="Monthly mess payments, room fees, and auditable transaction ledgers."
       />
 
-      {serverToday.error && (
-        <ErrorState title="Payments unavailable" message={serverToday.error} />
-      )}
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <div className="flex items-center justify-between pb-2">
+          <TabsList className="grid grid-cols-2 w-full max-w-xs">
+            <TabsTrigger value="mess" className="gap-2">
+              <CalendarDays className="h-4 w-4" />
+              <span>Mess</span>
+            </TabsTrigger>
+            <TabsTrigger value="room" className="gap-2">
+              <BedDouble className="h-4 w-4" />
+              <span>Room Fees</span>
+            </TabsTrigger>
+          </TabsList>
+        </div>
 
-      {/* Month Toolbar Card */}
-      {month && (
-        <Card className="border-slate-200/90 dark:border-slate-800">
-          <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4">
-            <div>
-              <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">
-                {formatLogicalMonth(month)}
-              </h2>
-              <span className="text-xs text-slate-500 dark:text-slate-400">
-                {data ? periodLabels[data.periodType] : 'Loading payments...'}
-              </span>
-            </div>
+        {serverToday.error && (
+          <ErrorState title="Payments unavailable" message={serverToday.error} />
+        )}
 
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 w-8 p-0"
-                onClick={() => setSelectedMonth(addLogicalMonths(month, -1))}
-                aria-label="Previous month"
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 px-2.5 text-xs font-medium"
-                onClick={() => setSelectedMonth(serverToday.date.slice(0, 7))}
-              >
-                Current
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 w-8 p-0"
-                onClick={() => setSelectedMonth(addLogicalMonths(month, 1))}
-                aria-label="Next month"
-              >
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-              <input
-                type="month"
-                value={month}
-                onChange={(event) => setSelectedMonth(event.target.value)}
-                className="h-8 rounded-sm border border-slate-200 bg-white px-2 text-xs text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 ml-1 cursor-pointer"
-                aria-label="Jump to payment month"
-              />
-            </div>
-          </CardHeader>
-        </Card>
-      )}
+        {/* Month Toolbar Card */}
+        {month && (
+          <Card className="border-slate-200/90 dark:border-slate-800">
+            <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4">
+              <div>
+                <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                  {formatLogicalMonth(month)}
+                </h2>
+                <span className="text-xs text-slate-500 dark:text-slate-400">
+                  {activeTab === 'mess'
+                    ? (data ? periodLabels[data.periodType] : 'Loading payments...')
+                    : 'Hostel room fee ledger'}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 w-8 p-0"
+                  onClick={() => setSelectedMonth(addLogicalMonths(month, -1))}
+                  aria-label="Previous month"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 px-2.5 text-xs font-medium"
+                  onClick={() => setSelectedMonth(serverToday.date.slice(0, 7))}
+                >
+                  Current
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 w-8 p-0"
+                  onClick={() => setSelectedMonth(addLogicalMonths(month, 1))}
+                  aria-label="Next month"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+                <input
+                  type="month"
+                  value={month}
+                  onChange={(event) => setSelectedMonth(event.target.value)}
+                  className="h-8 rounded-sm border border-slate-200 bg-white px-2 text-xs text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 ml-1 cursor-pointer"
+                  aria-label="Jump to payment month"
+                />
+              </div>
+            </CardHeader>
+          </Card>
+        )}
+
+        <TabsContent value="mess" className="space-y-6">
 
       {message && (
         <div
@@ -567,6 +591,12 @@ export function PaymentsPage() {
           onVoided={handleVoided}
         />
       )}
+        </TabsContent>
+
+        <TabsContent value="room" className="space-y-6">
+          <RoomFeesPaymentTab month={month} />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

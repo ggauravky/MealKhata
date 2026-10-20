@@ -23,6 +23,7 @@ import { reminderSettingsRouter } from './routes/reminderSettings.routes.js';
 import { pushRouter } from './routes/push.routes.js';
 import { settlementRouter } from './routes/settlement.routes.js';
 import { dashboardRouter } from './routes/dashboard.routes.js';
+import { roomFeeRouter, roomRouter } from './routes/roomFee.routes.js';
 
 export const PRODUCTION_TRUST_PROXY_HOPS = 1;
 export const API_RATE_LIMIT = Object.freeze({
@@ -70,6 +71,8 @@ export function createApp({
   settlements = settlementRouter,
   dashboard = dashboardRouter,
   health = healthRouter,
+  roomFees = roomFeeRouter,
+  rooms = roomRouter,
 } = {}) {
   const app = express();
 
@@ -126,6 +129,8 @@ export function createApp({
   app.use('/api/payment-settings', sensitiveMutationLimiter, paymentSettings);
   app.use('/api/settings/reminders', sensitiveMutationLimiter, reminderSettings);
   app.use('/api/push', sensitiveMutationLimiter, push);
+  app.use('/api/room-fees', sensitiveMutationLimiter, roomFees);
+  app.use('/api/rooms', sensitiveMutationLimiter, rooms);
 
   app.use('/api', apiNotFound);
 

@@ -434,6 +434,132 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
     checks.push({ name: 'Settings Singletons', status: 'FAIL', issues: 1, message: error.message });
   }
 
+  // 7. Room Fees Integrity Check
+  try {
+    const rooms = await db.collection('rooms').find({}).toArray();
+    const assignments = await db.collection('room_assignments').find({}).toArray();
+    const feePlans = await db.collection('room_fee_plans').find({}).toArray();
+    const roomCharges = await db.collection('room_charges').find({}).toArray();
+    const roomPayments = await db.collection('room_payments').find({}).toArray();
+    const roomPaymentSettings = await db.collection('room_payment_settings').find({}).toArray();
+
+    let roomIssues = 0;
+
+    for (const r of rooms) {
+      if (!isValidUuid(r.roomId)) {
+        issues.push(`[rooms] Invalid roomId UUID: ${r.roomId}`);
+        roomIssues++;
+      }
+      if (!r.roomNumber || typeof r.roomNumber !== 'string') {
+        issues.push(`[rooms] Missing roomNumber for room ${r.roomId}`);
+        roomIssues++;
+      }
+      if (!Number.isInteger(r.capacity) || r.capacity < 1) {
+        issues.push(`[rooms] Invalid capacity for room ${r.roomNumber}`);
+        roomIssues++;
+      }
+    }
+
+    for (const a of assignments) {
+      if (!isValidUuid(a.assignmentId)) {
+        issues.push(`[room_assignments] Invalid assignmentId UUID: ${a.assignmentId}`);
+        roomIssues++;
+      }
+      if (!MEMBER_IDS.includes(a.memberId)) {
+        issues.push(`[room_assignments] Invalid memberId: ${a.memberId}`);
+        roomIssues++;
+      }
+      if (!isValidLogicalMonth(a.effectiveFromMonth)) {
+        issues.push(`[room_assignments] Invalid effectiveFromMonth: ${a.effectiveFromMonth}`);
+        roomIssues++;
+      }
+    }
+
+    for (const p of feePlans) {
+      if (!isValidUuid(p.feePlanId)) {
+        issues.push(`[room_fee_plans] Invalid feePlanId UUID: ${p.feePlanId}`);
+        roomIssues++;
+      }
+      if (!MEMBER_IDS.includes(p.memberId)) {
+        issues.push(`[room_fee_plans] Invalid memberId: ${p.memberId}`);
+        roomIssues++;
+      }
+      if (!Number.isSafeInteger(p.amountPaise) || p.amountPaise < 0) {
+        issues.push(`[room_fee_plans] Invalid amountPaise for plan: ${p.feePlanId}`);
+        roomIssues++;
+      }
+      if (!isValidLogicalMonth(p.effectiveFromMonth)) {
+        issues.push(`[room_fee_plans] Invalid effectiveFromMonth: ${p.effectiveFromMonth}`);
+        roomIssues++;
+      }
+    }
+
+    for (const c of roomCharges) {
+      if (!isValidUuid(c.chargeId)) {
+        issues.push(`[room_charges] Invalid chargeId UUID: ${c.chargeId}`);
+        roomIssues++;
+      }
+      if (!MEMBER_IDS.includes(c.memberId)) {
+        issues.push(`[room_charges] Invalid memberId: ${c.memberId}`);
+        roomIssues++;
+      }
+      if (!isValidLogicalMonth(c.month)) {
+        issues.push(`[room_charges] Invalid month: ${c.month}`);
+        roomIssues++;
+      }
+      if (!Number.isSafeInteger(c.baseAmountPaise) || c.baseAmountPaise < 0) {
+        issues.push(`[room_charges] Invalid baseAmountPaise for charge: ${c.chargeId}`);
+        roomIssues++;
+      }
+      const adjTotal = (c.adjustments || []).reduce((sum, adj) => sum + adj.amountPaise, 0);
+      if (c.baseAmountPaise + adjTotal < 0) {
+        issues.push(`[room_charges] Final bill cannot be negative for charge: ${c.chargeId}`);
+        roomIssues++;
+      }
+    }
+
+    for (const p of roomPayments) {
+      if (!isValidUuid(p.roomPaymentId)) {
+        issues.push(`[room_payments] Invalid roomPaymentId UUID: ${p.roomPaymentId}`);
+        roomIssues++;
+      }
+      if (!MEMBER_IDS.includes(p.memberId)) {
+        issues.push(`[room_payments] Invalid memberId: ${p.memberId}`);
+        roomIssues++;
+      }
+      if (!Number.isSafeInteger(p.amountPaise) || p.amountPaise <= 0) {
+        issues.push(`[room_payments] Invalid payment amountPaise for payment: ${p.roomPaymentId}`);
+        roomIssues++;
+      }
+      if (!['upi', 'cash', 'bank_transfer', 'other'].includes(p.method)) {
+        issues.push(`[room_payments] Invalid payment method for payment: ${p.roomPaymentId}`);
+        roomIssues++;
+      }
+    }
+
+    if (roomPaymentSettings.length > 1) {
+      issues.push(`[room_payment_settings] Multiple room payment settings records found: ${roomPaymentSettings.length}`);
+      roomIssues++;
+    }
+
+    const totalRoomRecords =
+      rooms.length +
+      assignments.length +
+      feePlans.length +
+      roomCharges.length +
+      roomPayments.length +
+      roomPaymentSettings.length;
+
+    checks.push({
+      name: 'Room Fees Domain',
+      recordsChecked: totalRoomRecords,
+      status: roomIssues === 0 ? 'PASS' : 'FAIL',
+      issues: roomIssues,
+    });
+  } catch (error) {
+    checks.push({ name: 'Room Fees Domain', status: 'FAIL', issues: 1, message: error.message });
+  }
+
   const overallPassed = checks.every((c) => c.status === 'PASS');
   return { passed: overallPassed, checks, issues };
 }
