@@ -1,0 +1,6 @@
+- main [ref=f6e252]:
+  - alert [ref=f6e253]:
+    - generic [ref=f6e256]:
+      - strong [ref=f6e257]: MealKhata needs a refresh
+      - paragraph [ref=f6e258]: The page could not be displayed safely. Try the page again.
+      - button "Try again" [ref=f6e259] [cursor=pointer]

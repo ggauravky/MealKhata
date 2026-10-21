@@ -38,6 +38,7 @@ import { roomRepository } from '../src/roomFees/room.repository.js';
 import { defaultExpenseRepository } from '../src/expenses/expense.repository.js';
 import { computeChargeFinancials } from '../src/roomFees/roomFee.serializer.js';
 import { createMemberAccountService } from '../src/members/memberAccount.service.js';
+import { createMemberService } from '../src/members/member.service.js';
 
 let replSet;
 
@@ -93,6 +94,49 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
     for (const key of Object.keys(collections)) {
       await collections[key].deleteMany({});
     }
+  });
+
+  describe('Existing Room Assignment compatibility', () => {
+    it('reports all three assigned residents without creating Stay or duplicate accommodation records', async () => {
+      const lower = await ensureRoom('lower', 1);
+      const firstFloor = await ensureRoom('1st Floor Room', 2);
+      const assignments = [
+        ['gaurav', lower.roomId],
+        ['nikhil', firstFloor.roomId],
+        ['devansh', firstFloor.roomId],
+      ];
+      for (const [memberId, roomId] of assignments) {
+        await roomFeeService.assignMemberToRoom({
+          memberId,
+          roomId,
+          effectiveFromMonth: '2026-10',
+          effectiveFromDate: '2026-10-20',
+          actorRole: 'admin',
+        });
+      }
+
+      const memberService = createMemberService({
+        now: () => new Date('2026-10-21T06:30:00.000Z'),
+      });
+      const roster = await memberService.listMembers();
+      const roomByMember = Object.fromEntries(roster.map((member) => [member.memberId, member.room?.roomNumber]));
+      assert.deepEqual(roomByMember, {
+        gaurav: 'lower',
+        nikhil: '1st Floor Room',
+        devansh: '1st Floor Room',
+      });
+      assert.ok(roster.every((member) => member.assignment && member.stay === null));
+
+      for (const [memberId, roomId] of assignments) {
+        const overview = await roomFeeService.getMemberOverview({ memberId, targetMonth: '2026-10' });
+        assert.equal(overview.currentRoom.roomId, roomId);
+        assert.equal(overview.currentAssignment.memberId, memberId);
+      }
+
+      assert.equal(await RoomAssignment.countDocuments({}), 3);
+      assert.equal(await HostelStay.countDocuments({}), 0);
+      assert.equal(await RoomFeePlan.countDocuments({}), 0);
+    });
   });
 
   // =========================================================================
@@ -521,6 +565,46 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
   });
 
   describe('Stay cancellation and admission correction transactions', () => {
+    it('links a pre-existing assignment and fee plan without creating duplicates', async () => {
+      const room = await ensureRoom('396', 1);
+      const assignment = await roomFeeService.assignMemberToRoom({
+        memberId: 'gaurav',
+        roomId: room.roomId,
+        effectiveFromMonth: '2026-10',
+        effectiveFromDate: '2026-10-20',
+        actorRole: 'admin',
+      });
+      const feePlan = await roomFeeService.createFeePlan({
+        memberId: 'gaurav',
+        effectiveFromMonth: '2026-10',
+        amountPaise: 280000,
+        actorRole: 'admin',
+      });
+
+      const linkedStayService = createStayService({
+        repository: stayRepository,
+        roomFees: roomFeeService,
+        now: () => new Date('2026-10-21T06:30:00.000Z'),
+      });
+      const stay = await linkedStayService.createStay({
+        memberId: 'gaurav',
+        joinedOn: '2026-10-20',
+        initialRoomId: room.roomId,
+        admissionMode: 'link_existing_assignment',
+        assignmentId: assignment.assignmentId,
+        actorRole: 'admin',
+      });
+
+      assert.equal(stay.admissionAssignmentId, assignment.assignmentId);
+      assert.equal(stay.admissionAssignmentOwned, false);
+      assert.equal(stay.admissionFeePlanId, feePlan.feePlanId);
+      assert.equal(stay.admissionFeePlanOwned, false);
+      assert.equal(await RoomAssignment.countDocuments({ memberId: 'gaurav' }), 1);
+      assert.equal(await RoomFeePlan.countDocuments({ memberId: 'gaurav' }), 1);
+      assert.equal(await HostelStay.countDocuments({ memberId: 'gaurav' }), 1);
+      assert.equal(await HostelDepositAccount.countDocuments({ stayId: stay.stayId }), 1);
+    });
+
     it('cancels an empty Stay atomically, releases capacity, and permits a valid re-admission', async () => {
       const room = await ensureRoom('399', 1);
       const erroneous = await stayService.createStay({

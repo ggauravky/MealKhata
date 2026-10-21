@@ -97,6 +97,7 @@ describe('member lifecycle frontend contracts', () => {
     assert.equal(getMyStayLifecycleState({ stay: null, currentAssignment: null }), 'empty');
     assert.equal(getMyStayLifecycleState({ stay: { status: 'ACTIVE' } }), 'active');
     assert.equal(getMyStayLifecycleState({ stay: { status: 'CHECKOUT_REQUESTED' } }), 'pending_checkout');
+    assert.equal(getMyStayLifecycleState({ stay: { status: 'CHECKOUT_PENDING' } }), 'pending_checkout');
     assert.equal(getMyStayLifecycleState({ stay: { status: 'CHECKED_OUT' } }), 'completed');
   });
 

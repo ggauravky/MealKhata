@@ -6,6 +6,7 @@ import { socket } from '../lib/socket.js';
  * Hook to fetch and listen to expenses for a specific month with optional category/status filters.
  */
 export function useExpenses(month, { category = '', status = '' } = {}) {
+  const requestKey = `${month || ''}:${category}:${status}`;
   const [state, setState] = useState({ key: null, loading: true, error: '', data: [] });
   const [version, setVersion] = useState(0);
 
@@ -24,16 +25,16 @@ export function useExpenses(month, { category = '', status = '' } = {}) {
 
     api.get(`/api/expenses?${params.toString()}`, { signal: controller.signal })
       .then((res) => {
-        setState({ key: month, loading: false, error: '', data: res.data || [] });
+        setState({ key: requestKey, loading: false, error: '', data: res.data || [] });
       })
       .catch((err) => {
         if (!controller.signal.aborted) {
-          setState({ key: month, loading: false, error: err?.message || 'Unable to load expenses.', data: [] });
+          setState({ key: requestKey, loading: false, error: err?.message || 'Unable to load expenses.', data: [] });
         }
       });
 
     return () => controller.abort();
-  }, [month, category, status, version]);
+  }, [month, category, status, requestKey, version]);
 
   useEffect(() => {
     const handleExpensesUpdated = (event) => {
@@ -54,7 +55,7 @@ export function useExpenses(month, { category = '', status = '' } = {}) {
     };
   }, [month, refresh]);
 
-  const isCurrent = state.key === month;
+  const isCurrent = state.key === requestKey;
   return {
     loading: !isCurrent || state.loading,
     error: isCurrent ? state.error : '',

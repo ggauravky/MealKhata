@@ -12,8 +12,9 @@ import {
 /**
  * Hook for Member to view their current active/pending stay and deposit summary
  */
-export function useMyStay() {
-  const [state, setState] = useState({ loading: true, error: '', data: null });
+export function useMyStay(memberId = null, { enabled = true } = {}) {
+  const requestKey = memberId || 'self';
+  const [state, setState] = useState({ key: null, loading: enabled, error: '', data: null });
   const [version, setVersion] = useState(0);
 
   const refresh = useCallback(() => {
@@ -22,18 +23,24 @@ export function useMyStay() {
   }, []);
 
   useEffect(() => {
+    if (!enabled) {
+      setState({ key: null, loading: false, error: '', data: null });
+      return undefined;
+    }
+
     const controller = new AbortController();
-    api.get('/api/stays/me', { signal: controller.signal })
+    const query = memberId ? `?memberId=${encodeURIComponent(memberId)}` : '';
+    api.get(`/api/stays/me${query}`, { signal: controller.signal })
       .then((res) => {
-        setState({ loading: false, error: '', data: parseMyStayResponse(res) });
+        setState({ key: requestKey, loading: false, error: '', data: parseMyStayResponse(res) });
       })
       .catch((err) => {
         if (!controller.signal.aborted) {
-          setState({ loading: false, error: err?.message || 'Unable to load stay information.', data: null });
+          setState({ key: requestKey, loading: false, error: err?.message || 'Unable to load stay information.', data: null });
         }
       });
     return () => controller.abort();
-  }, [version]);
+  }, [enabled, memberId, requestKey, version]);
 
   useEffect(() => {
     const handleStayUpdated = () => refresh();
@@ -63,6 +70,7 @@ export function useMyStay() {
     const preferredLeaveDate = payload.preferredLeaveDate || payload.checkoutRequestedFor;
     const reason = payload.reason || payload.checkoutRequestNote;
     const res = await api.post('/api/stays/me/checkout-request', {
+      ...(memberId ? { memberId } : {}),
       preferredLeaveDate,
       reason,
       checkoutRequestedFor: preferredLeaveDate,
@@ -76,15 +84,16 @@ export function useMyStay() {
     if (!navigator.onLine) {
       throw new Error('You are offline. Connect to the internet to cancel checkout request.');
     }
-    const res = await api.delete('/api/stays/me/checkout-request');
+    const query = memberId ? `?memberId=${encodeURIComponent(memberId)}` : '';
+    const res = await api.delete(`/api/stays/me/checkout-request${query}`);
     refresh();
     return res.data;
   };
 
   return {
-    loading: state.loading,
-    error: state.error,
-    data: state.data,
+    loading: enabled && (state.key !== requestKey || state.loading),
+    error: state.key === requestKey ? state.error : '',
+    data: state.key === requestKey ? state.data : null,
     refresh,
     requestCheckout,
     cancelCheckoutRequest,
@@ -94,8 +103,9 @@ export function useMyStay() {
 /**
  * Hook for Member to view all their stays (active and historical)
  */
-export function useMyStayHistory() {
-  const [state, setState] = useState({ loading: true, error: '', data: [] });
+export function useMyStayHistory(memberId = null, { enabled = true } = {}) {
+  const requestKey = memberId || 'self';
+  const [state, setState] = useState({ key: null, loading: enabled, error: '', data: [] });
   const [version, setVersion] = useState(0);
 
   const refresh = useCallback(() => {
@@ -104,18 +114,24 @@ export function useMyStayHistory() {
   }, []);
 
   useEffect(() => {
+    if (!enabled) {
+      setState({ key: null, loading: false, error: '', data: [] });
+      return undefined;
+    }
+
     const controller = new AbortController();
-    api.get('/api/stays/me/history', { signal: controller.signal })
+    const query = memberId ? `?memberId=${encodeURIComponent(memberId)}` : '';
+    api.get(`/api/stays/me/history${query}`, { signal: controller.signal })
       .then((res) => {
-        setState({ loading: false, error: '', data: res.data || [] });
+        setState({ key: requestKey, loading: false, error: '', data: res.data || [] });
       })
       .catch((err) => {
         if (!controller.signal.aborted) {
-          setState({ loading: false, error: err?.message || 'Unable to load stay history.', data: [] });
+          setState({ key: requestKey, loading: false, error: err?.message || 'Unable to load stay history.', data: [] });
         }
       });
     return () => controller.abort();
-  }, [version]);
+  }, [enabled, memberId, requestKey, version]);
 
   useEffect(() => {
     const handleStayUpdated = () => refresh();
@@ -124,9 +140,9 @@ export function useMyStayHistory() {
   }, [refresh]);
 
   return {
-    loading: state.loading,
-    error: state.error,
-    data: state.data,
+    loading: enabled && (state.key !== requestKey || state.loading),
+    error: state.key === requestKey ? state.error : '',
+    data: state.key === requestKey ? state.data : [],
     refresh,
   };
 }
@@ -286,6 +302,7 @@ export function useAdminStays(filter = {}) {
  */
 export function useStayDetails(stayId) {
   const [state, setState] = useState({
+    key: null,
     loading: true,
     error: '',
     stay: null,
@@ -301,8 +318,12 @@ export function useStayDetails(stayId) {
   }, []);
 
   useEffect(() => {
-    if (!stayId) return undefined;
+    if (!stayId) {
+      setState({ key: null, loading: false, error: '', stay: null, deposit: null, roomHistory: [], clearances: [] });
+      return undefined;
+    }
     const controller = new AbortController();
+    setState({ key: stayId, loading: true, error: '', stay: null, deposit: null, roomHistory: [], clearances: [] });
 
     Promise.all([
       api.get(`/api/stays/${stayId}`, { signal: controller.signal }),
@@ -312,6 +333,7 @@ export function useStayDetails(stayId) {
     ])
       .then(([stayRes, depRes, roomRes, clearRes]) => {
         setState({
+          key: stayId,
           loading: false,
           error: '',
           stay: stayRes.data,
@@ -322,11 +344,15 @@ export function useStayDetails(stayId) {
       })
       .catch((err) => {
         if (!controller.signal.aborted) {
-          setState((curr) => ({
-            ...curr,
+          setState({
+            key: stayId,
             loading: false,
             error: err?.message || 'Unable to load stay details.',
-          }));
+            stay: null,
+            deposit: null,
+            roomHistory: [],
+            clearances: [],
+          });
         }
       });
 
@@ -349,8 +375,15 @@ export function useStayDetails(stayId) {
     };
   }, [refresh]);
 
+  const isCurrent = state.key === stayId;
   return {
-    ...state,
+    key: isCurrent ? state.key : null,
+    loading: Boolean(stayId) && (!isCurrent || state.loading),
+    error: isCurrent ? state.error : '',
+    stay: isCurrent ? state.stay : null,
+    deposit: isCurrent ? state.deposit : null,
+    roomHistory: isCurrent ? state.roomHistory : [],
+    clearances: isCurrent ? state.clearances : [],
     refresh,
   };
 }
@@ -396,7 +429,7 @@ export function useStayFinancialReview(stayId) {
  * Hook to fetch lifetime summary for a stay
  */
 export function useStayLifetimeSummary(stayId) {
-  const [state, setState] = useState({ loading: true, error: '', data: null });
+  const [state, setState] = useState({ key: null, loading: true, error: '', data: null });
   const [version, setVersion] = useState(0);
 
   const refresh = useCallback(() => {
@@ -405,26 +438,31 @@ export function useStayLifetimeSummary(stayId) {
   }, []);
 
   useEffect(() => {
-    if (!stayId) return undefined;
+    if (!stayId) {
+      setState({ key: null, loading: false, error: '', data: null });
+      return undefined;
+    }
     const controller = new AbortController();
+    setState({ key: stayId, loading: true, error: '', data: null });
 
     api.get(`/api/stays/${stayId}/lifetime-summary`, { signal: controller.signal })
       .then((res) => {
-        setState({ loading: false, error: '', data: mapLifetimeSummary(res.data) });
+        setState({ key: stayId, loading: false, error: '', data: mapLifetimeSummary(res.data) });
       })
       .catch((err) => {
         if (!controller.signal.aborted) {
-          setState({ loading: false, error: err?.message || 'Unable to load lifetime summary.', data: null });
+          setState({ key: stayId, loading: false, error: err?.message || 'Unable to load lifetime summary.', data: null });
         }
       });
 
     return () => controller.abort();
   }, [stayId, version]);
 
+  const isCurrent = state.key === stayId;
   return {
-    loading: state.loading,
-    error: state.error,
-    data: state.data,
+    loading: Boolean(stayId) && (!isCurrent || state.loading),
+    error: isCurrent ? state.error : '',
+    data: isCurrent ? state.data : null,
     refresh,
   };
 }

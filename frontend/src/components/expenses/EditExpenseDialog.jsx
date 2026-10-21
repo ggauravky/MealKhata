@@ -362,7 +362,7 @@ export function EditExpenseDialog({
             <div className="space-y-2 pt-1 border-t border-slate-100 dark:border-slate-800">
               <Label className="text-xs font-semibold">Split Method *</Label>
               <div className="grid grid-cols-3 gap-2">
-                {SPLIT_TYPES.map((type) => (
+                {Object.values(SPLIT_TYPES).map((type) => (
                   <button
                     key={type}
                     type="button"
@@ -471,7 +471,7 @@ export function EditExpenseDialog({
               {preview && !previewLoading && (
                 <ExpenseSplitPreview
                   preview={preview}
-                  payerId={paidByMemberId}
+                  paidByMemberId={paidByMemberId}
                 />
               )}
             </div>

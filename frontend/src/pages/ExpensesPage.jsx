@@ -346,6 +346,17 @@ export function ExpensesPage() {
             </DialogDescription>
           </DialogHeader>
 
+          {targetExpenseForDelete?.reimbursements?.some((reimbursement) => reimbursement.status !== 'voided') ? (
+            <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+              <p className="font-semibold">Deletion blocked</p>
+              <p>
+                This purchase has recorded reimbursements. Reconcile or void the applicable reimbursement records first.
+              </p>
+              <div className="flex justify-end">
+                <Button type="button" variant="outline" size="sm" onClick={() => setDeleteExpenseOpen(false)}>Close</Button>
+              </div>
+            </div>
+          ) : (
           <form onSubmit={handleDeleteExpense} className="space-y-4">
             {deleteError && (
               <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">
@@ -370,6 +381,7 @@ export function ExpensesPage() {
               </Button>
             </DialogFooter>
           </form>
+          )}
         </DialogContent>
       </Dialog>
     </div>

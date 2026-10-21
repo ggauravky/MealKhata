@@ -123,12 +123,15 @@ describe('MealKhata 2.0 Phase 2: Other Expenses & Shared Spending (Frontend)', (
     test('both expense pages wire stable Super Admin edit and soft-delete actions', async () => {
       const memberPage = await fs.readFile(path.join(srcDir, 'pages/ExpensesPage.jsx'), 'utf8');
       const adminPage = await fs.readFile(path.join(srcDir, 'pages/AdminExpensesPage.jsx'), 'utf8');
+      const editDialog = await fs.readFile(path.join(srcDir, 'components/expenses/EditExpenseDialog.jsx'), 'utf8');
 
       assert.match(memberPage, /<EditExpenseDialog/);
       assert.match(memberPage, /onEdit=\{handleOpenEdit\}/);
       assert.match(memberPage, /onDelete=\{handleOpenDelete\}/);
       assert.match(memberPage, /\/api\/expenses\/\$\{deletedId\}\/void/);
       assert.match(adminPage, /expense=\{targetExpenseForEdit\}/);
+      assert.match(editDialog, /Object\.values\(SPLIT_TYPES\)\.map/);
+      assert.match(editDialog, /paidByMemberId=\{paidByMemberId\}/);
     });
 
     test('ExpensesPage integrates category filtering, month navigation, and empty states', async () => {

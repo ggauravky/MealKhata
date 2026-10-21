@@ -8,7 +8,7 @@ import mongoose from 'mongoose';
 import { MEMBER_IDS } from '../config/members.js';
 import { canEditDate, isValidLogicalDate, getLogicalDateInTimeZone, getPreviousLogicalDate } from '../utils/date.js';
 import { ROLES } from '../auth/permissions.js';
-import { isValidLogicalMonth } from '../utils/month.js';
+import { isValidLogicalMonth, lastDateOfMonth } from '../utils/month.js';
 import { roomFeeService } from '../roomFees/roomFee.service.js';
 import { financialOverviewService } from '../finance/financialOverview.service.js';
 import { depositService } from './deposit.service.js';
@@ -188,7 +188,7 @@ export function createStayService({
           const assignmentStart = admissionAssignment.effectiveFromDate
             || `${admissionAssignment.effectiveFromMonth}-01`;
           const assignmentEnd = admissionAssignment.effectiveUntilDate
-            || (admissionAssignment.effectiveUntilMonth ? `${admissionAssignment.effectiveUntilMonth}-31` : null);
+            || (admissionAssignment.effectiveUntilMonth ? lastDateOfMonth(admissionAssignment.effectiveUntilMonth) : null);
           if (assignmentEnd && joinedOn > assignmentEnd) {
             throw new StayDomainError('The selected Room Assignment ended before the requested joining date.', 409, {
               code: 'ASSIGNMENT_ENDED_BEFORE_STAY',
@@ -379,6 +379,36 @@ export function createStayService({
      */
     async getActiveStayForMember(memberId) {
       return repository.findActiveStayForMember(memberId);
+    },
+
+    /**
+     * Return the resident's current Stay state together with the independent
+     * Room Assignment state. A Room Assignment can legitimately exist before
+     * a Stay record is registered, so callers must not infer one from the other.
+     */
+    async getMemberStayOverview(memberId) {
+      if (!MEMBER_IDS.includes(memberId)) {
+        throw new StayDomainError(`Invalid member ID: ${memberId}`, 400);
+      }
+
+      const activeStay = await repository.findActiveStayForMember(memberId);
+      let stay = activeStay;
+      if (!stay) {
+        const stays = await repository.findStaysByMember(memberId);
+        stay = stays.find((candidate) => candidate.status !== STAY_STATUSES.CANCELLED) || null;
+      }
+
+      const accommodation = typeof roomFees?.getMemberAccommodation === 'function'
+        ? await roomFees.getMemberAccommodation(memberId)
+        : { currentRoom: null, currentAssignment: null, currentFeePlan: null };
+
+      return {
+        memberId,
+        configured: Boolean(stay),
+        isActive: Boolean(activeStay),
+        stay,
+        ...accommodation,
+      };
     },
 
     /**

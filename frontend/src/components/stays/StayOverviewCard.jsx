@@ -17,6 +17,7 @@ import { StayStatusBadge } from './StayStatusBadge.jsx';
 
 export function StayOverviewCard({
   stay,
+  currentRoom = null,
   isMember = false,
   onRequestCheckout = null,
   onCancelRequest = null,
@@ -93,7 +94,11 @@ export function StayOverviewCard({
               {isCheckedOut ? 'Actual Left Date' : 'Current Room'}
             </span>
             <span className="font-semibold text-slate-900 dark:text-slate-100 text-sm mt-0.5 block">
-              {isCheckedOut ? stay.actualLeftOn : `Room ${stay.initialRoomId || '—'}`}
+              {isCheckedOut
+                ? stay.actualLeftOn
+                : currentRoom?.roomNumber
+                  ? `Room ${currentRoom.roomNumber}`
+                  : `Room ${stay.initialRoomId || '—'}`}
             </span>
           </div>
 

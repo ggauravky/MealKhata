@@ -10,8 +10,9 @@ import {
   broadcastStayUpdated,
   broadcastDepositUpdated,
   broadcastClearanceUpdated,
+  broadcastRoomFeesUpdated,
 } from '../socket.js';
-import { DEPOSIT_TRANSACTION_TYPES, STAY_STATUSES } from '../stays/stay.constants.js';
+import { DEPOSIT_TRANSACTION_TYPES } from '../stays/stay.constants.js';
 
 export function createStayRouter({
   service = stayService,
@@ -21,6 +22,7 @@ export function createStayRouter({
   broadcastStay = broadcastStayUpdated,
   broadcastDeposit = broadcastDepositUpdated,
   broadcastClearance = broadcastClearanceUpdated,
+  broadcastRoomFees = broadcastRoomFeesUpdated,
 } = {}) {
   const router = Router();
 
@@ -49,6 +51,26 @@ export function createStayRouter({
     }
   }
 
+  function notifyAccommodationChange(payload = {}) {
+    try {
+      broadcastRoomFees(payload);
+    } catch {
+      // broadcast failure does not reject HTTP response
+    }
+  }
+
+  function resolvePersonalMemberId(req, { body = false } = {}) {
+    if (req.auth.role === ROLES.MEMBER) {
+      return req.auth.memberId;
+    }
+
+    const selectedMemberId = (body ? req.body?.memberId : null) || req.query.memberId;
+    if (!selectedMemberId) {
+      return null;
+    }
+    return selectedMemberId;
+  }
+
   // Middleware to ensure a member can only access their own stay
   async function assertStayAccess(req, res, next) {
     try {
@@ -75,33 +97,28 @@ export function createStayRouter({
 
   router.get('/me', requireAuthenticated, async (req, res, next) => {
     try {
-      let targetMemberId = req.auth.memberId;
+      const targetMemberId = resolvePersonalMemberId(req);
       if (!targetMemberId && (req.auth.role === ROLES.ADMIN || req.auth.role === ROLES.SUPERADMIN)) {
-        targetMemberId = req.query.memberId || MEMBER_IDS[0];
+        return res.status(400).json({
+          success: false,
+          message: 'Select a member to preview My Stay.',
+        });
       }
 
       if (!targetMemberId || !MEMBER_IDS.includes(targetMemberId)) {
         return res.status(403).json({ success: false, message: 'Valid member identity required.' });
       }
 
-      const activeStay = await service.getActiveStayForMember(targetMemberId);
-      if (!activeStay) {
-        // Return latest completed stay or null if never configured
-        const stays = await service.listStaysForMember(targetMemberId);
-        const latest = stays.find((stay) => stay.status !== STAY_STATUSES.CANCELLED) || null;
-        return res.json({
-          success: true,
-          configured: Boolean(latest),
-          isActive: false,
-          data: latest,
-        });
-      }
-
+      const overview = await service.getMemberStayOverview(targetMemberId);
       return res.json({
         success: true,
-        configured: true,
-        isActive: true,
-        data: activeStay,
+        memberId: overview.memberId,
+        configured: overview.configured,
+        isActive: overview.isActive,
+        data: overview.stay,
+        currentAssignment: overview.currentAssignment,
+        currentRoom: overview.currentRoom,
+        currentFeePlan: overview.currentFeePlan,
       });
     } catch (error) {
       return next(error);
@@ -110,9 +127,12 @@ export function createStayRouter({
 
   router.get('/me/history', requireAuthenticated, async (req, res, next) => {
     try {
-      let targetMemberId = req.auth.memberId;
+      const targetMemberId = resolvePersonalMemberId(req);
       if (!targetMemberId && (req.auth.role === ROLES.ADMIN || req.auth.role === ROLES.SUPERADMIN)) {
-        targetMemberId = req.query.memberId || MEMBER_IDS[0];
+        return res.status(400).json({
+          success: false,
+          message: 'Select a member to preview stay history.',
+        });
       }
 
       if (!targetMemberId || !MEMBER_IDS.includes(targetMemberId)) {
@@ -128,9 +148,9 @@ export function createStayRouter({
 
   router.post('/me/checkout-request', requireAuthenticated, async (req, res, next) => {
     try {
-      let targetMemberId = req.auth.memberId;
+      const targetMemberId = resolvePersonalMemberId(req, { body: true });
       if (!targetMemberId && (req.auth.role === ROLES.ADMIN || req.auth.role === ROLES.SUPERADMIN)) {
-        targetMemberId = req.body?.memberId || req.query.memberId || MEMBER_IDS[0];
+        return res.status(400).json({ success: false, message: 'Select a member before requesting checkout.' });
       }
 
       if (!targetMemberId || !MEMBER_IDS.includes(targetMemberId)) {
@@ -161,9 +181,9 @@ export function createStayRouter({
 
   router.delete('/me/checkout-request', requireAuthenticated, async (req, res, next) => {
     try {
-      let targetMemberId = req.auth.memberId;
+      const targetMemberId = resolvePersonalMemberId(req);
       if (!targetMemberId && (req.auth.role === ROLES.ADMIN || req.auth.role === ROLES.SUPERADMIN)) {
-        targetMemberId = req.query.memberId || MEMBER_IDS[0];
+        return res.status(400).json({ success: false, message: 'Select a member before cancelling checkout.' });
       }
 
       if (!targetMemberId || !MEMBER_IDS.includes(targetMemberId)) {
@@ -191,9 +211,9 @@ export function createStayRouter({
 
   router.get('/me/lifetime-summary', requireAuthenticated, async (req, res, next) => {
     try {
-      let targetMemberId = req.auth.memberId;
+      const targetMemberId = resolvePersonalMemberId(req);
       if (!targetMemberId && (req.auth.role === ROLES.ADMIN || req.auth.role === ROLES.SUPERADMIN)) {
-        targetMemberId = req.query.memberId || MEMBER_IDS[0];
+        return res.status(400).json({ success: false, message: 'Select a member to view the lifetime summary.' });
       }
 
       const activeStay = await service.getActiveStayForMember(targetMemberId);
@@ -216,9 +236,9 @@ export function createStayRouter({
 
   router.get('/me/lifetime-statement.pdf', requireAuthenticated, async (req, res, next) => {
     try {
-      let targetMemberId = req.auth.memberId;
+      const targetMemberId = resolvePersonalMemberId(req);
       if (!targetMemberId && (req.auth.role === ROLES.ADMIN || req.auth.role === ROLES.SUPERADMIN)) {
-        targetMemberId = req.query.memberId || MEMBER_IDS[0];
+        return res.status(400).json({ success: false, message: 'Select a member to view the lifetime statement.' });
       }
 
       const activeStay = await service.getActiveStayForMember(targetMemberId);
@@ -288,6 +308,7 @@ export function createStayRouter({
 
       notifyStayChange();
       notifyDepositChange();
+      notifyAccommodationChange({ memberId: newStay.memberId });
       return res.status(201).json({ success: true, data: newStay });
     } catch (error) {
       return next(error);
@@ -394,6 +415,7 @@ export function createStayRouter({
       });
       notifyStayChange();
       notifyDepositChange();
+      notifyAccommodationChange({ memberId: cancelled.memberId });
       return res.json({ success: true, data: cancelled });
     } catch (error) {
       return next(error);
@@ -411,6 +433,7 @@ export function createStayRouter({
         actorRole: req.auth.role,
       });
       notifyStayChange();
+      notifyAccommodationChange({ memberId: corrected.memberId });
       return res.json({ success: true, data: corrected });
     } catch (error) {
       return next(error);
@@ -431,6 +454,7 @@ export function createStayRouter({
       });
 
       notifyStayChange();
+      notifyAccommodationChange({ memberId: updated.memberId });
       return res.json({ success: true, data: updated });
     } catch (error) {
       return next(error);

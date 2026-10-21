@@ -1299,6 +1299,29 @@ export function createRoomFeeService({
     },
 
     // --- Member-Specific Data Queries ---
+    async getMemberAccommodation(memberId, targetDate = null) {
+      if (!MEMBER_IDS.includes(memberId)) {
+        throw new HttpError(400, 'Invalid member ID.');
+      }
+
+      const date = targetDate || getLogicalDateInTimeZone(now(), timezone);
+      if (!isValidLogicalDate(date)) {
+        throw new HttpError(400, 'Invalid accommodation date.');
+      }
+
+      const assignment = await repository.findAssignmentOnDate(memberId, date);
+      const room = assignment ? await repository.findRoomById(assignment.roomId) : null;
+      const feePlan = await repository.findActiveFeePlan(memberId, date.slice(0, 7));
+
+      return {
+        currentRoom: room ? serializeRoom(room) : null,
+        currentAssignment: assignment
+          ? serializeRoomAssignment(assignment, new Map([[room?.roomId, room]]))
+          : null,
+        currentFeePlan: feePlan ? serializeFeePlan(feePlan) : null,
+      };
+    },
+
     async getMemberOverview({ memberId, targetMonth = null }) {
       if (!MEMBER_IDS.includes(memberId)) {
         throw new HttpError(400, 'Invalid member ID.');

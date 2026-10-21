@@ -1,0 +1,81 @@
+- generic [ref=f9e28]:
+  - banner [ref=f9e29]:
+    - generic [ref=f9e30]:
+      - link "MealKhata home" [ref=f9e31] [cursor=pointer]:
+        - /url: /
+        - generic [ref=f9e40]:
+          - generic [ref=f9e41]: MealKhata
+          - generic [ref=f9e42]: Meals tracked. Bills sorted.
+      - generic [ref=f9e43]:
+        - navigation "Primary navigation" [ref=f9e44]:
+          - link "Home" [ref=f9e45] [cursor=pointer]:
+            - /url: /
+          - link "Mess" [ref=f9e46] [cursor=pointer]:
+            - /url: /calendar
+          - link "Room Fees" [ref=f9e47] [cursor=pointer]:
+            - /url: /room-fees
+          - link "Expenses" [ref=f9e48] [cursor=pointer]:
+            - /url: /expenses
+          - link "Payments" [ref=f9e49] [cursor=pointer]:
+            - /url: /payments
+          - link "Reports" [ref=f9e50] [cursor=pointer]:
+            - /url: /reports
+        - generic "Account actions" [ref=f9e51]:
+          - button "Toggle theme" [ref=f9e52] [cursor=pointer]
+          - button "Super Admin" [ref=f9e59] [cursor=pointer]:
+            - generic [aria-hidden] [ref=f9e60]: S
+  - main [ref=f9e64]:
+    - generic [ref=f9e65]:
+      - generic [ref=f9e66]:
+        - generic [ref=f9e67]:
+          - heading "Other Expenses" [level=1] [ref=f9e69]
+          - paragraph [ref=f9e70]: Shared groceries, snacks, outside food, and roommate reimbursements.
+        - generic [ref=f9e71]:
+          - button "Add Expense" [ref=f9e72] [cursor=pointer]
+          - link "Manage" [ref=f9e75] [cursor=pointer]:
+            - /url: /admin/expenses
+      - generic [ref=f9e81]:
+        - generic [ref=f9e82]:
+          - heading "October 2026" [level=2] [ref=f9e83]
+          - text: Household shared spending ledger
+        - generic [ref=f9e84]:
+          - button "Previous month" [ref=f9e85] [cursor=pointer]
+          - button "Current" [ref=f9e88] [cursor=pointer]
+          - button "Next month" [ref=f9e89] [cursor=pointer]
+          - textbox "Jump to month" [ref=f9e92] [cursor=pointer]: 2026-10
+      - generic [ref=f9e93]:
+        - generic [ref=f9e95]:
+          - generic [ref=f9e96]:
+            - text: Hostel Shared Spending
+            - heading "October 2026" [level=2] [ref=f9e97]
+          - generic [ref=f9e98]:
+            - text: Total Purchases
+            - paragraph [ref=f9e99]: ₹0
+        - generic [ref=f9e100]:
+          - generic [ref=f9e101]:
+            - generic [ref=f9e102]: Recorded Purchases
+            - paragraph [ref=f9e106]: 0 items
+          - generic [ref=f9e107]:
+            - generic [ref=f9e108]: Pending Reimbursements
+            - paragraph [ref=f9e112]: ₹0
+          - generic [ref=f9e113]:
+            - generic [ref=f9e114]: Settled Repayments
+            - paragraph [ref=f9e118]: ₹0
+      - generic [ref=f9e119]:
+        - generic [ref=f9e120]: Filter by category
+        - generic [ref=f9e122]:
+          - button "All" [ref=f9e123] [cursor=pointer]
+          - button "Groceries" [ref=f9e129] [cursor=pointer]
+          - button "Snacks & Tea" [ref=f9e137] [cursor=pointer]
+          - button "Outside Food" [ref=f9e141] [cursor=pointer]
+          - button "Household Supplies" [ref=f9e149] [cursor=pointer]
+          - button "Utilities" [ref=f9e156] [cursor=pointer]
+          - button "Other" [ref=f9e161] [cursor=pointer]
+      - generic [ref=f9e166]:
+        - generic [ref=f9e167]:
+          - heading "Recent Purchases" [level=3] [ref=f9e168]
+          - generic [ref=f9e172]: 0 items
+        - generic [ref=f9e173]:
+          - heading "No expenses recorded yet" [level=3] [ref=f9e178]
+          - paragraph [ref=f9e179]: Groceries, snacks and other purchases will appear here when an Admin records them.
+          - button "Add Expense" [ref=f9e180] [cursor=pointer]

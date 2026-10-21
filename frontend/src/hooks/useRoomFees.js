@@ -61,7 +61,7 @@ export function useMyRoomFees(month, memberId = null) {
  * Hook for a Member to view their month-wise history of issued room fees
  */
 export function useMyRoomFeeHistory(memberId = null) {
-  const [state, setState] = useState({ loading: true, error: '', data: null });
+  const [state, setState] = useState({ key: null, loading: true, error: '', data: null });
   const [version, setVersion] = useState(0);
 
   const refresh = useCallback(() => {
@@ -71,12 +71,13 @@ export function useMyRoomFeeHistory(memberId = null) {
 
   useEffect(() => {
     const controller = new AbortController();
+    const key = memberId || 'self';
     const query = memberId ? `?memberId=${encodeURIComponent(memberId)}` : '';
     api.get(`/api/room-fees/me/history${query}`, { signal: controller.signal })
-      .then((res) => setState({ loading: false, error: '', data: res.data }))
+      .then((res) => setState({ key, loading: false, error: '', data: res.data }))
       .catch((err) => {
         if (!controller.signal.aborted) {
-          setState({ loading: false, error: err?.message || 'Unable to load history.', data: null });
+          setState({ key, loading: false, error: err?.message || 'Unable to load history.', data: null });
         }
       });
     return () => controller.abort();
@@ -88,7 +89,13 @@ export function useMyRoomFeeHistory(memberId = null) {
     return () => socket.off('room-fees:updated', handleRoomFees);
   }, [refresh]);
 
-  return { loading: state.loading, error: state.error, data: state.data, refresh };
+  const isCurrent = state.key === (memberId || 'self');
+  return {
+    loading: !isCurrent || state.loading,
+    error: isCurrent ? state.error : '',
+    data: isCurrent ? state.data : null,
+    refresh,
+  };
 }
 
 /**
