@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
 import {
+  mapCheckoutReview,
   mapDepositSummary,
   mapLifetimeSummary,
+  mapRoomHistory,
   parseMyStayResponse,
 } from '../src/lib/stayContracts.js';
 import {
@@ -120,6 +122,59 @@ describe('member lifecycle frontend contracts', () => {
       depositHeldPaise: 85000,
       transactions: [{ depositTransactionId: 'dep-1' }],
     });
+  });
+
+  test('maps the room-history envelope to the timeline component contract', () => {
+    assert.deepEqual(mapRoomHistory({
+      stayId: 'stay-1',
+      timeline: [{
+        assignmentId: 'assignment-1',
+        roomId: 'room-204',
+        roomNumber: '204',
+        effectiveFromDate: '2026-09-15',
+        effectiveUntilDate: null,
+        monthlyRatePaise: 280000,
+      }],
+    }), [{
+      assignmentId: 'assignment-1',
+      roomId: 'room-204',
+      roomNumber: '204',
+      startMonth: '2026-09',
+      endMonth: null,
+      monthlyRentPaise: 280000,
+      occupancy: null,
+      reason: null,
+      isCurrent: true,
+    }]);
+  });
+
+  test('maps checkout review balances and preserves attribution blockers', () => {
+    const mapped = mapCheckoutReview({
+      financialOverview: {
+        mess: { billPaise: 45000, paidPaise: 40000, remainingPaise: 5000 },
+        room: { issuedChargePaise: 280000, paidPaise: 140000, remainingPaise: 140000 },
+        expenses: { spendingSharePaise: 10000, owedToOthersPaise: 3000, owedToMePaise: 2000 },
+      },
+      totalMessBilledPaise: 90000,
+      totalMessPaidPaise: 85000,
+      totalMessRemainingPaise: 5000,
+      totalRoomBilledPaise: 560000,
+      totalRoomPaidPaise: 420000,
+      totalRoomRemainingPaise: 140000,
+      totalExpenseSharePaise: 25000,
+      totalExpenseOwedPaise: 3000,
+      totalExpenseReceivablePaise: 2000,
+      attributionWarnings: [{ domain: 'MESS', month: '2026-07', message: 'Manual review required.' }],
+      isAttributionComplete: false,
+      isEligibleForNoDues: false,
+    });
+
+    assert.equal(mapped.messSummary.totalBilledPaise, 90000);
+    assert.equal(mapped.roomFeeSummary.outstandingPaise, 140000);
+    assert.equal(mapped.expenseSummary.reimbursementsOwedPaise, 3000);
+    assert.equal(mapped.attributionWarnings.length, 1);
+    assert.equal(mapped.isAttributionComplete, false);
+    assert.equal(mapped.isEligibleForNoDues, false);
   });
 });
 

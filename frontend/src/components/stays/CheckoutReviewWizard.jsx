@@ -43,10 +43,13 @@ export function CheckoutReviewWizard({
   const expenseOwedPaise = financialReview?.expenseSummary?.reimbursementsOwedPaise || 0;
   const expenseReceivablePaise = financialReview?.expenseSummary?.reimbursementsReceivablePaise || 0;
   const depositHeldPaise = depositSummary?.depositHeldPaise || 0;
+  const attributionWarnings = financialReview?.attributionWarnings || [];
+  const hasAttributionWarnings = attributionWarnings.length > 0;
 
   const totalOwedPaise = messDuePaise + roomDuePaise + expenseOwedPaise;
   const hasUnresolvedObligations = totalOwedPaise > 0 || depositHeldPaise > 0;
-  const isEligibleForNoDues = !hasUnresolvedObligations;
+  const requiresException = hasUnresolvedObligations || hasAttributionWarnings;
+  const isEligibleForNoDues = financialReview?.isEligibleForNoDues === true && !requiresException;
 
   const handleFinalize = async () => {
     setError('');
@@ -55,24 +58,24 @@ export function CheckoutReviewWizard({
       return;
     }
 
-    if (hasUnresolvedObligations && !allowWithDues) {
-      setError('Member has outstanding dues or held deposit. A No-Dues clearance cannot be granted.');
+    if (requiresException && !allowWithDues) {
+      setError('Outstanding obligations or incomplete financial attribution prevent a No-Dues clearance.');
       return;
     }
 
-    if (hasUnresolvedObligations && allowWithDues && !isSuperAdmin) {
-      setError('Only a Super Admin can approve departure with outstanding obligations.');
+    if (requiresException && allowWithDues && !isSuperAdmin) {
+      setError('Only a Super Admin can approve an exceptional departure.');
       return;
     }
 
-    if (hasUnresolvedObligations && allowWithDues && !exceptionReason.trim()) {
-      setError('Mandatory exception reason is required for departure with outstanding dues.');
+    if (requiresException && allowWithDues && !exceptionReason.trim()) {
+      setError('Mandatory exception reason is required for an exceptional departure.');
       return;
     }
 
     setSubmitting(true);
     try {
-      const isException = hasUnresolvedObligations ? allowWithDues : false;
+      const isException = requiresException ? allowWithDues : false;
       await onFinalize({
         actualLeftOn,
         isException,
@@ -322,13 +325,18 @@ export function CheckoutReviewWizard({
               <div className="p-4 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/60 text-rose-900 dark:text-rose-200 text-xs space-y-3">
                 <div className="flex items-center gap-2 font-semibold text-sm text-rose-700 dark:text-rose-300">
                   <AlertTriangle className="h-5 w-5 text-rose-600" />
-                  Unresolved Obligations Remain (Cannot Issue No-Dues Clearance)
+                  No-Dues Clearance Requires Review
                 </div>
                 <ul className="list-disc pl-5 space-y-1 text-rose-800 dark:text-rose-300">
                   {messDuePaise > 0 && <li>Mess outstanding dues: {formatPaise(messDuePaise)}</li>}
                   {roomDuePaise > 0 && <li>Room fees outstanding dues: {formatPaise(roomDuePaise)}</li>}
                   {expenseOwedPaise > 0 && <li>Expense reimbursements owed: {formatPaise(expenseOwedPaise)}</li>}
                   {depositHeldPaise > 0 && <li>Deposit held balance: {formatPaise(depositHeldPaise)}</li>}
+                  {attributionWarnings.map((warning, index) => (
+                    <li key={`${warning.domain}-${warning.month || 'unknown'}-${index}`}>
+                      {warning.domain}{warning.month ? ` (${warning.month})` : ''}: {warning.message}
+                    </li>
+                  ))}
                 </ul>
 
                 {isSuperAdmin ? (
@@ -340,7 +348,7 @@ export function CheckoutReviewWizard({
                         onChange={(e) => setAllowWithDues(e.target.checked)}
                         className="mt-0.5 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
                       />
-                      <span>Super Admin Exception: Finalize physical departure with outstanding dues</span>
+                      <span>Super Admin Exception: Finalize physical departure with outstanding dues or incomplete attribution</span>
                     </label>
 
                     {allowWithDues && (
@@ -357,14 +365,14 @@ export function CheckoutReviewWizard({
                           required
                         />
                         <p className="text-[11px] text-slate-500">
-                          Status will be recorded as CHECKED_OUT with clearance OUTSTANDING_DUES. Debts are not erased.
+                          Status will be recorded as CHECKED_OUT with clearance OUTSTANDING_DUES. Debts and attribution warnings are not erased.
                         </p>
                       </div>
                     )}
                   </div>
                 ) : (
                   <p className="text-xs text-rose-700 dark:text-rose-400 font-medium">
-                    Only a Super Admin can approve exceptional departure while obligations remain unresolved.
+                    Only a Super Admin can approve exceptional departure while obligations or attribution warnings remain unresolved.
                   </p>
                 )}
               </div>
@@ -399,15 +407,15 @@ export function CheckoutReviewWizard({
               type="button"
               size="sm"
               onClick={handleFinalize}
-              disabled={submitting || (hasUnresolvedObligations && (!allowWithDues || !exceptionReason.trim()))}
+              disabled={submitting || (requiresException && (!allowWithDues || !exceptionReason.trim()))}
               className={`text-xs text-white ${
-                hasUnresolvedObligations ? 'bg-rose-600 hover:bg-rose-700' : 'bg-teal-600 hover:bg-teal-700'
+                requiresException ? 'bg-rose-600 hover:bg-rose-700' : 'bg-teal-600 hover:bg-teal-700'
               }`}
             >
               {submitting
                 ? 'Finalizing...'
-                : hasUnresolvedObligations
-                ? 'Finalize Departure with Dues'
+                : requiresException
+                ? 'Finalize Exceptional Departure'
                 : 'Finalize No-Dues Checkout'}
             </Button>
           )}

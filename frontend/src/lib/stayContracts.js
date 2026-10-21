@@ -33,6 +33,29 @@ export function mapDepositSummary(payload) {
   };
 }
 
+export function mapRoomHistory(payload) {
+  const history = asObject(payload);
+  const rows = Array.isArray(payload) ? payload : asArray(history.timeline);
+
+  return rows.map((item) => {
+    const row = asObject(item);
+    const roomNumber = row.roomNumber ?? row.room?.roomNumber ?? row.roomId ?? 'Unknown';
+    const startMonth = row.startMonth ?? row.effectiveFromMonth ?? row.effectiveFromDate?.slice(0, 7) ?? null;
+    const endMonth = row.endMonth ?? row.effectiveUntilMonth ?? row.effectiveUntilDate?.slice(0, 7) ?? null;
+    return {
+      assignmentId: row.assignmentId ?? null,
+      roomId: row.roomId ?? null,
+      roomNumber,
+      startMonth,
+      endMonth,
+      monthlyRentPaise: row.monthlyRentPaise ?? row.monthlyRatePaise ?? 0,
+      occupancy: row.occupancy ?? null,
+      reason: row.reason ?? null,
+      isCurrent: row.isCurrent ?? !endMonth,
+    };
+  });
+}
+
 export function mapLifetimeSummary(payload) {
   const report = asObject(payload);
   const totals = asObject(report.lifetimeTotals);
@@ -79,5 +102,41 @@ export function mapLifetimeSummary(payload) {
       expenseSharePaise: item?.expenses?.spendingSharePaise ?? 0,
       expenseOwedPaise: item?.expenses?.owedToOthersPaise ?? 0,
     })),
+  };
+}
+
+export function mapCheckoutReview(payload) {
+  const review = asObject(payload);
+  const overview = asObject(review.financialOverview);
+  const mess = asObject(overview.mess);
+  const room = asObject(overview.room);
+  const expenses = asObject(overview.expenses);
+  const warnings = asArray(review.attributionWarnings).map((warning) => ({
+    domain: warning?.domain || 'UNKNOWN',
+    month: warning?.month || null,
+    message: warning?.message || 'This financial period requires manual review.',
+  }));
+
+  return {
+    messSummary: {
+      totalBilledPaise: review.totalMessBilledPaise ?? mess.billPaise ?? 0,
+      totalPaidPaise: review.totalMessPaidPaise ?? mess.paidPaise ?? 0,
+      outstandingPaise: review.totalMessRemainingPaise ?? mess.remainingPaise ?? 0,
+    },
+    roomFeeSummary: {
+      totalIssuedPaise: review.totalRoomBilledPaise ?? room.issuedChargePaise ?? 0,
+      totalPaidPaise: review.totalRoomPaidPaise ?? room.paidPaise ?? 0,
+      outstandingPaise: review.totalRoomRemainingPaise ?? room.remainingPaise ?? 0,
+    },
+    expenseSummary: {
+      totalSharePaise: review.totalExpenseSharePaise ?? expenses.spendingSharePaise ?? 0,
+      reimbursementsOwedPaise: review.totalExpenseOwedPaise ?? expenses.owedToOthersPaise ?? 0,
+      reimbursementsReceivablePaise:
+        review.totalExpenseReceivablePaise ?? expenses.owedToMePaise ?? 0,
+    },
+    deposit: mapDepositSummary(review.depositOverview),
+    attributionWarnings: warnings,
+    isAttributionComplete: review.isAttributionComplete !== false && warnings.length === 0,
+    isEligibleForNoDues: review.isEligibleForNoDues === true,
   };
 }

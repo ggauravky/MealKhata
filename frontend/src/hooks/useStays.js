@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
 import { socket } from '../lib/socket.js';
-import { mapDepositSummary, mapLifetimeSummary, parseMyStayResponse } from '../lib/stayContracts.js';
+import {
+  mapCheckoutReview,
+  mapDepositSummary,
+  mapLifetimeSummary,
+  mapRoomHistory,
+  parseMyStayResponse,
+} from '../lib/stayContracts.js';
 
 /**
  * Hook for Member to view their current active/pending stay and deposit summary
@@ -310,7 +316,7 @@ export function useStayDetails(stayId) {
           error: '',
           stay: stayRes.data,
           deposit: mapDepositSummary(depRes.data),
-          roomHistory: roomRes.data || [],
+          roomHistory: mapRoomHistory(roomRes.data),
           clearances: clearRes.data || [],
         });
       })
@@ -367,7 +373,7 @@ export function useStayFinancialReview(stayId) {
 
     api.get(`/api/stays/${stayId}/financial-review`, { signal: controller.signal })
       .then((res) => {
-        setState({ loading: false, error: '', data: mapLifetimeSummary(res.data) });
+        setState({ loading: false, error: '', data: mapCheckoutReview(res.data) });
       })
       .catch((err) => {
         if (!controller.signal.aborted) {
@@ -404,7 +410,7 @@ export function useStayLifetimeSummary(stayId) {
 
     api.get(`/api/stays/${stayId}/lifetime-summary`, { signal: controller.signal })
       .then((res) => {
-        setState({ loading: false, error: '', data: res.data });
+        setState({ loading: false, error: '', data: mapLifetimeSummary(res.data) });
       })
       .catch((err) => {
         if (!controller.signal.aborted) {

@@ -884,6 +884,8 @@ export function createStayService({
         outstandingObligations: attr.outstandingObligations,
         totalOutstandingPayablePaise: attr.totalOutstandingPayablePaise,
         depositHeldPaise: attr.depositHeldPaise,
+        attributionWarnings: attr.attributionWarnings || [],
+        isAttributionComplete: attr.isAttributionComplete !== false,
         isEligibleForNoDues: attr.isEligibleForNoDues,
       };
     },
