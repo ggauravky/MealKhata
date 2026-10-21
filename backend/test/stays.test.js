@@ -207,6 +207,147 @@ describe('MealKhata 2.0 — Phase 4: Complete Hostel Lifecycle, Security Deposit
       assert.equal(depRes.body.data.summary.heldPaise, 0);
     });
 
+    test('links an existing assignment and fee plan without creating duplicates', async () => {
+      const assignment = await roomFeesService.assignMemberToRoom({
+        memberId: 'gaurav',
+        roomId: room204Id,
+        effectiveFromMonth: '2026-10',
+        effectiveFromDate: '2026-10-20',
+        actorRole: ROLES.ADMIN,
+      });
+      const feePlan = await roomFeesService.createFeePlan({
+        memberId: 'gaurav',
+        effectiveFromMonth: '2026-10',
+        amountPaise: 280000,
+        actorRole: ROLES.ADMIN,
+      });
+
+      const stay = await staysService.createStay({
+        memberId: 'gaurav',
+        joinedOn: '2026-10-20',
+        initialRoomId: room204Id,
+        admissionMode: 'link_existing_assignment',
+        assignmentId: assignment.assignmentId,
+        actorRole: ROLES.ADMIN,
+      });
+
+      assert.equal(stay.admissionAssignmentId, assignment.assignmentId);
+      assert.equal(stay.admissionAssignmentOwned, false);
+      assert.equal(stay.admissionFeePlanId, feePlan.feePlanId);
+      assert.equal(stay.admissionFeePlanOwned, false);
+      assert.equal((await roomRepository.findAssignmentsForMember('gaurav')).length, 1);
+      assert.equal((await roomRepository.findFeePlansForMember('gaurav')).length, 1);
+      assert.ok(await stayRepository.findDepositAccountByStayId(stay.stayId));
+
+      await assert.rejects(
+        staysService.createStay({
+          memberId: 'gaurav',
+          joinedOn: '2026-10-20',
+          initialRoomId: room204Id,
+          admissionMode: 'link_existing_assignment',
+          assignmentId: assignment.assignmentId,
+          actorRole: ROLES.ADMIN,
+        }),
+        (error) => error.statusCode === 409 && error.details.activeStayId === stay.stayId,
+      );
+    });
+
+    test('requires explicit Super Admin acknowledgement for a Stay predating its linked assignment', async () => {
+      const assignment = await roomFeesService.assignMemberToRoom({
+        memberId: 'nikhil',
+        roomId: room204Id,
+        effectiveFromMonth: '2026-10',
+        effectiveFromDate: '2026-10-20',
+        actorRole: ROLES.ADMIN,
+      });
+
+      await assert.rejects(
+        staysService.createStay({
+          memberId: 'nikhil',
+          joinedOn: '2026-09-01',
+          initialRoomId: room204Id,
+          admissionMode: 'link_existing_assignment',
+          assignmentId: assignment.assignmentId,
+          actorRole: ROLES.SUPERADMIN,
+          historicalReason: 'Imported verified admission record',
+        }),
+        (error) => error.statusCode === 409 && error.details.code === 'ASSIGNMENT_STARTS_AFTER_STAY',
+      );
+
+      const stay = await staysService.createStay({
+        memberId: 'nikhil',
+        joinedOn: '2026-09-01',
+        initialRoomId: room204Id,
+        admissionMode: 'link_existing_assignment',
+        assignmentId: assignment.assignmentId,
+        allowUnverifiedPreAssignmentPeriod: true,
+        actorRole: ROLES.SUPERADMIN,
+        historicalReason: 'Imported verified admission record',
+      });
+
+      assert.equal(stay.joinedOn, '2026-09-01');
+      assert.equal(stay.admissionAssignmentId, assignment.assignmentId);
+      assert.equal((await roomRepository.findAssignmentById(assignment.assignmentId)).effectiveFromDate, '2026-10-20');
+      assert.equal(stay.history[0].details.unverifiedOccupancyUntil, '2026-10-19');
+    });
+
+    test('cancelling a linked Stay preserves the pre-existing assignment and fee plan', async () => {
+      const emptyAttribution = {
+        async getStayAttributedFinances() {
+          return {
+            totalMessBilledPaise: 0,
+            totalMessPaidPaise: 0,
+            totalRoomBilledPaise: 0,
+            totalRoomPaidPaise: 0,
+            totalExpenseSharePaise: 0,
+            totalExpenseOwedPaise: 0,
+            totalExpenseReceivablePaise: 0,
+            depositOverview: { transactions: [] },
+            attributionWarnings: [],
+          };
+        },
+      };
+      const linkedStayService = createStayService({
+        repository: stayRepository,
+        roomFees: roomFeesService,
+        finance: mockFinanceService,
+        deposits: depositsService,
+        stayAttribution: emptyAttribution,
+      });
+      const assignment = await roomFeesService.assignMemberToRoom({
+        memberId: 'devansh',
+        roomId: room204Id,
+        effectiveFromMonth: '2026-10',
+        effectiveFromDate: '2026-10-20',
+        actorRole: ROLES.ADMIN,
+      });
+      const feePlan = await roomFeesService.createFeePlan({
+        memberId: 'devansh',
+        effectiveFromMonth: '2026-10',
+        amountPaise: 260000,
+        actorRole: ROLES.ADMIN,
+      });
+      const stay = await linkedStayService.createStay({
+        memberId: 'devansh',
+        joinedOn: '2026-10-20',
+        initialRoomId: room204Id,
+        admissionMode: 'link_existing_assignment',
+        assignmentId: assignment.assignmentId,
+        actorRole: ROLES.SUPERADMIN,
+      });
+
+      const cancelled = await linkedStayService.cancelIncorrectStay({
+        stayId: stay.stayId,
+        reason: 'Stay registration was entered against the wrong admission document',
+        expectedRevision: stay.revision,
+        actorRole: ROLES.SUPERADMIN,
+      });
+
+      assert.equal(cancelled.status, STAY_STATUSES.CANCELLED);
+      assert.equal((await roomRepository.findAssignmentById(assignment.assignmentId)).cancelledAt, undefined);
+      assert.equal((await roomRepository.findFeePlanById(feePlan.feePlanId)).supersededAt, null);
+    });
+
     test('Rejects invalid memberId and invalid joining date format', async () => {
       const res1 = await request(testApp)
         .post('/api/stays')
@@ -231,6 +372,43 @@ describe('MealKhata 2.0 — Phase 4: Complete Hostel Lifecycle, Security Deposit
         });
 
       assert.equal(res2.status, 400);
+    });
+
+    test('My Stay reports a current Room Assignment even when no Stay is registered', async () => {
+      const assignment = await roomFeesService.assignMemberToRoom({
+        memberId: 'gaurav',
+        roomId: room204Id,
+        effectiveFromMonth: '2026-10',
+        effectiveFromDate: '2026-10-20',
+        actorRole: ROLES.ADMIN,
+      });
+
+      const response = await request(testApp)
+        .get('/api/stays/me')
+        .set('Origin', ORIGIN)
+        .set('Cookie', await cookieFor(ROLES.MEMBER, 'gaurav'));
+
+      assert.equal(response.status, 200);
+      assert.equal(response.body.configured, false);
+      assert.equal(response.body.data, null);
+      assert.equal(response.body.currentAssignment.assignmentId, assignment.assignmentId);
+      assert.equal(response.body.currentRoom.roomNumber, '204');
+    });
+
+    test('Admin My Stay preview requires an explicit member selection', async () => {
+      await request(testApp)
+        .get('/api/stays/me')
+        .set('Origin', ORIGIN)
+        .set('Cookie', await cookieFor(ROLES.ADMIN))
+        .expect(400);
+
+      const selected = await request(testApp)
+        .get('/api/stays/me?memberId=nikhil')
+        .set('Origin', ORIGIN)
+        .set('Cookie', await cookieFor(ROLES.ADMIN));
+
+      assert.equal(selected.status, 200);
+      assert.equal(selected.body.memberId, 'nikhil');
     });
 
     test('Rejects duplicate active stay for the same resident', async () => {

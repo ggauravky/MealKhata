@@ -48,6 +48,7 @@ import {
   useStayFinancialReview,
 } from '../hooks/useStays.js';
 import { formatPaise } from '../lib/money.js';
+import { getMemberRosterMetrics } from '../lib/memberContracts.js';
 import { downloadClearancePdf, downloadLifetimeStatementPdf } from '../lib/stayDownload.js';
 
 export function AdminStaysPage() {
@@ -92,6 +93,7 @@ export function AdminStaysPage() {
   const activeStays = stays.filter((s) => s.status === 'ACTIVE');
   const checkoutRequestedStays = stays.filter((s) => s.status === 'CHECKOUT_REQUESTED' || s.status === 'CHECKOUT_PENDING');
   const checkedOutStays = stays.filter((s) => s.status === 'CHECKED_OUT');
+  const rosterMetrics = getMemberRosterMetrics(memberRoster.data);
 
   const handleOpenDepositModal = (stay, type) => {
     setDepositTargetStay(stay);
@@ -193,52 +195,64 @@ export function AdminStaysPage() {
 
         {/* TAB 1: OVERVIEW */}
         <TabsContent value="overview" className="space-y-6 pt-4">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
             <Card className="border-slate-200 dark:border-slate-800">
               <CardContent className="p-4 space-y-1">
                 <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">
-                  Active Residents
+                  Currently Assigned Residents
                 </span>
                 <div className="text-2xl font-bold text-teal-700 dark:text-teal-400">
-                  {activeStays.length}
+                  {rosterMetrics.currentlyAssignedResidents}
                 </div>
-                <p className="text-[11px] text-slate-400">Currently occupying rooms</p>
+                <p className="text-[11px] text-slate-400">From current Room Assignments</p>
               </CardContent>
             </Card>
 
             <Card className="border-slate-200 dark:border-slate-800">
               <CardContent className="p-4 space-y-1">
                 <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">
-                  Departure Requests
+                  Active Registered Hostel Stays
                 </span>
                 <div className="text-2xl font-bold text-amber-600 dark:text-amber-400">
-                  {checkoutRequestedStays.length}
+                  {rosterMetrics.activeRegisteredStays}
                 </div>
-                <p className="text-[11px] text-slate-400">Pending review & clearance</p>
+                <p className="text-[11px] text-slate-400">Registered lifecycle records</p>
               </CardContent>
             </Card>
 
             <Card className="border-slate-200 dark:border-slate-800">
               <CardContent className="p-4 space-y-1">
                 <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">
-                  Checked Out
+                  Members
                 </span>
                 <div className="text-2xl font-bold text-slate-700 dark:text-slate-300">
-                  {checkedOutStays.length}
+                  {rosterMetrics.members}
                 </div>
-                <p className="text-[11px] text-slate-400">Lifetime departures archived</p>
+                <p className="text-[11px] text-slate-400">Canonical configured identities</p>
               </CardContent>
             </Card>
 
             <Card className="border-slate-200 dark:border-slate-800">
               <CardContent className="p-4 space-y-1">
                 <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">
-                  Total Stays
+                  Assigned Rooms
                 </span>
                 <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-                  {stays.length}
+                  {rosterMetrics.assignedRooms}
                 </div>
-                <p className="text-[11px] text-slate-400">Registered stay records</p>
+                <p className="text-[11px] text-slate-400">Distinct occupied rooms</p>
+              </CardContent>
+            </Card>
+
+            <Card className="border-slate-200 dark:border-slate-800">
+              <CardContent className="p-4 space-y-1">
+                <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">
+                  Need Stay Registration
+                </span>
+                <div className="text-2xl font-bold text-amber-600 dark:text-amber-400">
+                  {rosterMetrics.membersNeedingStayRegistration}
+                </div>
+                <p className="text-[11px] text-slate-400">Assigned, not yet registered</p>
               </CardContent>
             </Card>
           </div>
@@ -248,39 +262,50 @@ export function AdminStaysPage() {
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-semibold flex items-center gap-2 text-slate-900 dark:text-slate-100">
                 <UserCheck className="h-4 w-4 text-teal-600" />
-                Active Resident Stay Roster
+                Current Assigned Resident Roster
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {activeStays.length === 0 ? (
+              {memberRoster.loading && memberRoster.data.length === 0 ? (
+                <Skeleton className="h-32 w-full rounded-lg" />
+              ) : memberRoster.error ? (
+                <ErrorState compact title="Resident roster unavailable" message={memberRoster.error} actionLabel="Try again" onAction={memberRoster.refresh} />
+              ) : rosterMetrics.currentlyAssignedResidents === 0 ? (
                 <p className="text-xs text-slate-500 py-3 text-center">
-                  No active stays configured. Click "Register Resident Stay" above to onboard members.
+                  No current Room Assignments are configured.
                 </p>
               ) : (
                 <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {activeStays.map((stay) => (
+                  {memberRoster.data.filter((member) => member.assignment && member.room).map((member) => (
                     <div
-                      key={stay.stayId}
+                      key={member.memberId}
                       className="py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs"
                     >
                       <div className="space-y-0.5">
                         <div className="flex items-center gap-2">
                           <span className="font-semibold text-slate-900 dark:text-slate-100 capitalize text-sm">
-                            {stay.memberId}
+                            {member.name}
                           </span>
-                          <StayStatusBadge status={stay.status} />
+                          {member.stay
+                            ? <StayStatusBadge status={member.stay.status} />
+                            : <span className="text-[11px] text-amber-700 dark:text-amber-400">Stay not registered</span>}
                         </div>
                         <div className="text-slate-500 dark:text-slate-400 flex items-center gap-3 text-[11px]">
-                          <span>Joined: {stay.joinedOn}</span>
-                          <span>Room: {stay.initialRoomId || '—'}</span>
+                          <span>Room {member.room.roomNumber}</span>
+                          <span>
+                            Assigned: {member.assignment.effectiveFromDate}
+                            {member.assignment.effectiveUntilDate ? ` to ${member.assignment.effectiveUntilDate}` : ' onward'}
+                          </span>
                         </div>
                       </div>
 
                       <div className="flex items-center gap-2">
+                        {member.stay ? (
+                          <>
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => setTransferTargetStay(stay)}
+                          onClick={() => setTransferTargetStay(member.stay)}
                           className="h-7 text-xs border-slate-200 dark:border-slate-700"
                         >
                           <ArrowLeftRight className="h-3 w-3 mr-1" />
@@ -289,7 +314,7 @@ export function AdminStaysPage() {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => handleOpenDepositModal(stay, 'RECEIVED')}
+                          onClick={() => handleOpenDepositModal(member.stay, 'RECEIVED')}
                           className="h-7 text-xs border-slate-200 dark:border-slate-700"
                         >
                           <Wallet className="h-3 w-3 mr-1 text-teal-600" />
@@ -298,7 +323,7 @@ export function AdminStaysPage() {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => setReviewingStayId(stay.stayId)}
+                          onClick={() => setReviewingStayId(member.stay.stayId)}
                           className="h-7 text-xs border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-400"
                         >
                           <LogOut className="h-3 w-3 mr-1" />
@@ -309,7 +334,7 @@ export function AdminStaysPage() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => setCorrectionTargetStay(stay)}
+                              onClick={() => setCorrectionTargetStay(member.stay)}
                               className="h-7 text-xs text-teal-700 dark:text-teal-400"
                             >
                               <PencilLine className="h-3 w-3 mr-1" />
@@ -318,13 +343,24 @@ export function AdminStaysPage() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => setCancelTargetStay(stay)}
+                              onClick={() => setCancelTargetStay(member.stay)}
                               className="h-7 text-xs text-rose-600 hover:text-rose-700"
                             >
                               <Ban className="h-3 w-3 mr-1" />
                               Cancel Incorrect Stay
                             </Button>
                           </>
+                        )}
+                          </>
+                        ) : (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => { setJoinMemberId(member.memberId); setJoinModalOpen(true); }}
+                            className="h-7 text-xs text-teal-700 dark:text-teal-400"
+                          >
+                            Register Stay
+                          </Button>
                         )}
                       </div>
                     </div>
@@ -358,8 +394,10 @@ export function AdminStaysPage() {
                       <TableRow className="text-[11px] text-slate-500 uppercase tracking-wider">
                         <TableHead>Member</TableHead>
                         <TableHead>Account</TableHead>
-                        <TableHead>Stay Status</TableHead>
                         <TableHead>Room</TableHead>
+                        <TableHead>Assignment Dates</TableHead>
+                        <TableHead>Stay Status</TableHead>
+                        <TableHead>Fee Plan</TableHead>
                         <TableHead className="text-right">Action</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -371,8 +409,18 @@ export function AdminStaysPage() {
                             <div className="text-[10px] font-normal text-slate-500">{member.memberId}</div>
                           </TableCell>
                           <TableCell>{member.account.exists ? (member.account.active ? 'Active' : 'Disabled') : 'Not configured'}</TableCell>
-                          <TableCell>{member.stay ? <StayStatusBadge status={member.stay.status} /> : 'Not registered'}</TableCell>
-                          <TableCell>{member.room ? `Room ${member.room.roomNumber}` : '—'}</TableCell>
+                          <TableCell>{member.room ? `Room ${member.room.roomNumber}` : 'Not assigned'}</TableCell>
+                          <TableCell>
+                            {member.assignment
+                              ? `${member.assignment.effectiveFromDate}${member.assignment.effectiveUntilDate ? ` to ${member.assignment.effectiveUntilDate}` : ' onward'}`
+                              : '—'}
+                          </TableCell>
+                          <TableCell>
+                            {member.stay
+                              ? <StayStatusBadge status={member.stay.status} />
+                              : member.assignment ? 'Room assigned · Stay not registered' : 'Not registered'}
+                          </TableCell>
+                          <TableCell>{member.feePlan ? formatPaise(member.feePlan.amountPaise) : 'Not configured'}</TableCell>
                           <TableCell className="text-right">
                             {member.stay ? (
                               <Button variant="ghost" size="sm" onClick={() => setSelectedStayIdForDetails(member.stay.stayId)} className="h-6 text-xs text-teal-600 hover:text-teal-700">

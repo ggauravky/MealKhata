@@ -7,6 +7,7 @@ import request from 'supertest';
 import { createAuthService } from '../src/auth/auth.service.js';
 import { createSessionToken, verifySessionToken } from '../src/auth/token.service.js';
 import { createMemberAccountService } from '../src/members/memberAccount.service.js';
+import { createMemberService } from '../src/members/member.service.js';
 import { createMemberRouter } from '../src/routes/member.routes.js';
 import { InMemoryMemberAccountRepository } from './helpers/inMemoryMemberAccountRepository.js';
 import { InMemoryUserAccountRepository } from './helpers/inMemoryUserAccountRepository.js';
@@ -133,6 +134,66 @@ describe('Super Admin member account management', () => {
       }),
       (error) => error.statusCode === 409,
     );
+  });
+});
+
+describe('canonical member accommodation roster', () => {
+  test('reports assignment dates and fee-plan status independently of registered Stays', async () => {
+    const assignments = {
+      gaurav: {
+        assignmentId: 'assignment-gaurav',
+        roomId: 'lower',
+        effectiveFromDate: '2026-10-20',
+        effectiveUntilDate: null,
+      },
+      nikhil: {
+        assignmentId: 'assignment-nikhil',
+        roomId: 'first',
+        effectiveFromDate: '2026-10-20',
+        effectiveUntilDate: null,
+      },
+      devansh: {
+        assignmentId: 'assignment-devansh',
+        roomId: 'first',
+        effectiveFromDate: '2026-10-20',
+        effectiveUntilDate: null,
+      },
+    };
+    const service = createMemberService({
+      accounts: { async listAll() { return []; } },
+      stays: { async listAllStays() { return []; } },
+      rooms: {
+        async findAssignmentOnDate(memberId) { return assignments[memberId]; },
+        async findRoomById(roomId) {
+          return roomId === 'lower'
+            ? { roomId, roomNumber: 'lower' }
+            : { roomId, roomNumber: '1st Floor Room' };
+        },
+        async findActiveFeePlan(memberId) {
+          return memberId === 'devansh'
+            ? null
+            : { feePlanId: `plan-${memberId}`, amountPaise: 280000, effectiveFromMonth: '2026-10' };
+        },
+      },
+      now: () => new Date('2026-10-21T06:30:00.000Z'),
+    });
+
+    const roster = await service.listMembers();
+
+    assert.equal(roster.length, 3);
+    assert.equal(roster[0].stay, null);
+    assert.deepEqual(roster[0].assignment, {
+      assignmentId: 'assignment-gaurav',
+      roomId: 'lower',
+      effectiveFromDate: '2026-10-20',
+      effectiveUntilDate: null,
+    });
+    assert.deepEqual(roster[0].feePlan, {
+      feePlanId: 'plan-gaurav',
+      amountPaise: 280000,
+      effectiveFromMonth: '2026-10',
+    });
+    assert.equal(roster[2].feePlan, null);
   });
 });
 

@@ -73,5 +73,6 @@ export function errorHandler(error, req, res, next) {
   return res.status(statusCode).json({
     success: false,
     message: error.message || 'Something went wrong',
+    ...(error.details && typeof error.details === 'object' ? { details: error.details } : {}),
   });
 }

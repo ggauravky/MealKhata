@@ -3,6 +3,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import {
+  mapMemberRoomFeeOverview,
+  roomFeeRequestKey,
+} from '../src/lib/roomFeeContracts.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -45,6 +49,66 @@ describe('MealKhata 2.0 Phase 1: Frontend Architecture & Component Tests', () =>
   });
 
   describe('Member Room Fees Page & Components', () => {
+    test('maps the authoritative member overview without treating a fee plan as an issued charge', () => {
+      const mapped = mapMemberRoomFeeOverview({
+        memberId: 'gaurav',
+        month: '2026-10',
+        currentRoom: { roomId: 'lower', roomNumber: 'lower', capacity: 1 },
+        currentAssignment: {
+          assignmentId: 'assignment-existing',
+          memberId: 'gaurav',
+          roomId: 'lower',
+          effectiveFromDate: '2026-10-20',
+        },
+        currentFeePlan: { feePlanId: 'plan-existing', amountPaise: 280000 },
+        scheduledFeePaise: 280000,
+        currentMonthCharge: null,
+        summaryMetrics: { totalBilledPaise: 0, issuedMonthsCount: 0 },
+        recipientSettings: { recipientName: 'Hostel Administration' },
+      });
+
+      assert.equal(mapped.room.roomNumber, 'lower');
+      assert.equal(mapped.assignment.assignmentId, 'assignment-existing');
+      assert.equal(mapped.feePlan.feePlanId, 'plan-existing');
+      assert.equal(mapped.statement.charge, null);
+      assert.equal(mapped.statement.status, 'not_issued');
+      assert.equal(mapped.statement.effectiveChargePaise, 0);
+      assert.equal(mapped.metrics.issuedMonthsCount, 0);
+      assert.equal(mapped.settings.recipientName, 'Hostel Administration');
+    });
+
+    test('maps an issued charge explicitly to the statement component contract', () => {
+      const mapped = mapMemberRoomFeeOverview({
+        memberId: 'nikhil',
+        month: '2026-10',
+        currentRoom: { roomId: 'first', roomNumber: '1st Floor Room', capacity: 2 },
+        currentAssignment: { assignmentId: 'assignment-nikhil' },
+        currentFeePlan: { feePlanId: 'plan-nikhil', amountPaise: 250000 },
+        currentMonthCharge: {
+          chargeId: 'charge-1',
+          finalBillAmountPaise: 250000,
+          paidAmountPaise: 100000,
+          remainingAmountPaise: 150000,
+          overpaidPaise: 0,
+          paymentStatus: 'partial',
+          payments: [{ roomPaymentId: 'payment-1', amountPaise: 100000 }],
+        },
+      });
+
+      assert.equal(mapped.statement.charge.chargeId, 'charge-1');
+      assert.equal(mapped.statement.effectiveChargePaise, 250000);
+      assert.equal(mapped.statement.paidPaise, 100000);
+      assert.equal(mapped.statement.remainingPaise, 150000);
+      assert.equal(mapped.statement.status, 'partial');
+      assert.equal(mapped.statement.payments.length, 1);
+    });
+
+    test('keys room-fee requests by both selected member and month', () => {
+      assert.equal(roomFeeRequestKey('gaurav', '2026-10'), 'gaurav:2026-10');
+      assert.equal(roomFeeRequestKey('nikhil', '2026-10'), 'nikhil:2026-10');
+      assert.notEqual(roomFeeRequestKey('gaurav', '2026-10'), roomFeeRequestKey('nikhil', '2026-10'));
+    });
+
     test('RoomFeesPage strictly isolates member data and gates unauthenticated viewers', async () => {
       const page = await fs.readFile(path.join(srcDir, 'pages/RoomFeesPage.jsx'), 'utf8');
       assert.match(page, /auth\.role === 'viewer'/);
@@ -52,7 +116,7 @@ describe('MealKhata 2.0 Phase 1: Frontend Architecture & Component Tests', () =>
       assert.match(page, /Sign In/);
       assert.match(page, /useMyRoomFees/);
       assert.match(page, /useMyRoomFeeHistory/);
-      assert.match(page, /useRoomPaymentSettings/);
+      assert.match(page, /settings=\{feeData\.settings\}/);
     });
 
     test('RoomFeeOverviewCard displays progress, formatted money, and status badges', async () => {

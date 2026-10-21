@@ -68,6 +68,9 @@ export function createMemberService({
         const activeStay = memberStays.find((stay) => ACTIVE_STAY_STATUSES.has(stay.status)) || null;
         const assignment = await rooms.findAssignmentOnDate(member.id, today);
         const room = assignment ? await rooms.findRoomById(assignment.roomId) : null;
+        const feePlan = typeof rooms.findActiveFeePlan === 'function'
+          ? await rooms.findActiveFeePlan(member.id, today.slice(0, 7))
+          : null;
 
         return {
           memberId: member.id,
@@ -78,6 +81,17 @@ export function createMemberService({
             roomId: room.roomId,
             roomNumber: room.roomNumber,
             assignmentId: assignment.assignmentId,
+          } : null,
+          assignment: assignment ? {
+            assignmentId: assignment.assignmentId,
+            roomId: assignment.roomId,
+            effectiveFromDate: assignment.effectiveFromDate || `${assignment.effectiveFromMonth}-01`,
+            effectiveUntilDate: assignment.effectiveUntilDate || null,
+          } : null,
+          feePlan: feePlan ? {
+            feePlanId: feePlan.feePlanId,
+            amountPaise: feePlan.amountPaise,
+            effectiveFromMonth: feePlan.effectiveFromMonth,
           } : null,
         };
       }));

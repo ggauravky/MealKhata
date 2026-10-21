@@ -6,15 +6,60 @@ import {
   mapDepositSummary,
   mapLifetimeSummary,
   mapRoomHistory,
+  getMyStayLifecycleState,
   parseMyStayResponse,
 } from '../src/lib/stayContracts.js';
 import {
   buildMemberAccountPayload,
   buildStayCancellationPayload,
+  getMemberRosterMetrics,
   normalizeMemberRoster,
 } from '../src/lib/memberContracts.js';
+import {
+  buildStayAdmissionPayload,
+  selectExistingAssignmentForAdmission,
+} from '../src/lib/stayAdmissionContracts.js';
 
 describe('member lifecycle frontend contracts', () => {
+  test('prefers the current existing assignment and builds an explicit link payload', () => {
+    const assignment = selectExistingAssignmentForAdmission([
+      {
+        assignmentId: 'old',
+        memberId: 'gaurav',
+        roomId: 'old-room',
+        effectiveFromDate: '2026-01-01',
+        effectiveUntilDate: '2026-08-31',
+      },
+      {
+        assignmentId: 'current',
+        memberId: 'gaurav',
+        roomId: 'lower',
+        effectiveFromDate: '2026-10-20',
+        effectiveUntilDate: null,
+      },
+    ], '2026-09-01');
+
+    assert.equal(assignment.assignmentId, 'current');
+    assert.deepEqual(buildStayAdmissionPayload({
+      memberId: 'gaurav',
+      joinedOn: '2026-09-01',
+      initialRoomId: 'lower',
+      assignment,
+      allowUnverifiedPreAssignmentPeriod: true,
+      historicalReason: 'Verified admission ledger',
+      expectedDepositPaise: 0,
+    }), {
+      memberId: 'gaurav',
+      joinedOn: '2026-09-01',
+      initialRoomId: 'lower',
+      admissionMode: 'link_existing_assignment',
+      assignmentId: 'current',
+      allowUnverifiedPreAssignmentPeriod: true,
+      historicalReason: 'Verified admission ledger',
+      expectedDepositPaise: 0,
+    });
+  });
+
   test('parses the /api/stays/me envelope without inventing deposit data', () => {
     const stay = { stayId: 'stay-1', memberId: 'gaurav', status: 'ACTIVE' };
 
@@ -23,10 +68,14 @@ describe('member lifecycle frontend contracts', () => {
       configured: true,
       isActive: true,
       data: stay,
+      currentAssignment: { assignmentId: 'assignment-1' },
+      currentRoom: { roomId: 'lower', roomNumber: 'lower' },
     }), {
       configured: true,
       isActive: true,
       stay,
+      currentAssignment: { assignmentId: 'assignment-1' },
+      currentRoom: { roomId: 'lower', roomNumber: 'lower' },
     });
 
     assert.deepEqual(parseMyStayResponse({
@@ -38,7 +87,17 @@ describe('member lifecycle frontend contracts', () => {
       configured: false,
       isActive: false,
       stay: null,
+      currentAssignment: null,
+      currentRoom: null,
     });
+  });
+
+  test('classifies minimal My Stay states without inventing accommodation', () => {
+    assert.equal(getMyStayLifecycleState({ stay: null, currentAssignment: { assignmentId: 'a-1' } }), 'assignment_only');
+    assert.equal(getMyStayLifecycleState({ stay: null, currentAssignment: null }), 'empty');
+    assert.equal(getMyStayLifecycleState({ stay: { status: 'ACTIVE' } }), 'active');
+    assert.equal(getMyStayLifecycleState({ stay: { status: 'CHECKOUT_REQUESTED' } }), 'pending_checkout');
+    assert.equal(getMyStayLifecycleState({ stay: { status: 'CHECKED_OUT' } }), 'completed');
   });
 
   test('maps the lifetime report DTO to the values rendered by the stay page', () => {
@@ -192,6 +251,42 @@ describe('admin member roster contract', () => {
     assert.equal(roster[0].stay.status, 'ACTIVE');
     assert.equal(roster[1].stay, null);
     assert.equal(roster[2].account.exists, false);
+  });
+
+  test('preserves accommodation fields and derives assignment counts separately from Stay counts', () => {
+    const roster = normalizeMemberRoster([
+      {
+        memberId: 'gaurav',
+        room: { roomId: 'lower', roomNumber: 'lower' },
+        assignment: { assignmentId: 'a-g', effectiveFromDate: '2026-10-20', effectiveUntilDate: null },
+        feePlan: { feePlanId: 'p-g', amountPaise: 280000 },
+        stay: null,
+      },
+      {
+        memberId: 'nikhil',
+        room: { roomId: 'first', roomNumber: '1st Floor Room' },
+        assignment: { assignmentId: 'a-n', effectiveFromDate: '2026-10-20', effectiveUntilDate: null },
+        feePlan: { feePlanId: 'p-n', amountPaise: 280000 },
+        stay: { stayId: 'stay-n', status: 'ACTIVE' },
+      },
+      {
+        memberId: 'devansh',
+        room: { roomId: 'first', roomNumber: '1st Floor Room' },
+        assignment: { assignmentId: 'a-d', effectiveFromDate: '2026-10-20', effectiveUntilDate: null },
+        feePlan: null,
+        stay: null,
+      },
+    ]);
+
+    assert.equal(roster[0].assignment.assignmentId, 'a-g');
+    assert.equal(roster[0].feePlan.amountPaise, 280000);
+    assert.deepEqual(getMemberRosterMetrics(roster), {
+      members: 3,
+      currentlyAssignedResidents: 3,
+      assignedRooms: 2,
+      activeRegisteredStays: 1,
+      membersNeedingStayRegistration: 2,
+    });
   });
 
   test('builds an optimistic-concurrency cancellation payload without extra fields', () => {

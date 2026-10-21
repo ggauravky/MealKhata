@@ -1,4 +1,5 @@
 import {
+  AlertCircle,
   ChevronLeft,
   ChevronRight,
   Plus,
@@ -11,12 +12,23 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { PageHeader } from '../components/common/PageHeader.jsx';
 import { AddExpenseDialog } from '../components/expenses/AddExpenseDialog.jsx';
+import { EditExpenseDialog } from '../components/expenses/EditExpenseDialog.jsx';
 import { ExpenseCategoryFilter } from '../components/expenses/ExpenseCategoryFilter.jsx';
 import { ExpenseDetailsDialog } from '../components/expenses/ExpenseDetailsDialog.jsx';
 import { ExpenseList } from '../components/expenses/ExpenseList.jsx';
 import { ExpenseOverviewCard } from '../components/expenses/ExpenseOverviewCard.jsx';
 import { Button } from '../components/ui/button.jsx';
 import { Card, CardHeader } from '../components/ui/card.jsx';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../components/ui/dialog.jsx';
+import { Input } from '../components/ui/input.jsx';
+import { Label } from '../components/ui/label.jsx';
 import { useAuth } from '../hooks/useAuth.js';
 import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
 import { useExpenses, useExpenseSummary } from '../hooks/useExpenses.js';
@@ -24,6 +36,8 @@ import { usePwa } from '../hooks/usePwa.js';
 import { useServerToday } from '../hooks/useServerToday.js';
 import { addLogicalMonths, formatLogicalMonth } from '../lib/logicalMonth.js';
 import { getIndiaCurrentLogicalMonth } from '../lib/logicalDate.js';
+import { formatPaise } from '../lib/money.js';
+import { api } from '../lib/api.js';
 
 export function ExpensesPage() {
   useDocumentTitle('Other Expenses');
@@ -36,8 +50,16 @@ export function ExpensesPage() {
   const [activeCategory, setActiveCategory] = useState('');
 
   const [addExpenseOpen, setAddExpenseOpen] = useState(false);
+  const [selectedExpenseId, setSelectedExpenseId] = useState(null);
   const [selectedExpense, setSelectedExpense] = useState(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [editExpenseOpen, setEditExpenseOpen] = useState(false);
+  const [targetExpenseForEdit, setTargetExpenseForEdit] = useState(null);
+  const [deleteExpenseOpen, setDeleteExpenseOpen] = useState(false);
+  const [targetExpenseForDelete, setTargetExpenseForDelete] = useState(null);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const [deleting, setDeleting] = useState(false);
 
   const month = selectedMonth || currentLogicalMonth;
 
@@ -56,10 +78,54 @@ export function ExpensesPage() {
   } = useExpenseSummary(month);
 
   const isAdmin = auth.role === 'admin' || auth.role === 'superadmin';
+  const isSuperAdmin = auth.role === 'superadmin';
+  const currentSelectedExpense = expenses?.find((expense) => expense.expenseId === selectedExpenseId)
+    || selectedExpense;
 
   const handleExpenseClick = (exp) => {
+    setSelectedExpenseId(exp.expenseId);
     setSelectedExpense(exp);
     setDetailsOpen(true);
+  };
+
+  const handleOpenEdit = (expense) => {
+    setDetailsOpen(false);
+    setTargetExpenseForEdit(expense);
+    window.setTimeout(() => setEditExpenseOpen(true), 0);
+  };
+
+  const handleOpenDelete = (expense) => {
+    setDetailsOpen(false);
+    setTargetExpenseForDelete(expense);
+    setDeleteReason('');
+    setDeleteError('');
+    window.setTimeout(() => setDeleteExpenseOpen(true), 0);
+  };
+
+  const handleDeleteExpense = async (event) => {
+    event.preventDefault();
+    if (!targetExpenseForDelete || !deleteReason.trim()) {
+      setDeleteError('A mandatory deletion reason is required.');
+      return;
+    }
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      const deletedId = targetExpenseForDelete.expenseId;
+      await api.post(`/api/expenses/${deletedId}/void`, { reason: deleteReason.trim() });
+      setDeleteExpenseOpen(false);
+      setTargetExpenseForDelete(null);
+      setDeleteReason('');
+      if (selectedExpenseId === deletedId) {
+        setSelectedExpenseId(null);
+        setSelectedExpense(null);
+      }
+      handleRefreshAll();
+    } catch (deleteFailure) {
+      setDeleteError(deleteFailure?.message || 'Failed to delete expense.');
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const handleRefreshAll = () => {
@@ -212,6 +278,10 @@ export function ExpensesPage() {
           canAdd={isAdmin && isOnline}
           onAddClick={() => setAddExpenseOpen(true)}
           onSelectExpense={handleExpenseClick}
+          onView={handleExpenseClick}
+          onEdit={handleOpenEdit}
+          onDelete={handleOpenDelete}
+          isSuperAdmin={isSuperAdmin}
         />
       </div>
 
@@ -224,15 +294,84 @@ export function ExpensesPage() {
       />
 
       {/* Expense Details Dialog */}
-      {selectedExpense && (
+      {currentSelectedExpense && (
         <ExpenseDetailsDialog
           open={detailsOpen}
-          onOpenChange={setDetailsOpen}
-          expense={selectedExpense}
+          onOpenChange={(isOpen) => {
+            setDetailsOpen(isOpen);
+            if (!isOpen && !editExpenseOpen && !deleteExpenseOpen) {
+              setSelectedExpenseId(null);
+              setSelectedExpense(null);
+            }
+          }}
+          expense={currentSelectedExpense}
+          expenseId={selectedExpenseId}
           role={auth.role}
           onUpdated={handleRefreshAll}
+          onEdit={handleOpenEdit}
         />
       )}
+
+      {targetExpenseForEdit && (
+        <EditExpenseDialog
+          open={editExpenseOpen}
+          onOpenChange={(isOpen) => {
+            setEditExpenseOpen(isOpen);
+            if (!isOpen) setTargetExpenseForEdit(null);
+          }}
+          expense={targetExpenseForEdit}
+          onSuccess={(updatedExpense) => {
+            handleRefreshAll();
+            if (updatedExpense?.month && updatedExpense.month !== selectedMonth) {
+              setSelectedMonth(updatedExpense.month);
+            }
+            setSelectedExpense(updatedExpense || null);
+            setSelectedExpenseId(updatedExpense?.expenseId || null);
+            setTargetExpenseForEdit(null);
+          }}
+        />
+      )}
+
+      <Dialog open={deleteExpenseOpen} onOpenChange={setDeleteExpenseOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base font-bold">
+              <AlertCircle className="h-5 w-5 text-rose-600" />
+              Delete Expense?
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              <strong>{targetExpenseForDelete?.title}</strong> · {formatPaise(targetExpenseForDelete?.amountPaise || 0)}
+              <br />
+              The purchase will leave active totals but remain in immutable audit history.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleDeleteExpense} className="space-y-4">
+            {deleteError && (
+              <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">
+                {deleteError}
+              </div>
+            )}
+            <div className="space-y-1">
+              <Label htmlFor="expense-delete-reason" className="text-xs font-semibold">Reason for deletion *</Label>
+              <Input
+                id="expense-delete-reason"
+                value={deleteReason}
+                onChange={(event) => setDeleteReason(event.target.value)}
+                placeholder="Why should this purchase be voided?"
+                required
+                maxLength={300}
+              />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" size="sm" onClick={() => setDeleteExpenseOpen(false)} disabled={deleting}>Cancel</Button>
+              <Button type="submit" variant="destructive" size="sm" disabled={deleting || !deleteReason.trim()}>
+                {deleting ? 'Deleting…' : 'Delete Expense'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

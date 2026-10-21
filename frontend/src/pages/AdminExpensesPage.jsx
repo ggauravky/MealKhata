@@ -121,8 +121,9 @@ export function AdminExpensesPage() {
   };
 
   const handleOpenEdit = (exp) => {
+    setDetailsOpen(false);
     setTargetExpenseForEdit(exp);
-    setEditExpenseOpen(true);
+    window.setTimeout(() => setEditExpenseOpen(true), 0);
   };
 
   const handleOpenDelete = (exp) => {
@@ -452,6 +453,7 @@ export function AdminExpensesPage() {
       {targetExpenseForEdit && (
         <EditExpenseDialog
           open={editExpenseOpen}
+          expense={targetExpenseForEdit}
           onOpenChange={(isOpen) => {
             setEditExpenseOpen(isOpen);
             if (!isOpen) setTargetExpenseForEdit(null);
@@ -579,8 +581,7 @@ export function AdminExpensesPage() {
           role={auth.role}
           onUpdated={refreshAll}
           onEdit={(exp) => {
-            setTargetExpenseForEdit(exp);
-            setEditExpenseOpen(true);
+            handleOpenEdit(exp);
           }}
         />
       )}

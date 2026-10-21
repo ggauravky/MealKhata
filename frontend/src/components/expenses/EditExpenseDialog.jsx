@@ -20,6 +20,7 @@ import {
   SPLIT_TYPES,
 } from '../../lib/constants.js';
 import { formatPaise, paymentRupeesToPaise } from '../../lib/money.js';
+import { buildExpenseEditInitialValues } from '../../lib/expenseEditorState.js';
 
 export function EditExpenseDialog({
   open,
@@ -56,10 +57,11 @@ export function EditExpenseDialog({
   // Initialize form with current expense values
   useEffect(() => {
     if (open && expense) {
+      const initialAmounts = buildExpenseEditInitialValues(expense);
       setTitle(expense.title || '');
       setCategory(expense.category || 'groceries');
       setDate(expense.date || '');
-      setAmountRupees(expense.amountPaise ? String(Math.floor(expense.amountPaise / 100)) : '');
+      setAmountRupees(initialAmounts.amountRupees);
       setPaidByMemberId(expense.paidByMemberId || 'gaurav');
       setSplitType(expense.splitType || 'equal');
 
@@ -72,13 +74,7 @@ export function EditExpenseDialog({
         setPersonalBeneficiary(expense.paidByMemberId || 'gaurav');
       }
 
-      const amounts = { gaurav: '', nikhil: '', devansh: '' };
-      for (const a of expense.allocations || []) {
-        if (amounts[a.memberId] !== undefined) {
-          amounts[a.memberId] = String(Math.floor(a.amountPaise / 100));
-        }
-      }
-      setCustomAmounts(amounts);
+      setCustomAmounts(initialAmounts.customAmounts);
       setDescription(expense.description || '');
       setReason('');
       setPreview(null);

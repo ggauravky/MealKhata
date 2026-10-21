@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { buildExpenseEditInitialValues } from '../src/lib/expenseEditorState.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -101,6 +102,35 @@ describe('MealKhata 2.0 Phase 2: Other Expenses & Shared Spending (Frontend)', (
   });
 
   describe('Expenses Page & Core Components', () => {
+    test('initializes correction amounts from exact integer paise without truncation', () => {
+      const values = buildExpenseEditInitialValues({
+        amountPaise: 14950,
+        allocations: [
+          { memberId: 'gaurav', amountPaise: 4984 },
+          { memberId: 'nikhil', amountPaise: 4983 },
+          { memberId: 'devansh', amountPaise: 4983 },
+        ],
+      });
+
+      assert.equal(values.amountRupees, '149.50');
+      assert.deepEqual(values.customAmounts, {
+        gaurav: '49.84',
+        nikhil: '49.83',
+        devansh: '49.83',
+      });
+    });
+
+    test('both expense pages wire stable Super Admin edit and soft-delete actions', async () => {
+      const memberPage = await fs.readFile(path.join(srcDir, 'pages/ExpensesPage.jsx'), 'utf8');
+      const adminPage = await fs.readFile(path.join(srcDir, 'pages/AdminExpensesPage.jsx'), 'utf8');
+
+      assert.match(memberPage, /<EditExpenseDialog/);
+      assert.match(memberPage, /onEdit=\{handleOpenEdit\}/);
+      assert.match(memberPage, /onDelete=\{handleOpenDelete\}/);
+      assert.match(memberPage, /\/api\/expenses\/\$\{deletedId\}\/void/);
+      assert.match(adminPage, /expense=\{targetExpenseForEdit\}/);
+    });
+
     test('ExpensesPage integrates category filtering, month navigation, and empty states', async () => {
       const page = await fs.readFile(path.join(srcDir, 'pages/ExpensesPage.jsx'), 'utf8');
       assert.match(page, /ExpenseOverviewCard/);

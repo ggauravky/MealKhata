@@ -1,8 +1,9 @@
 export class ApiError extends Error {
-  constructor(message, status = 0) {
+  constructor(message, status = 0, details = null) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.details = details;
   }
 }
 
@@ -31,7 +32,11 @@ async function request(path, options = {}) {
       if (response.status === 401 && !preserveSessionOnUnauthorized && typeof window !== 'undefined') {
         window.dispatchEvent(new Event('mk:auth-expired'));
       }
-      throw new ApiError(payload?.message || 'The request could not be completed.', response.status);
+      throw new ApiError(
+        payload?.message || 'The request could not be completed.',
+        response.status,
+        payload?.details ?? null,
+      );
     }
 
     return payload;

@@ -29,8 +29,26 @@ export function normalizeMemberRoster(rows) {
       account,
       stay: row.stay && typeof row.stay === 'object' ? row.stay : null,
       room: row.room && typeof row.room === 'object' ? row.room : null,
+      assignment: row.assignment && typeof row.assignment === 'object' ? row.assignment : null,
+      feePlan: row.feePlan && typeof row.feePlan === 'object' ? row.feePlan : null,
     };
   });
+}
+
+export function getMemberRosterMetrics(rows) {
+  const roster = Array.isArray(rows) ? rows : [];
+  const assigned = roster.filter((member) => member.assignment && member.room);
+  const activeStays = roster.filter((member) => (
+    member.stay && ['ACTIVE', 'CHECKOUT_REQUESTED', 'CHECKOUT_PENDING'].includes(member.stay.status)
+  ));
+
+  return {
+    members: roster.length,
+    currentlyAssignedResidents: assigned.length,
+    assignedRooms: new Set(assigned.map((member) => member.room.roomId)).size,
+    activeRegisteredStays: activeStays.length,
+    membersNeedingStayRegistration: assigned.filter((member) => !member.stay).length,
+  };
 }
 
 export function buildMemberAccountPayload(action, values) {

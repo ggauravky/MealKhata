@@ -446,6 +446,13 @@ export function createRoomFeeService({
       return assignments.map((a) => serializeRoomAssignment(a, roomMap));
     },
 
+    async getAssignmentById(assignmentId) {
+      const assignment = await repository.findAssignmentById(assignmentId);
+      if (!assignment || assignment.cancelledAt) return null;
+      const room = await repository.findRoomById(assignment.roomId);
+      return serializeRoomAssignment(assignment, new Map([[room?.roomId, room]]));
+    },
+
     async deleteAssignment(assignmentId, actorRole) {
       if (!canManageRooms(actorRole)) {
         throw new HttpError(403, 'Permission denied to delete room assignments.');
@@ -461,23 +468,25 @@ export function createRoomFeeService({
       if (actorRole !== 'superadmin') {
         throw new HttpError(403, 'Only Super Admin can cancel admission room artifacts.');
       }
-      if (!assignmentId) {
-        throw new HttpError(409, 'The admission room assignment cannot be identified safely.');
+      if (!assignmentId && !feePlanId) {
+        throw new HttpError(409, 'No Stay-owned admission artifacts were identified safely.');
       }
 
-      const assignment = await repository.findAssignmentById(assignmentId, { session });
-      if (!assignment) {
-        throw new HttpError(409, 'The admission room assignment no longer exists.');
+      if (assignmentId) {
+        const assignment = await repository.findAssignmentById(assignmentId, { session });
+        if (!assignment) {
+          throw new HttpError(409, 'The admission room assignment no longer exists.');
+        }
+        await repository.updateAssignment(
+          assignmentId,
+          {
+            cancelledAt: now(),
+            cancelledByRole: actorRole,
+            cancelReason: reason,
+          },
+          { session },
+        );
       }
-      await repository.updateAssignment(
-        assignmentId,
-        {
-          cancelledAt: now(),
-          cancelledByRole: actorRole,
-          cancelReason: reason,
-        },
-        { session },
-      );
 
       if (feePlanId) {
         const feePlan = await repository.findFeePlanById(feePlanId, { session });

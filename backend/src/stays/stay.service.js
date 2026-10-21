@@ -6,7 +6,7 @@
 import { randomUUID } from 'node:crypto';
 import mongoose from 'mongoose';
 import { MEMBER_IDS } from '../config/members.js';
-import { canEditDate, isValidLogicalDate, getLogicalDateInTimeZone } from '../utils/date.js';
+import { canEditDate, isValidLogicalDate, getLogicalDateInTimeZone, getPreviousLogicalDate } from '../utils/date.js';
 import { ROLES } from '../auth/permissions.js';
 import { isValidLogicalMonth } from '../utils/month.js';
 import { roomFeeService } from '../roomFees/roomFee.service.js';
@@ -81,6 +81,9 @@ export function createStayService({
       actorRole,
       actorMemberId = null,
       historicalReason = null,
+      admissionMode = 'new_assignment',
+      assignmentId = null,
+      allowUnverifiedPreAssignmentPeriod = false,
     }) {
       const monthlyFeePaise = rawMonthlyFee ?? monthlyRatePaise ?? null;
       if (!MEMBER_IDS.includes(memberId)) {
@@ -97,6 +100,12 @@ export function createStayService({
       }
       if (!initialRoomId || !initialRoomId.trim()) {
         throw new StayDomainError('Initial room is required.', 400);
+      }
+      if (!['new_assignment', 'link_existing_assignment'].includes(admissionMode)) {
+        throw new StayDomainError('Admission mode must create a new assignment or link an existing assignment.', 400);
+      }
+      if (admissionMode === 'link_existing_assignment' && !assignmentId) {
+        throw new StayDomainError('An existing room assignment must be selected for linking.', 400);
       }
       if (
         expectedDepositPaise !== undefined &&
@@ -138,9 +147,14 @@ export function createStayService({
       const depositAccountId = randomUUID();
 
       let createdAssignment = null;
+      let admissionAssignment = null;
+      let admissionAssignmentOwned = false;
       let createdStay = null;
       let createdDepositAccount = null;
       let createdFeePlan = null;
+      let admissionFeePlan = null;
+      let admissionFeePlanOwned = false;
+      let unverifiedOccupancyUntil = null;
       let session = null;
 
       if (mongoose.connection && mongoose.connection.readyState === 1) {
@@ -153,7 +167,54 @@ export function createStayService({
       }
 
       try {
-        if (roomFees && typeof roomFees.assignMemberToRoom === 'function') {
+        if (admissionMode === 'link_existing_assignment') {
+          if (!roomFees || typeof roomFees.getAssignmentById !== 'function') {
+            throw new StayDomainError('Existing Room Assignment linking is unavailable.', 503);
+          }
+          admissionAssignment = await roomFees.getAssignmentById(assignmentId);
+          if (!admissionAssignment) {
+            throw new StayDomainError('The selected Room Assignment does not exist or is no longer active.', 409, {
+              code: 'ASSIGNMENT_NOT_AVAILABLE',
+              assignmentId,
+            });
+          }
+          if (admissionAssignment.memberId !== memberId || admissionAssignment.roomId !== initialRoomId.trim()) {
+            throw new StayDomainError('The selected Room Assignment does not match this member and room.', 409, {
+              code: 'ASSIGNMENT_MISMATCH',
+              assignment: admissionAssignment,
+            });
+          }
+
+          const assignmentStart = admissionAssignment.effectiveFromDate
+            || `${admissionAssignment.effectiveFromMonth}-01`;
+          const assignmentEnd = admissionAssignment.effectiveUntilDate
+            || (admissionAssignment.effectiveUntilMonth ? `${admissionAssignment.effectiveUntilMonth}-31` : null);
+          if (assignmentEnd && joinedOn > assignmentEnd) {
+            throw new StayDomainError('The selected Room Assignment ended before the requested joining date.', 409, {
+              code: 'ASSIGNMENT_ENDED_BEFORE_STAY',
+              assignment: admissionAssignment,
+            });
+          }
+          if (joinedOn < assignmentStart) {
+            if (
+              actorRole !== ROLES.SUPERADMIN
+              || allowUnverifiedPreAssignmentPeriod !== true
+              || normalizedHistoricalReason.length < 3
+            ) {
+              throw new StayDomainError(
+                `The selected Room Assignment begins on ${assignmentStart}, after the requested Stay date ${joinedOn}. Confirm the earlier occupancy as unverified or use the audited correction workflow.`,
+                409,
+                {
+                  code: 'ASSIGNMENT_STARTS_AFTER_STAY',
+                  assignment: admissionAssignment,
+                  requestedJoinedOn: joinedOn,
+                  requiresSuperAdminAcknowledgement: true,
+                },
+              );
+            }
+            unverifiedOccupancyUntil = getPreviousLogicalDate(assignmentStart);
+          }
+        } else if (roomFees && typeof roomFees.assignMemberToRoom === 'function') {
           createdAssignment = await roomFees.assignMemberToRoom({
             roomId: initialRoomId.trim(),
             memberId,
@@ -163,9 +224,23 @@ export function createStayService({
             isAdmission: true,
             session,
           });
+          admissionAssignment = createdAssignment;
+          admissionAssignmentOwned = true;
         }
 
-        if (monthlyFeePaise && roomFees && typeof roomFees.createFeePlan === 'function') {
+        if (admissionMode === 'link_existing_assignment' && typeof roomFees?.getActiveFeePlan === 'function') {
+          const planMonth = (admissionAssignment.effectiveFromDate || joinedOn).slice(0, 7);
+          admissionFeePlan = await roomFees.getActiveFeePlan(memberId, planMonth);
+          if (admissionFeePlan && monthlyFeePaise && admissionFeePlan.amountPaise !== monthlyFeePaise) {
+            throw new StayDomainError(
+              'The requested monthly fee conflicts with the member\'s existing Fee Plan. Reuse it or correct the plan separately.',
+              409,
+              { code: 'FEE_PLAN_CONFLICT', feePlan: admissionFeePlan },
+            );
+          }
+        }
+
+        if (!admissionFeePlan && monthlyFeePaise && roomFees && typeof roomFees.createFeePlan === 'function') {
           createdFeePlan = await roomFees.createFeePlan({
             memberId,
             effectiveFromMonth: joinMonth,
@@ -175,6 +250,8 @@ export function createStayService({
             isAdmission: true,
             session,
           });
+          admissionFeePlan = createdFeePlan;
+          admissionFeePlanOwned = true;
         }
 
         createdStay = await repository.createStay({
@@ -186,8 +263,10 @@ export function createStayService({
           status: STAY_STATUSES.ACTIVE,
           initialRoomId: initialRoomId.trim(),
           currentRoomId: initialRoomId.trim(),
-          admissionAssignmentId: createdAssignment?.assignmentId || null,
-          admissionFeePlanId: createdFeePlan?.feePlanId || null,
+          admissionAssignmentId: admissionAssignment?.assignmentId || null,
+          admissionAssignmentOwned,
+          admissionFeePlanId: admissionFeePlan?.feePlanId || null,
+          admissionFeePlanOwned,
           history: [
             {
               event: 'STAY_CREATED',
@@ -203,6 +282,12 @@ export function createStayService({
                 expectedDepositPaise: expectedDepositPaise || 0,
                 historicalAdmission: isHistoricalAdmission,
                 historicalReason: isHistoricalAdmission ? normalizedHistoricalReason : null,
+                admissionMode,
+                assignmentOwnership: admissionAssignmentOwned ? 'STAY_CREATED' : 'PRE_EXISTING',
+                feePlanOwnership: admissionFeePlan
+                  ? (admissionFeePlanOwned ? 'STAY_CREATED' : 'PRE_EXISTING')
+                  : 'NONE',
+                unverifiedOccupancyUntil,
               },
             },
           ],
@@ -253,6 +338,22 @@ export function createStayService({
         }
         if (err.message && (err.message.includes('Transactions are not supported') || err.message.includes('replica set'))) {
           throw new StayDomainError('Financial transaction unavailable. Database transaction support is required.', 503);
+        }
+        if (
+          admissionMode === 'new_assignment'
+          && err.statusCode === 409
+          && /active room assignment/i.test(err.message || '')
+          && typeof roomFees?.getAssignmentsForMember === 'function'
+        ) {
+          const assignments = await roomFees.getAssignmentsForMember(memberId);
+          const conflict = assignments.find((item) => !item.cancelledAt) || null;
+          throw new StayDomainError(
+            conflict?.roomNumber
+              ? `${memberId} already occupies Room ${conflict.roomNumber}. Link the existing Room Assignment instead of creating another assignment.`
+              : err.message,
+            409,
+            { code: 'EXISTING_ASSIGNMENT_CAN_BE_LINKED', assignment: conflict },
+          );
         }
         throw err;
       } finally {
@@ -367,13 +468,15 @@ export function createStayService({
 
       const cancelledAt = now();
       try {
-        await roomFees.cancelAdmissionArtifacts({
-          assignmentId: stay.admissionAssignmentId,
-          feePlanId: stay.admissionFeePlanId || null,
-          reason: normalizedReason,
-          actorRole,
-          session,
-        });
+        if (stay.admissionAssignmentOwned !== false || stay.admissionFeePlanOwned === true) {
+          await roomFees.cancelAdmissionArtifacts({
+            assignmentId: stay.admissionAssignmentOwned !== false ? stay.admissionAssignmentId : null,
+            feePlanId: stay.admissionFeePlanOwned === true ? stay.admissionFeePlanId : null,
+            reason: normalizedReason,
+            actorRole,
+            session,
+          });
+        }
 
         const depositAccount = await repository.findDepositAccountByStayId(stayId, { session });
         if (depositAccount) {
@@ -449,6 +552,13 @@ export function createStayService({
       }
       if (!stay.admissionAssignmentId) {
         throw new StayDomainError('The admission room assignment cannot be identified safely.', 409);
+      }
+      if (stay.admissionAssignmentOwned === false) {
+        throw new StayDomainError(
+          'This Stay links a pre-existing Room Assignment. Correct the assignment through the audited Room Fees workflow instead.',
+          409,
+          { code: 'PRE_EXISTING_ASSIGNMENT_REQUIRES_SEPARATE_CORRECTION' },
+        );
       }
 
       const [finances, clearances] = await Promise.all([

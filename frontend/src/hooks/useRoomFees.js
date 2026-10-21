@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
 import { socket } from '../lib/socket.js';
 import { getIndiaCurrentLogicalMonth } from '../lib/logicalDate.js';
+import { mapMemberRoomFeeOverview, roomFeeRequestKey } from '../lib/roomFeeContracts.js';
 
 /**
  * Hook for a Member to view their current month room fee statement & assignment
@@ -18,13 +19,14 @@ export function useMyRoomFees(month, memberId = null) {
   useEffect(() => {
     if (!month) return undefined;
     const controller = new AbortController();
+    const key = roomFeeRequestKey(memberId, month);
     const query = new URLSearchParams({ month });
     if (memberId) query.set('memberId', memberId);
     api.get(`/api/room-fees/me?${query.toString()}`, { signal: controller.signal })
-      .then((res) => setState({ key: month, loading: false, error: '', data: res.data }))
+      .then((res) => setState({ key, loading: false, error: '', data: mapMemberRoomFeeOverview(res.data) }))
       .catch((err) => {
         if (!controller.signal.aborted) {
-          setState({ key: month, loading: false, error: err?.message || 'Unable to load room fees.', data: null });
+          setState({ key, loading: false, error: err?.message || 'Unable to load room fees.', data: null });
         }
       });
     return () => controller.abort();
@@ -46,7 +48,7 @@ export function useMyRoomFees(month, memberId = null) {
     };
   }, [month, refresh]);
 
-  const isCurrent = state.key === month;
+  const isCurrent = state.key === roomFeeRequestKey(memberId, month);
   return {
     loading: !isCurrent || state.loading,
     error: isCurrent ? state.error : '',

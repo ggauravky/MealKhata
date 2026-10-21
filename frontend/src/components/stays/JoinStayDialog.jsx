@@ -3,6 +3,10 @@ import { useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { ROOMMATES } from '../../lib/constants.js';
 import { rupeesToPaise } from '../../lib/money.js';
+import {
+  buildStayAdmissionPayload,
+  selectExistingAssignmentForAdmission,
+} from '../../lib/stayAdmissionContracts.js';
 import { Button } from '../ui/button.jsx';
 import {
   Dialog,
@@ -31,6 +35,14 @@ export function JoinStayDialog({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [historicalReason, setHistoricalReason] = useState('');
+  const [allowUnverifiedPreAssignmentPeriod, setAllowUnverifiedPreAssignmentPeriod] = useState(false);
+  const [memberStatus, setMemberStatus] = useState({
+    loading: false,
+    error: '',
+    assignments: [],
+    stays: [],
+    feePlans: [],
+  });
 
   useEffect(() => {
     if (!open) return;
@@ -43,12 +55,66 @@ export function JoinStayDialog({
     setJoinedOn(todayStr);
     setError('');
     setHistoricalReason('');
+    setAllowUnverifiedPreAssignmentPeriod(false);
   }, [initialMemberId, open]);
+
+  useEffect(() => {
+    if (!open || !memberId) return undefined;
+    const controller = new AbortController();
+    setMemberStatus((current) => ({ ...current, loading: true, error: '' }));
+    Promise.all([
+      api.get(`/api/room-fees/assignments/${encodeURIComponent(memberId)}`, { signal: controller.signal }),
+      api.get(`/api/stays?memberId=${encodeURIComponent(memberId)}`, { signal: controller.signal }),
+      api.get(`/api/room-fees/plans/${encodeURIComponent(memberId)}`, { signal: controller.signal }),
+    ]).then(([assignmentsResponse, staysResponse, plansResponse]) => {
+      setMemberStatus({
+        loading: false,
+        error: '',
+        assignments: assignmentsResponse.data || [],
+        stays: staysResponse.data || [],
+        feePlans: plansResponse.data || [],
+      });
+    }).catch((statusError) => {
+      if (!controller.signal.aborted) {
+        setMemberStatus({
+          loading: false,
+          error: statusError?.message || 'Unable to load the resident\'s current accommodation status.',
+          assignments: [],
+          stays: [],
+          feePlans: [],
+        });
+      }
+    });
+    return () => controller.abort();
+  }, [memberId, open]);
+
+  const existingAssignment = selectExistingAssignmentForAdmission(memberStatus.assignments, joinedOn);
+  const existingStay = memberStatus.stays.find((stay) => (
+    ['ACTIVE', 'CHECKOUT_REQUESTED', 'CHECKOUT_PENDING'].includes(stay.status)
+  )) || null;
+  const existingFeePlan = memberStatus.feePlans.find((plan) => !plan.supersededAt) || null;
+  const assignmentStart = existingAssignment?.effectiveFromDate
+    || (existingAssignment?.effectiveFromMonth ? `${existingAssignment.effectiveFromMonth}-01` : null);
+  const hasHistoricalAssignmentGap = Boolean(existingAssignment && assignmentStart && joinedOn < assignmentStart);
+
+  useEffect(() => {
+    if (existingAssignment?.roomId) {
+      setInitialRoomId(existingAssignment.roomId);
+    }
+  }, [existingAssignment?.assignmentId, existingAssignment?.roomId]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!memberId || !joinedOn || !initialRoomId) {
       setError('Please select a resident, joining date, and initial room.');
+      return;
+    }
+    if (existingStay) {
+      setError(`${memberId} already has an active Hostel Stay (${existingStay.stayId}). View or correct that Stay instead.`);
+      return;
+    }
+    if (hasHistoricalAssignmentGap && !allowUnverifiedPreAssignmentPeriod) {
+      setError(`The existing Room Assignment begins on ${assignmentStart}. Use that date or explicitly acknowledge the earlier period as unverified.`);
       return;
     }
 
@@ -58,19 +124,25 @@ export function JoinStayDialog({
       const monthlyFeePaise = rentRupees ? rupeesToPaise(rentRupees) : undefined;
       const expectedDepositPaise = expectedDepositRupees ? rupeesToPaise(expectedDepositRupees) : 0;
 
-      await onSubmitStay({
+      await onSubmitStay(buildStayAdmissionPayload({
         memberId,
         joinedOn,
         initialRoomId,
-        monthlyFeePaise,
-        monthlyRentPaise: monthlyFeePaise,
+        assignment: existingAssignment,
+        monthlyFeePaise: existingFeePlan ? undefined : monthlyFeePaise,
         expectedDepositPaise,
-        historicalReason: historicalReason.trim() || undefined,
-      });
+        historicalReason: historicalReason.trim(),
+        allowUnverifiedPreAssignmentPeriod,
+      }));
 
       onOpenChange(false);
     } catch (err) {
-      setError(err?.message || 'Failed to register hostel stay.');
+      const conflictAssignment = err?.details?.assignment;
+      setError(
+        conflictAssignment?.roomNumber
+          ? `${err.message} ${memberId} already occupies Room ${conflictAssignment.roomNumber}. Link that Room Assignment instead of creating another one.`
+          : err?.message || 'Failed to register hostel stay.',
+      );
     } finally {
       setSubmitting(false);
     }
@@ -104,7 +176,11 @@ export function JoinStayDialog({
             <select
               id="stayMember"
               value={memberId}
-              onChange={(e) => setMemberId(e.target.value)}
+              onChange={(e) => {
+                setMemberId(e.target.value);
+                setInitialRoomId('');
+                setAllowUnverifiedPreAssignmentPeriod(false);
+              }}
               className="w-full rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-teal-500"
             >
               {ROOMMATES.map((m) => (
@@ -113,6 +189,24 @@ export function JoinStayDialog({
                 </option>
               ))}
             </select>
+          </div>
+
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs dark:border-slate-800 dark:bg-slate-900/60">
+            {memberStatus.loading ? (
+              <p className="text-slate-500">Loading current assignment, Stay, and Fee Plan…</p>
+            ) : memberStatus.error ? (
+              <p className="text-red-700 dark:text-red-300">{memberStatus.error}</p>
+            ) : (
+              <div className="space-y-1">
+                <p className="font-semibold text-slate-900 dark:text-slate-100">
+                  {ROOMMATES.find((member) => member.id === memberId)?.name || memberId}
+                </p>
+                <p>Current room: <strong>{existingAssignment ? `Room ${existingAssignment.roomNumber || existingAssignment.roomId}` : 'Not assigned'}</strong></p>
+                <p>Room Assignment: <strong>{existingAssignment ? 'Already configured' : 'New assignment required'}</strong></p>
+                <p>Hostel Stay: <strong>{existingStay ? existingStay.status : 'Not registered'}</strong></p>
+                <p>Fee Plan: <strong>{existingFeePlan ? 'Already configured' : 'Not configured'}</strong></p>
+              </div>
+            )}
           </div>
 
           <div className="space-y-1">
@@ -131,13 +225,14 @@ export function JoinStayDialog({
 
           <div className="space-y-1">
             <Label htmlFor="stayRoom" className="text-xs">
-              Initial Room Assignment
+              {existingAssignment ? 'Use Existing Room Assignment' : 'Initial Room Assignment'}
             </Label>
             <select
               id="stayRoom"
               value={initialRoomId}
               onChange={(e) => setInitialRoomId(e.target.value)}
               required
+              disabled={Boolean(existingAssignment)}
               className="w-full rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-teal-500"
             >
               <option value="">Select Initial Room</option>
@@ -148,6 +243,28 @@ export function JoinStayDialog({
               ))}
             </select>
           </div>
+
+          {hasHistoricalAssignmentGap && (
+            <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+              <p>
+                This assignment starts on <strong>{assignmentStart}</strong>. The requested Stay date <strong>{joinedOn}</strong> will not backdate the Room Assignment or generate historical fees.
+              </p>
+              <Button type="button" variant="outline" size="sm" onClick={() => setJoinedOn(assignmentStart)} className="h-7 text-xs">
+                Use actual assignment date
+              </Button>
+              {isSuperAdmin && (
+                <label className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={allowUnverifiedPreAssignmentPeriod}
+                    onChange={(event) => setAllowUnverifiedPreAssignmentPeriod(event.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span>Keep the earlier Stay date and mark occupancy before {assignmentStart} as unverified.</span>
+                </label>
+              )}
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
@@ -160,6 +277,7 @@ export function JoinStayDialog({
                 placeholder="e.g. 2800"
                 value={rentRupees}
                 onChange={(e) => setRentRupees(e.target.value)}
+                disabled={Boolean(existingFeePlan)}
                 className="text-xs"
               />
             </div>
@@ -214,10 +332,18 @@ export function JoinStayDialog({
             <Button
               type="submit"
               size="sm"
-              disabled={submitting || !initialRoomId || !joinedOn}
+              disabled={
+                submitting
+                || memberStatus.loading
+                || Boolean(memberStatus.error)
+                || Boolean(existingStay)
+                || !initialRoomId
+                || !joinedOn
+                || (hasHistoricalAssignmentGap && !allowUnverifiedPreAssignmentPeriod)
+              }
               className="text-xs bg-teal-600 hover:bg-teal-700 text-white"
             >
-              {submitting ? 'Creating...' : 'Create Stay'}
+              {submitting ? 'Creating...' : existingAssignment ? 'Link Assignment & Create Stay' : 'Create Stay'}
             </Button>
           </DialogFooter>
         </form>

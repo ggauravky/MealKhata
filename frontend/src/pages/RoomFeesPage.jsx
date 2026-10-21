@@ -14,7 +14,7 @@ import { Skeleton } from '../components/ui/skeleton.jsx';
 import { useAuth } from '../hooks/useAuth.js';
 import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
 import { usePwa } from '../hooks/usePwa.js';
-import { useMyRoomFeeHistory, useMyRoomFees, useRoomPaymentSettings } from '../hooks/useRoomFees.js';
+import { useMyRoomFeeHistory, useMyRoomFees } from '../hooks/useRoomFees.js';
 import { useServerToday } from '../hooks/useServerToday.js';
 import { addLogicalMonths, formatLogicalMonth, isValidLogicalMonth } from '../lib/logicalMonth.js';
 
@@ -43,7 +43,6 @@ export function RoomFeesPage() {
     : canAccessAdmin ? ROOMMATES[0].id : null;
   const { loading: feeLoading, error: feeError, data: feeData, refresh: refreshFee } = useMyRoomFees(month, selectedMemberId);
   const { loading: historyLoading, error: historyError, data: historyData, refresh: refreshHistory } = useMyRoomFeeHistory(selectedMemberId);
-  const { settings } = useRoomPaymentSettings();
 
   const selectMember = (memberId) => {
     const next = new URLSearchParams(searchParams);
@@ -225,7 +224,7 @@ export function RoomFeesPage() {
 
               {/* Payment Instructions Card */}
               <RoomPaymentInstructionsCard
-                settings={settings}
+                settings={feeData.settings}
                 remainingPaise={statement?.remainingPaise || 0}
                 monthLabel={formatLogicalMonth(month)}
               />

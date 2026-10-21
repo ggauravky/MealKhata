@@ -260,7 +260,16 @@ export function createStayRouter({
 
   router.post('/', requireAdminOrAbove, async (req, res, next) => {
     try {
-      const { memberId, joinedOn, initialRoomId, expectedDepositPaise, historicalReason } = req.body || {};
+      const {
+        memberId,
+        joinedOn,
+        initialRoomId,
+        expectedDepositPaise,
+        historicalReason,
+        admissionMode,
+        assignmentId,
+        allowUnverifiedPreAssignmentPeriod,
+      } = req.body || {};
       const monthlyFeePaise = req.body?.monthlyFeePaise ?? req.body?.monthlyRatePaise ?? req.body?.monthlyRentPaise;
       const newStay = await service.createStay({
         memberId,
@@ -272,6 +281,9 @@ export function createStayRouter({
         actorRole: req.auth.role,
         actorMemberId: req.auth.memberId || null,
         historicalReason,
+        admissionMode,
+        assignmentId,
+        allowUnverifiedPreAssignmentPeriod,
       });
 
       notifyStayChange();
