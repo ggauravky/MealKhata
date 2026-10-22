@@ -14,6 +14,7 @@ import { financialOverviewService } from '../finance/financialOverview.service.j
 import { depositService } from './deposit.service.js';
 import { stayRepository } from './stay.repository.js';
 import { createStayAttributionService, defaultStayAttributionService } from './stayAttribution.service.js';
+import { guardCheckoutFinancialSnapshot } from '../finance/financialMutationGuard.js';
 import {
   CLEARANCE_STATUSES,
   DEPOSIT_ACCOUNT_STATUSES,
@@ -1104,6 +1105,8 @@ export function createStayService({
           clearanceStatus = CLEARANCE_STATUSES.OUTSTANDING_DUES;
         }
 
+        await guardCheckoutFinancialSnapshot({ stayId, session });
+
         // 1. End active room assignment and release capacity with exact departure date
         await roomFees.endActiveRoomAssignment({
           memberId: stay.memberId,
@@ -1187,6 +1190,18 @@ export function createStayService({
       } catch (err) {
         if (session && session.inTransaction()) {
           await session.abortTransaction();
+        }
+        const isFinancialWriteConflict =
+          err.errorLabels?.has?.('TransientTransactionError')
+          || err.errorLabelSet?.has?.('TransientTransactionError')
+          || err.code === 112
+          || (typeof err.message === 'string' && err.message.includes('WriteConflict'));
+        if (isFinancialWriteConflict) {
+          throw new StayDomainError(
+            'Financial records changed during checkout. Refresh the review and retry.',
+            409,
+            { code: 'CHECKOUT_FINANCIALS_CHANGED' },
+          );
         }
         if (err.message && (err.message.includes('Transactions are not supported') || err.message.includes('replica set'))) {
           throw new StayDomainError('Financial transaction unavailable. Database transaction support is required.', 503);

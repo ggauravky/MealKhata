@@ -1,6 +1,36 @@
 import mongoose from 'mongoose';
 import { Expense } from './expense.model.js';
 import { ExpenseReimbursement } from './expenseReimbursement.model.js';
+import { guardFinancialMutation } from '../finance/financialMutationGuard.js';
+
+function expenseMemberIds(expense) {
+  return [
+    expense.paidByMemberId,
+    ...(expense.allocations || []).map((allocation) => allocation.memberId),
+  ];
+}
+
+async function guardExpenseMutation({ expense, updateData = null, session }) {
+  await guardFinancialMutation({
+    memberIds: expenseMemberIds(expense),
+    effectiveDate: expense.date,
+    session,
+  });
+
+  if (updateData) {
+    const nextDate = updateData.date || expense.date;
+    const nextMembers = expenseMemberIds({ ...expense.toObject(), ...updateData });
+    const oldSignature = `${expense.date}:${[...new Set(expenseMemberIds(expense))].sort().join(',')}`;
+    const nextSignature = `${nextDate}:${[...new Set(nextMembers)].sort().join(',')}`;
+    if (nextSignature !== oldSignature) {
+      await guardFinancialMutation({
+        memberIds: nextMembers,
+        effectiveDate: nextDate,
+        session,
+      });
+    }
+  }
+}
 
 export class ExpenseRepository {
   async createExpense(data) {
@@ -128,6 +158,12 @@ export class ExpenseRepository {
             throw err;
           }
 
+          await guardFinancialMutation({
+            memberIds: [fromMemberId, expense.paidByMemberId],
+            effectiveDate: expense.date,
+            session,
+          });
+
           if (reimbursementData.idempotencyKey) {
             const dup = await ExpenseReimbursement.findOne({
               idempotencyKey: reimbursementData.idempotencyKey,
@@ -232,6 +268,12 @@ export class ExpenseRepository {
           throw err;
         }
 
+        await guardFinancialMutation({
+          memberIds: [reimbursement.fromMemberId, reimbursement.toMemberId],
+          effectiveDate: expense.date,
+          session,
+        });
+
         expense.revision = new Date().toISOString();
         await expense.save({ session });
 
@@ -285,6 +327,8 @@ export class ExpenseRepository {
             err.statusCode = 409;
             throw err;
           }
+
+          await guardExpenseMutation({ expense, session });
 
           // Guard against concurrent reimbursement: check active reimbursements inside transaction
           const activeReimbursements = await ExpenseReimbursement.find({
@@ -374,6 +418,10 @@ export class ExpenseRepository {
             const err = new Error('The expense was modified concurrently. Please refresh and try again.');
             err.statusCode = 409;
             throw err;
+          }
+
+          if (isFinancialChange) {
+            await guardExpenseMutation({ expense, updateData, session });
           }
 
           // If financial change, check active reimbursements inside transaction

@@ -30,6 +30,7 @@ import { MemberAccount } from '../src/auth/memberAccount.model.js';
 import { MemberAccountAudit } from '../src/members/memberAccountAudit.model.js';
 
 import { createStayService, stayService } from '../src/stays/stay.service.js';
+import { defaultStayAttributionService } from '../src/stays/stayAttribution.service.js';
 import { depositService } from '../src/stays/deposit.service.js';
 import { roomFeeService } from '../src/roomFees/roomFee.service.js';
 import { expenseService } from '../src/expenses/expense.service.js';
@@ -51,6 +52,63 @@ async function ensureRoom(roomNumber, capacity = 2) {
     capacity,
     actorRole: 'admin',
   });
+}
+
+function createGatedCheckoutService() {
+  let releaseTransactionalReview;
+  let signalTransactionalReview;
+  const transactionalReviewReached = new Promise((resolve) => {
+    signalTransactionalReview = resolve;
+  });
+  const transactionalReviewRelease = new Promise((resolve) => {
+    releaseTransactionalReview = resolve;
+  });
+  const gatedAttribution = {
+    async getStayAttributedFinances(args) {
+      const result = await defaultStayAttributionService.getStayAttributedFinances(args);
+      if (args.session) {
+        signalTransactionalReview();
+        await transactionalReviewRelease;
+      }
+      return result;
+    },
+  };
+
+  return {
+    checkoutService: createStayService({
+      repository: stayRepository,
+      roomFees: roomFeeService,
+      deposits: depositService,
+      stayAttribution: gatedAttribution,
+    }),
+    transactionalReviewReached,
+    releaseTransactionalReview,
+  };
+}
+
+async function assertConcurrentMutationInvalidatesCheckout({ stayId, mutation }) {
+  const {
+    checkoutService,
+    transactionalReviewReached,
+    releaseTransactionalReview,
+  } = createGatedCheckoutService();
+
+  const checkoutPromise = checkoutService.finalizeCheckout({
+    stayId,
+    actualLeftOn: '2026-10-20',
+    allowWithDues: false,
+    actorRole: 'admin',
+  });
+  await transactionalReviewReached;
+  await mutation();
+  releaseTransactionalReview();
+
+  await assert.rejects(
+    checkoutPromise,
+    (error) => error.statusCode === 409 && error.details?.code === 'CHECKOUT_FINANCIALS_CHANGED',
+    'Checkout must retry instead of issuing a clearance from a stale financial snapshot.',
+  );
+  assert.equal(await HostelClearance.countDocuments({ stayId }), 0);
 }
 
 describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suite', () => {
@@ -1655,7 +1713,7 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
       assert.equal(totalClearances.length, 3, 'Total 3 immutable clearance records exist');
     });
 
-    it('Checkout No-Dues consistency under concurrent financial mutation', async () => {
+    it('Checkout No-Dues consistency under a truly concurrent financial adjustment', async () => {
       const room = await ensureRoom('207', 2);
       const stay = await stayService.createStay({
         memberId: 'gaurav',
@@ -1689,30 +1747,165 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
       assert.equal(reviewBefore.isEligibleForNoDues, true);
       assert.equal(reviewBefore.totalOutstandingPayablePaise, 0);
 
-      // Super Admin adjusts the charge to ₹3,300 (creating ₹500 outstanding due)
-      await roomFeeService.adjustCharge({
-        chargeId: charge.chargeId,
-        amountPaise: 50000,
-        reason: 'Late electricity surcharges',
-        actorRole: 'superadmin',
+      await assertConcurrentMutationInvalidatesCheckout({
+        stayId: stay.stayId,
+        mutation: () => roomFeeService.adjustCharge({
+          chargeId: charge.chargeId,
+          amountPaise: 50000,
+          reason: 'Late electricity surcharges',
+          actorRole: 'superadmin',
+        }),
+      });
+    });
+
+    it('Checkout No-Dues consistency under a concurrent room-payment void', async () => {
+      const room = await ensureRoom('207-payment-void', 2);
+      const stay = await stayService.createStay({
+        memberId: 'gaurav',
+        joinedOn: '2026-10-01',
+        initialRoomId: room.roomId,
+        actorRole: 'admin',
+      });
+      await roomFeeService.createFeePlan({
+        memberId: 'gaurav',
+        amountPaise: 280000,
+        effectiveFromMonth: '2026-10',
+        actorRole: 'admin',
+      });
+      const { charges } = await roomFeeService.issueCharges('2026-10', 'admin');
+      const payment = await roomFeeService.recordPayment({
+        chargeId: charges[0].chargeId,
+        amountPaise: 280000,
+        method: 'upi',
+        idempotencyKey: randomUUID(),
+        actorRole: 'admin',
       });
 
-      // Attempting to finalize checkout with allowWithDues: false MUST fail because dues exist
-      await assert.rejects(
-        async () => {
-          await stayService.finalizeCheckout({
-            stayId: stay.stayId,
-            actualLeftOn: '2026-10-20',
-            allowWithDues: false,
-            actorRole: 'admin',
-          });
-        },
-        (err) => err.statusCode === 403 || err.statusCode === 409
-      );
+      assert.equal((await stayService.getCheckoutReview(stay.stayId)).isEligibleForNoDues, true);
+      await assertConcurrentMutationInvalidatesCheckout({
+        stayId: stay.stayId,
+        mutation: () => roomFeeService.voidPayment({
+          roomPaymentId: payment.roomPaymentId,
+          reason: 'Payment was recorded against the wrong receipt',
+          actorRole: 'superadmin',
+        }),
+      });
+    });
 
-      // Clearance is NOT issued
-      const clearance = await HostelClearance.findOne({ stayId: stay.stayId }).lean();
-      assert.equal(clearance, null, 'No false No-Dues clearance can be issued with outstanding dues');
+    it('Checkout No-Dues consistency under a concurrent financial expense correction', async () => {
+      const room = await ensureRoom('207-expense', 2);
+      const stay = await stayService.createStay({
+        memberId: 'gaurav',
+        joinedOn: '2026-10-01',
+        initialRoomId: room.roomId,
+        actorRole: 'admin',
+      });
+      const expense = await expenseService.createExpense({
+        date: '2026-10-10',
+        title: 'Member-paid supplies',
+        category: 'groceries',
+        amountPaise: 10000,
+        paidByMemberId: 'gaurav',
+        splitType: 'equal',
+        participants: ['gaurav'],
+        actorRole: 'admin',
+        actorMemberId: 'gaurav',
+      });
+
+      assert.equal((await stayService.getCheckoutReview(stay.stayId)).isEligibleForNoDues, true);
+      await assertConcurrentMutationInvalidatesCheckout({
+        stayId: stay.stayId,
+        mutation: () => expenseService.correctExpense(expense.expenseId, {
+          reason: 'Correct the member who paid',
+          changes: { paidByMemberId: 'nikhil' },
+          expectedRevision: expense.revision,
+          actorRole: 'superadmin',
+        }),
+      });
+    });
+
+    it('Checkout snapshot consistency under a concurrent deposit refund', async () => {
+      const room = await ensureRoom('207-deposit-refund', 2);
+      const stay = await stayService.createStay({
+        memberId: 'gaurav',
+        joinedOn: '2026-10-01',
+        initialRoomId: room.roomId,
+        expectedDepositPaise: 10000,
+        actorRole: 'admin',
+      });
+      await depositService.recordDepositReceipt({
+        stayId: stay.stayId,
+        amountPaise: 10000,
+        method: 'upi',
+        idempotencyKey: randomUUID(),
+        actorRole: 'admin',
+      });
+
+      const {
+        checkoutService,
+        transactionalReviewReached,
+        releaseTransactionalReview,
+      } = createGatedCheckoutService();
+      const checkoutPromise = checkoutService.finalizeCheckout({
+        stayId: stay.stayId,
+        actualLeftOn: '2026-10-20',
+        allowWithDues: true,
+        exceptionReason: 'Deposit settlement is being completed',
+        actorRole: 'superadmin',
+      });
+      await transactionalReviewReached;
+      await depositService.recordDepositRefund({
+        stayId: stay.stayId,
+        amountPaise: 10000,
+        method: 'upi',
+        idempotencyKey: randomUUID(),
+        actorRole: 'admin',
+      });
+      releaseTransactionalReview();
+
+      await assert.rejects(
+        checkoutPromise,
+        (error) => error.statusCode === 409 && error.details?.code === 'CHECKOUT_FINANCIALS_CHANGED',
+      );
+      assert.equal(await HostelClearance.countDocuments({ stayId: stay.stayId }), 0);
+    });
+
+    it('Checkout No-Dues consistency under a concurrent reimbursement void', async () => {
+      const room = await ensureRoom('207-reimb', 2);
+      const stay = await stayService.createStay({
+        memberId: 'gaurav',
+        joinedOn: '2026-10-01',
+        initialRoomId: room.roomId,
+        actorRole: 'admin',
+      });
+      const expense = await expenseService.createExpense({
+        date: '2026-10-10',
+        title: 'Shared supplies',
+        category: 'groceries',
+        amountPaise: 10000,
+        paidByMemberId: 'nikhil',
+        splitType: 'equal',
+        participants: ['gaurav'],
+        actorRole: 'admin',
+        actorMemberId: 'gaurav',
+      });
+      const reimbursement = await expenseService.recordReimbursement({
+        expenseId: expense.expenseId,
+        fromMemberId: 'gaurav',
+        amountPaise: 10000,
+        idempotencyKey: randomUUID(),
+        actorRole: 'admin',
+        actorMemberId: 'gaurav',
+      });
+
+      assert.equal((await stayService.getCheckoutReview(stay.stayId)).isEligibleForNoDues, true);
+      await assertConcurrentMutationInvalidatesCheckout({
+        stayId: stay.stayId,
+        mutation: () => expenseService.voidReimbursement(reimbursement.reimbursementId, {
+          reason: 'Bank transfer was reversed',
+          actorRole: 'superadmin',
+        }),
+      });
     });
 
     it('Same-month dual stays produce strictly isolated statements without cross-contamination', async () => {

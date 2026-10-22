@@ -8,6 +8,7 @@ import { RoomPayment } from './roomPayment.model.js';
 import { RoomPaymentSettings } from './roomPaymentSettings.model.js';
 import { ROOM_SETTINGS_KEY } from './roomFee.constants.js';
 import { selectAssignmentForDate, selectAssignmentForMonth } from './assignmentResolution.js';
+import { guardFinancialMutation } from '../finance/financialMutationGuard.js';
 
 export const roomRepository = {
   // Rooms
@@ -248,6 +249,12 @@ export const roomRepository = {
             throw err;
           }
 
+          await guardFinancialMutation({
+            memberId: targetMemberId,
+            effectiveMonth: targetMonth,
+            session,
+          });
+
           // 2. Check idempotency within transaction session
           const existingKey = await RoomPayment.findOne({ idempotencyKey }).session(session);
           if (existingKey) {
@@ -362,6 +369,12 @@ export const roomRepository = {
             err.statusCode = 400;
             throw err;
           }
+
+          await guardFinancialMutation({
+            memberId: charge.memberId,
+            effectiveMonth: charge.month,
+            session,
+          });
 
           const currentAdjustments = charge.adjustments || [];
           const currentTotal = currentAdjustments.reduce((sum, a) => sum + a.amountPaise, 0);
@@ -514,6 +527,12 @@ export const roomRepository = {
             await session.commitTransaction();
             return payment.toObject();
           }
+
+          await guardFinancialMutation({
+            memberId: payment.memberId,
+            effectiveMonth: payment.month,
+            session,
+          });
 
           // Guard / touch charge revision
           await RoomCharge.updateOne(

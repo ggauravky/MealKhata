@@ -10,6 +10,7 @@ import {
   HostelStay,
 } from './stay.model.js';
 import { STAY_STATUSES } from './stay.constants.js';
+import { guardFinancialMutation } from '../finance/financialMutationGuard.js';
 
 export const stayRepository = {
   // ----------------------------------------------------
@@ -270,6 +271,8 @@ export const stayRepository = {
           throw err;
         }
 
+        await guardFinancialMutation({ stayId, session });
+
         const transactions = await HostelDepositTransaction.find({
           stayId,
           status: 'recorded',
@@ -360,6 +363,8 @@ export const stayRepository = {
         }
 
         const targetStayId = tx.stayId || stayId;
+
+        await guardFinancialMutation({ stayId: targetStayId, session });
 
         // If voiding a RECEIVED transaction, verify that reducing received funds does not make heldPaise negative
         if (tx.type === 'RECEIVED') {
