@@ -25,6 +25,8 @@ import { RoomPaymentSettings } from '../src/roomFees/roomPaymentSettings.model.j
 import { Expense } from '../src/expenses/expense.model.js';
 import { ExpenseReimbursement } from '../src/expenses/expenseReimbursement.model.js';
 import { MealDay } from '../src/meals/meal.model.js';
+import { MonthlyMealRate } from '../src/billing/monthlyRate.model.js';
+import { Payment } from '../src/payments/payment.model.js';
 import { UserAccount } from '../src/auth/userAccount.model.js';
 import { MemberAccount } from '../src/auth/memberAccount.model.js';
 import { MemberAccountAudit } from '../src/members/memberAccountAudit.model.js';
@@ -38,6 +40,7 @@ import { stayRepository } from '../src/stays/stay.repository.js';
 import { roomRepository } from '../src/roomFees/room.repository.js';
 import { defaultExpenseRepository } from '../src/expenses/expense.repository.js';
 import { computeChargeFinancials } from '../src/roomFees/roomFee.serializer.js';
+import { paymentRepository } from '../src/payments/payment.repository.js';
 import { createMemberAccountService } from '../src/members/memberAccount.service.js';
 import { createMemberService } from '../src/members/member.service.js';
 
@@ -132,6 +135,8 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
       Expense.init(),
       ExpenseReimbursement.init(),
       MealDay.init(),
+      MonthlyMealRate.init(),
+      Payment.init(),
       UserAccount.init(),
       MemberAccount.init(),
       MemberAccountAudit.init(),
@@ -1788,6 +1793,55 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
           roomPaymentId: payment.roomPaymentId,
           reason: 'Payment was recorded against the wrong receipt',
           actorRole: 'superadmin',
+        }),
+      });
+    });
+
+    it('Checkout No-Dues consistency under a concurrent mess-payment void', async () => {
+      const room = await ensureRoom('207-mess', 2);
+      const stay = await stayService.createStay({
+        memberId: 'gaurav',
+        joinedOn: '2026-10-01',
+        initialRoomId: room.roomId,
+        actorRole: 'admin',
+      });
+      await MonthlyMealRate.create({
+        month: '2026-10',
+        morningPricePaise: 10000,
+        nightPricePaise: 0,
+      });
+      await MealDay.create({
+        date: '2026-10-10',
+        meals: {
+          morning: { gaurav: 'taking', nikhil: 'skip', devansh: 'skip' },
+          night: { gaurav: 'skip', nikhil: 'skip', devansh: 'skip' },
+        },
+      });
+      const payment = await Payment.create({
+        paymentId: randomUUID(),
+        month: '2026-10',
+        memberId: 'gaurav',
+        amountPaise: 10000,
+        method: 'upi',
+        upiReference: null,
+        billAmountAtPaymentPaise: 10000,
+        periodTypeAtPayment: 'past',
+        payeeSnapshot: { receiverName: 'Hostel Admin', upiId: null, receiverMobile: null },
+        recordedAt: new Date('2026-10-10T12:00:00.000Z'),
+        recordedByRole: 'admin',
+        recordedByMemberId: null,
+        idempotencyKey: randomUUID(),
+        status: 'recorded',
+      });
+
+      assert.equal((await stayService.getCheckoutReview(stay.stayId)).isEligibleForNoDues, true);
+      await assertConcurrentMutationInvalidatesCheckout({
+        stayId: stay.stayId,
+        mutation: () => paymentRepository.voidIfRecorded({
+          paymentId: payment.paymentId,
+          voidedAt: new Date('2026-10-20T12:00:00.000Z'),
+          voidedByRole: 'superadmin',
+          voidReason: 'UPI transfer was reversed',
         }),
       });
     });
