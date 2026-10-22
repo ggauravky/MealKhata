@@ -57,6 +57,8 @@ export function createStayService({
   stayAttribution = null,
   now = () => new Date(),
   enforceHistoricalPolicy = process.env.NODE_ENV !== 'test',
+  requiresTransactions = repository === stayRepository,
+  startSession = () => mongoose.startSession(),
 } = {}) {
   const attributionService =
     stayAttribution ||
@@ -66,6 +68,30 @@ export function createStayService({
       deposits,
       roomFees,
     });
+
+  const startLifecycleTransaction = async () => {
+    if (mongoose.connection?.readyState !== 1) {
+      if (!requiresTransactions) return null;
+      throw new StayDomainError(
+        'Database transaction support is required. No records were changed.',
+        503,
+        { code: 'TRANSACTION_REQUIRED' },
+      );
+    }
+
+    try {
+      const session = await startSession();
+      session.startTransaction();
+      return session;
+    } catch (_error) {
+      throw new StayDomainError(
+        'Database transaction support is required. No records were changed.',
+        503,
+        { code: 'TRANSACTION_REQUIRED' },
+      );
+    }
+  };
+
   return {
     /**
      * Create a new hostel stay (admission / onboarding)
@@ -155,16 +181,7 @@ export function createStayService({
       let admissionFeePlan = null;
       let admissionFeePlanOwned = false;
       let unverifiedOccupancyUntil = null;
-      let session = null;
-
-      if (mongoose.connection && mongoose.connection.readyState === 1) {
-        try {
-          session = await mongoose.startSession();
-          session.startTransaction();
-        } catch (_err) {
-          session = null;
-        }
-      }
+      const session = await startLifecycleTransaction();
 
       try {
         if (admissionMode === 'link_existing_assignment') {
@@ -488,13 +505,7 @@ export function createStayService({
         );
       }
 
-      let session = null;
-      if (mongoose.connection?.readyState === 1) {
-        session = await mongoose.startSession();
-        session.startTransaction();
-      } else if (process.env.NODE_ENV === 'production') {
-        throw new StayDomainError('Database transaction support is required.', 503);
-      }
+      const session = await startLifecycleTransaction();
 
       const cancelledAt = now();
       try {
@@ -626,13 +637,7 @@ export function createStayService({
         );
       }
 
-      let session = null;
-      if (mongoose.connection?.readyState === 1) {
-        session = await mongoose.startSession();
-        session.startTransaction();
-      } else if (process.env.NODE_ENV === 'production') {
-        throw new StayDomainError('Database transaction support is required.', 503);
-      }
+      const session = await startLifecycleTransaction();
 
       try {
         const correctedRoomId = roomId.trim();
@@ -820,15 +825,7 @@ export function createStayService({
 
       let newAssignment = null;
       let newPlan = null;
-      let session = null;
-      if (mongoose.connection && mongoose.connection.readyState === 1) {
-        try {
-          session = await mongoose.startSession();
-          session.startTransaction();
-        } catch (_err) {
-          session = null;
-        }
-      }
+      const session = await startLifecycleTransaction();
 
       try {
         // 1. Assign to new room via roomFeeService (which validates capacity and closes old assignment)
@@ -1082,15 +1079,7 @@ export function createStayService({
         clearanceStatus = CLEARANCE_STATUSES.OUTSTANDING_DUES;
       }
 
-      let session = null;
-      if (mongoose.connection && mongoose.connection.readyState === 1) {
-        try {
-          session = await mongoose.startSession();
-          session.startTransaction();
-        } catch (_err) {
-          session = null;
-        }
-      }
+      const session = await startLifecycleTransaction();
 
       try {
         // Concurrency guard: verify fresh stay status inside session
@@ -1234,15 +1223,7 @@ export function createStayService({
 
       const maxRetries = 5;
       for (let attempt = 0; attempt < maxRetries; attempt++) {
-        let session = null;
-        if (mongoose.connection && mongoose.connection.readyState === 1) {
-          try {
-            session = await mongoose.startSession();
-            session.startTransaction();
-          } catch (_err) {
-            session = null;
-          }
-        }
+        const session = await startLifecycleTransaction();
 
         try {
           const sequence = await repository.getNextClearanceSequence(stayId, { session });

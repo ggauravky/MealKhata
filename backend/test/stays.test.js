@@ -175,6 +175,37 @@ describe('MealKhata 2.0 — Phase 4: Complete Hostel Lifecycle, Security Deposit
   // 1. Stay Creation & Admission Invariants
   // ==========================================
   describe('Stay Lifecycle: Admission & Active Stay Constraints', () => {
+    test('transaction startup failure rejects admission before any lifecycle write', async () => {
+      const transactionUnavailableService = createStayService({
+        repository: stayRepository,
+        roomFees: roomFeesService,
+        finance: mockFinanceService,
+        deposits: depositsService,
+        requiresTransactions: true,
+        startSession: async () => {
+          throw new Error('SIMULATED_TRANSACTION_START_FAILURE');
+        },
+      });
+
+      await assert.rejects(
+        transactionUnavailableService.createStay({
+          memberId: 'gaurav',
+          joinedOn: '2026-10-20',
+          initialRoomId: room204Id,
+          monthlyFeePaise: 280000,
+          expectedDepositPaise: 500000,
+          actorRole: ROLES.ADMIN,
+        }),
+        (error) => error.statusCode === 503
+          && error.message === 'Database transaction support is required. No records were changed.',
+      );
+
+      assert.equal((await roomRepository.findAssignmentsForMember('gaurav')).length, 0);
+      assert.equal((await roomRepository.findFeePlansForMember('gaurav')).length, 0);
+      assert.equal((await stayRepository.findStaysByMember('gaurav')).length, 0);
+      assert.equal(await stayRepository.findDepositAccountByStayId('missing'), null);
+    });
+
     test('Admin can register a new hostel stay with room fee and deposit expected', async () => {
       const res = await request(testApp)
         .post('/api/stays')

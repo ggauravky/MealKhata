@@ -10,3 +10,5 @@ Task 1: genuine records — three active member accounts; two active rooms; Nikh
 Task 1: anomaly — four open Gaurav Fee Plans start in 2026-10 (three at 480000 paise, one at 250000 paise); current verifier reports PASS and therefore lacks overlap detection. Checked-out Gaurav Stay has a zero-expected OPEN deposit account and legacy-null admission provenance.
 Task 1: existing read-only checks — 22/22 model index sets PASS with 0 missing; 11/11 data sections report PASS and 0 issues, demonstrating the overlap/reference coverage gap to fix in Task 4.
 Task 1: complete (read-only DNS, ping, projected record audit, and sanitized index/data summaries; zero Atlas writes).
+Task 2: RED — `transaction startup failure rejects admission before any lifecycle write` resolved instead of rejecting, proving the downgrade path.
+Task 2: complete (shared fail-closed lifecycle transaction starter; Stay tests 26/26; focused replica-set admission/rollback tests 3/3).
