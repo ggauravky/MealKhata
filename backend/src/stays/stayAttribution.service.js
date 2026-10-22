@@ -138,6 +138,7 @@ export function createStayAttributionService({
         let monthExpenseReceivable = overview.expenses?.owedToMePaise || 0;
         let monthDebtsOwed = overview.expenses?.debtsOwed || [];
         let monthReceivables = overview.expenses?.receivables || [];
+        const unattributed = { mess: null, room: null };
 
         if (
           (multiStay || partialStayMonth)
@@ -148,7 +149,22 @@ export function createStayAttributionService({
             month,
             code: multiStay ? 'MULTIPLE_STAYS_IN_MONTH' : 'PARTIAL_MONTH_WITHOUT_STAY_REFERENCE',
             message: 'Mess bills and payments are stored by member and month without a Stay reference, so exact ownership requires review.',
+            amounts: {
+              billPaise: monthMessBilled,
+              paidPaise: monthMessPaid,
+              remainingPaise: monthMessRemaining,
+            },
           });
+          if (multiStay) {
+            unattributed.mess = {
+              billPaise: monthMessBilled,
+              paidPaise: monthMessPaid,
+              remainingPaise: monthMessRemaining,
+            };
+            monthMessBilled = 0;
+            monthMessPaid = 0;
+            monthMessRemaining = 0;
+          }
         }
 
         if (
@@ -160,7 +176,21 @@ export function createStayAttributionService({
             month,
             code: 'MULTIPLE_STAYS_IN_MONTH',
             message: 'Room charges and payments are stored by member and month without a Stay reference, so exact ownership requires review.',
+            amounts: {
+              issuedChargePaise: monthRoomBilled,
+              paidPaise: monthRoomPaid,
+              remainingPaise: monthRoomRemaining,
+            },
           });
+          unattributed.room = {
+            issuedChargePaise: monthRoomBilled,
+            paidPaise: monthRoomPaid,
+            remainingPaise: monthRoomRemaining,
+          };
+          monthRoomBilled = 0;
+          monthRoomPaid = 0;
+          monthRoomRemaining = 0;
+          monthRoomIssued = false;
         }
 
         // If this month contains multiple stays for this member, isolate by exact stay dates!
@@ -319,6 +349,7 @@ export function createStayAttributionService({
             outstandingPayablePaise: monthMessRemaining + monthRoomRemaining + monthExpenseOwed,
             totalReceivablePaise: monthExpenseReceivable,
           },
+          unattributed,
         });
       }
 

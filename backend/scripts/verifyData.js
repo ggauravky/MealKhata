@@ -3,12 +3,43 @@ import { env } from '../src/config/env.js';
 import { connectDatabase, disconnectDatabase } from '../src/config/db.js';
 import { MEMBER_IDS } from '../src/config/members.js';
 import { isValidLogicalDate } from '../src/utils/date.js';
-import { isValidLogicalMonth } from '../src/utils/month.js';
+import { isValidLogicalMonth, lastDateOfMonth } from '../src/utils/month.js';
 import { isValidPaymentAmount, isValidUuid } from '../src/payments/payment.constants.js';
 import { isValidPricePaise } from '../src/billing/monthlyRate.constants.js';
 import { isValidLogicalTime } from '../src/settings/reminder.constants.js';
 import { MEAL_STATUSES } from '../src/meals/meal.constants.js';
 import { EXPENSE_CATEGORIES } from '../src/expenses/expense.constants.js';
+
+function assignmentInterval(assignment) {
+  return {
+    start: assignment.effectiveFromDate || `${assignment.effectiveFromMonth}-01`,
+    end: assignment.effectiveUntilDate
+      || (assignment.effectiveUntilMonth ? lastDateOfMonth(assignment.effectiveUntilMonth) : '9999-12-31'),
+  };
+}
+
+function feePlanInterval(plan) {
+  return {
+    start: plan.effectiveFromMonth,
+    end: plan.effectiveUntilMonth || '9999-12',
+  };
+}
+
+function intervalsOverlap(left, right) {
+  return left.start <= right.end && right.start <= left.end;
+}
+
+function overlappingPairs(records, intervalFor) {
+  const pairs = [];
+  for (let leftIndex = 0; leftIndex < records.length; leftIndex++) {
+    for (let rightIndex = leftIndex + 1; rightIndex < records.length; rightIndex++) {
+      if (intervalsOverlap(intervalFor(records[leftIndex]), intervalFor(records[rightIndex]))) {
+        pairs.push([records[leftIndex], records[rightIndex]]);
+      }
+    }
+  }
+  return pairs;
+}
 
 export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
   const issues = [];
@@ -445,6 +476,9 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
     const roomPaymentSettings = await db.collection('room_payment_settings').find({}).toArray();
 
     let roomIssues = 0;
+    const roomMap = new Map(rooms.map((room) => [room.roomId, room]));
+    const feePlanMap = new Map(feePlans.map((plan) => [plan.feePlanId, plan]));
+    const chargeMap = new Map(roomCharges.map((charge) => [charge.chargeId, charge]));
 
     for (const r of rooms) {
       if (!isValidUuid(r.roomId)) {
@@ -474,6 +508,22 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         issues.push(`[room_assignments] Invalid effectiveFromMonth: ${a.effectiveFromMonth}`);
         roomIssues++;
       }
+      if (!roomMap.has(a.roomId)) {
+        issues.push(`[room_assignments] Assignment ${a.assignmentId} references missing room ${a.roomId}`);
+        roomIssues++;
+      }
+      if (a.effectiveUntilMonth && !isValidLogicalMonth(a.effectiveUntilMonth)) {
+        issues.push(`[room_assignments] Invalid effectiveUntilMonth: ${a.effectiveUntilMonth}`);
+        roomIssues++;
+      }
+      if (a.effectiveFromDate && !isValidLogicalDate(a.effectiveFromDate)) {
+        issues.push(`[room_assignments] Invalid effectiveFromDate: ${a.effectiveFromDate}`);
+        roomIssues++;
+      }
+      if (a.effectiveUntilDate && !isValidLogicalDate(a.effectiveUntilDate)) {
+        issues.push(`[room_assignments] Invalid effectiveUntilDate: ${a.effectiveUntilDate}`);
+        roomIssues++;
+      }
     }
 
     for (const p of feePlans) {
@@ -491,6 +541,10 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
       }
       if (!isValidLogicalMonth(p.effectiveFromMonth)) {
         issues.push(`[room_fee_plans] Invalid effectiveFromMonth: ${p.effectiveFromMonth}`);
+        roomIssues++;
+      }
+      if (p.effectiveUntilMonth && !isValidLogicalMonth(p.effectiveUntilMonth)) {
+        issues.push(`[room_fee_plans] Invalid effectiveUntilMonth: ${p.effectiveUntilMonth}`);
         roomIssues++;
       }
     }
@@ -517,6 +571,18 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         issues.push(`[room_charges] Final bill cannot be negative for charge: ${c.chargeId}`);
         roomIssues++;
       }
+      if (!roomMap.has(c.roomId)) {
+        issues.push(`[room_charges] Charge ${c.chargeId} references missing room ${c.roomId}`);
+        roomIssues++;
+      }
+      const feePlan = feePlanMap.get(c.feePlanId);
+      if (!feePlan) {
+        issues.push(`[room_charges] Charge ${c.chargeId} references missing fee plan ${c.feePlanId}`);
+        roomIssues++;
+      } else if (feePlan.memberId !== c.memberId) {
+        issues.push(`[room_charges] Charge ${c.chargeId} member does not match fee plan ${c.feePlanId}`);
+        roomIssues++;
+      }
     }
 
     for (const p of roomPayments) {
@@ -534,6 +600,59 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
       }
       if (!['upi', 'cash', 'bank_transfer', 'other'].includes(p.method)) {
         issues.push(`[room_payments] Invalid payment method for payment: ${p.roomPaymentId}`);
+        roomIssues++;
+      }
+      const charge = chargeMap.get(p.chargeId);
+      if (!charge) {
+        issues.push(`[room_payments] Payment ${p.roomPaymentId} references missing charge ${p.chargeId}`);
+        roomIssues++;
+      } else if (charge.memberId !== p.memberId || charge.month !== p.month) {
+        issues.push(`[room_payments] Payment ${p.roomPaymentId} member or month does not match charge ${p.chargeId}`);
+        roomIssues++;
+      }
+    }
+
+    const assignmentsWithValidIntervals = assignments.filter((assignment) => (
+      isValidLogicalMonth(assignment.effectiveFromMonth)
+      && (!assignment.effectiveUntilMonth || isValidLogicalMonth(assignment.effectiveUntilMonth))
+      && (!assignment.effectiveFromDate || isValidLogicalDate(assignment.effectiveFromDate))
+      && (!assignment.effectiveUntilDate || isValidLogicalDate(assignment.effectiveUntilDate))
+    ));
+    for (const memberId of new Set(assignmentsWithValidIntervals.map((assignment) => assignment.memberId))) {
+      const memberAssignments = assignmentsWithValidIntervals.filter((assignment) => assignment.memberId === memberId);
+      for (const [left, right] of overlappingPairs(memberAssignments, assignmentInterval)) {
+        issues.push(`[room_assignments] Overlapping room assignments for member ${memberId}: ${left.assignmentId} and ${right.assignmentId}`);
+        roomIssues++;
+      }
+    }
+
+    for (const room of rooms) {
+      const roomAssignments = assignmentsWithValidIntervals.filter((assignment) => assignment.roomId === room.roomId);
+      let capacityReported = false;
+      for (const candidate of roomAssignments) {
+        const candidateStart = assignmentInterval(candidate).start;
+        const occupancy = roomAssignments.filter((assignment) => {
+          const interval = assignmentInterval(assignment);
+          return interval.start <= candidateStart && interval.end >= candidateStart;
+        }).length;
+        if (occupancy > room.capacity) {
+          issues.push(`[room_assignments] Room ${room.roomNumber} exceeds capacity ${room.capacity} on ${candidateStart} (${occupancy} assignments)`);
+          roomIssues++;
+          capacityReported = true;
+          break;
+        }
+      }
+      if (capacityReported) continue;
+    }
+
+    const validFeePlans = feePlans.filter((plan) => (
+      isValidLogicalMonth(plan.effectiveFromMonth)
+      && (!plan.effectiveUntilMonth || isValidLogicalMonth(plan.effectiveUntilMonth))
+    ));
+    for (const memberId of new Set(validFeePlans.map((plan) => plan.memberId))) {
+      const memberPlans = validFeePlans.filter((plan) => plan.memberId === memberId);
+      for (const [left, right] of overlappingPairs(memberPlans, feePlanInterval)) {
+        issues.push(`[room_fee_plans] Overlapping fee plans for member ${memberId}: ${left.feePlanId} and ${right.feePlanId}`);
         roomIssues++;
       }
     }
@@ -769,8 +888,14 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
   // 7. Hostel Stays & Lifecycle Domain
   try {
     const stays = await db.collection('hostel_stays').find({}).toArray();
+    const rooms = await db.collection('rooms').find({}).toArray();
+    const assignments = await db.collection('room_assignments').find({}).toArray();
+    const feePlans = await db.collection('room_fee_plans').find({}).toArray();
     let stayIssues = 0;
     const activeStayMembers = new Set();
+    const roomIds = new Set(rooms.map((room) => room.roomId));
+    const assignmentIds = new Set(assignments.map((assignment) => assignment.assignmentId));
+    const feePlanIds = new Set(feePlans.map((plan) => plan.feePlanId));
 
     for (const s of stays) {
       if (!s.stayId || typeof s.stayId !== 'string') {
@@ -798,12 +923,29 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         stayIssues++;
       }
 
-      if (s.status === 'checked_out' && !s.actualLeftOn) {
+      if (s.status === 'CHECKED_OUT' && !s.actualLeftOn) {
         issues.push(`[hostel_stays] Checked out stay ${s.stayId} missing actualLeftOn`);
         stayIssues++;
       }
 
-      if (['active', 'checkout_requested', 'checkout_pending'].includes(s.status)) {
+      if (s.initialRoomId && !roomIds.has(s.initialRoomId)) {
+        issues.push(`[hostel_stays] Stay ${s.stayId} initialRoomId references missing room ${s.initialRoomId}`);
+        stayIssues++;
+      }
+      if (s.currentRoomId && !roomIds.has(s.currentRoomId)) {
+        issues.push(`[hostel_stays] Stay ${s.stayId} currentRoomId references missing room ${s.currentRoomId}`);
+        stayIssues++;
+      }
+      if (s.admissionAssignmentId && !assignmentIds.has(s.admissionAssignmentId)) {
+        issues.push(`[hostel_stays] Stay ${s.stayId} references missing admission assignment ${s.admissionAssignmentId}`);
+        stayIssues++;
+      }
+      if (s.admissionFeePlanId && !feePlanIds.has(s.admissionFeePlanId)) {
+        issues.push(`[hostel_stays] Stay ${s.stayId} references missing admission fee plan ${s.admissionFeePlanId}`);
+        stayIssues++;
+      }
+
+      if (['ACTIVE', 'CHECKOUT_REQUESTED', 'CHECKOUT_PENDING'].includes(s.status)) {
         if (activeStayMembers.has(s.memberId)) {
           issues.push(`[hostel_stays] Member ${s.memberId} has multiple active or pending stays`);
           stayIssues++;
@@ -827,14 +969,36 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
     const accounts = await db.collection('hostel_deposit_accounts').find({}).toArray();
     const transactions = await db.collection('hostel_deposit_transactions').find({}).toArray();
     const clearances = await db.collection('hostel_clearances').find({}).toArray();
+    const stays = await db.collection('hostel_stays').find({}).toArray();
     let depositIssues = 0;
 
+    const stayMap = new Map(stays.map((stay) => [stay.stayId, stay]));
     const accountMap = new Map();
+    const accountIdMap = new Map();
     for (const a of accounts) {
+      if (accountMap.has(a.stayId)) {
+        issues.push(`[hostel_deposit_accounts] Multiple deposit accounts reference stay ${a.stayId}`);
+        depositIssues++;
+      }
       accountMap.set(a.stayId, a);
+      accountIdMap.set(a.depositAccountId, a);
       if (typeof a.expectedDepositPaise !== 'number' || a.expectedDepositPaise < 0) {
         issues.push(`[hostel_deposit_accounts] Invalid expectedDepositPaise in account ${a.depositAccountId}`);
         depositIssues++;
+      }
+      const stay = stayMap.get(a.stayId);
+      if (!stay) {
+        issues.push(`[hostel_deposit_accounts] Deposit account ${a.depositAccountId} references missing stay ${a.stayId}`);
+        depositIssues++;
+      } else {
+        if (a.memberId !== stay.memberId) {
+          issues.push(`[hostel_deposit_accounts] Deposit account ${a.depositAccountId} member does not match stay ${a.stayId}`);
+          depositIssues++;
+        }
+        if (stay.status === 'CHECKED_OUT' && a.status === 'OPEN') {
+          issues.push(`[hostel_deposit_accounts] Checked-out stay ${a.stayId} has OPEN deposit account ${a.depositAccountId}`);
+          depositIssues++;
+        }
       }
     }
 
@@ -846,11 +1010,28 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         depositIssues++;
       }
 
-      if (tx.status === 'posted') {
+      const referencedStay = stayMap.get(tx.stayId);
+      if (!referencedStay) {
+        issues.push(`[hostel_deposit_transactions] Transaction ${tx.depositTransactionId} references missing stay ${tx.stayId}`);
+        depositIssues++;
+      } else if (tx.memberId !== referencedStay.memberId) {
+        issues.push(`[hostel_deposit_transactions] Transaction ${tx.depositTransactionId} member does not match stay ${tx.stayId}`);
+        depositIssues++;
+      }
+      const referencedAccount = accountIdMap.get(tx.depositAccountId);
+      if (!referencedAccount) {
+        issues.push(`[hostel_deposit_transactions] Transaction ${tx.depositTransactionId} references missing deposit account ${tx.depositAccountId}`);
+        depositIssues++;
+      } else if (referencedAccount.stayId !== tx.stayId) {
+        issues.push(`[hostel_deposit_transactions] Transaction ${tx.depositTransactionId} stay does not match deposit account ${tx.depositAccountId}`);
+        depositIssues++;
+      }
+
+      if (tx.status === 'recorded') {
         const current = totalsByStay.get(tx.stayId) || { received: 0, refunded: 0, deducted: 0 };
-        if (tx.type === 'received') current.received += tx.amountPaise;
-        else if (tx.type === 'refunded') current.refunded += tx.amountPaise;
-        else if (tx.type === 'deducted') current.deducted += tx.amountPaise;
+        if (tx.type === 'RECEIVED') current.received += tx.amountPaise;
+        else if (tx.type === 'REFUNDED') current.refunded += tx.amountPaise;
+        else if (tx.type === 'DEDUCTED') current.deducted += tx.amountPaise;
         totalsByStay.set(tx.stayId, current);
       }
     }
@@ -872,7 +1053,16 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
       }
       seenClearanceKeys.add(key);
 
-      if (c.clearanceStatus === 'no_dues' && c.depositSummary?.heldPaise > 0) {
+      const referencedStay = stayMap.get(c.stayId);
+      if (!referencedStay) {
+        issues.push(`[hostel_clearances] Clearance ${c.clearanceId} references missing stay ${c.stayId}`);
+        depositIssues++;
+      } else if (c.memberId !== referencedStay.memberId) {
+        issues.push(`[hostel_clearances] Clearance ${c.clearanceId} member does not match stay ${c.stayId}`);
+        depositIssues++;
+      }
+
+      if (c.clearanceStatus === 'NO_DUES' && c.depositSummary?.heldPaise > 0) {
         issues.push(`[hostel_clearances] No-Dues clearance ${c.clearanceId} has unrefunded deposit (${c.depositSummary.heldPaise})`);
         depositIssues++;
       }

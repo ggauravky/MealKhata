@@ -425,6 +425,140 @@ describe('Phase 12: Security & Reliability', () => {
       assert.equal(passed, false);
       assert.ok(issues.some((i) => i.includes('Closed snapshot member sums do not equal room total')));
     });
+
+    test('flags overlapping fee plans, member assignments, and room-capacity intervals', async () => {
+      const fixture = {
+        rooms: [
+          { roomId: '00000000-0000-4000-8000-000000000001', roomNumber: 'A', capacity: 1 },
+          { roomId: '00000000-0000-4000-8000-000000000002', roomNumber: 'B', capacity: 1 },
+        ],
+        room_assignments: [
+          {
+            assignmentId: '10000000-0000-4000-8000-000000000001',
+            memberId: 'gaurav',
+            roomId: '00000000-0000-4000-8000-000000000001',
+            effectiveFromMonth: '2026-10',
+            effectiveFromDate: '2026-10-01',
+            effectiveUntilMonth: '2026-10',
+            effectiveUntilDate: '2026-10-20',
+          },
+          {
+            assignmentId: '10000000-0000-4000-8000-000000000002',
+            memberId: 'gaurav',
+            roomId: '00000000-0000-4000-8000-000000000002',
+            effectiveFromMonth: '2026-10',
+            effectiveFromDate: '2026-10-15',
+            effectiveUntilMonth: null,
+            effectiveUntilDate: null,
+          },
+          {
+            assignmentId: '10000000-0000-4000-8000-000000000003',
+            memberId: 'nikhil',
+            roomId: '00000000-0000-4000-8000-000000000001',
+            effectiveFromMonth: '2026-10',
+            effectiveFromDate: '2026-10-10',
+            effectiveUntilMonth: '2026-10',
+            effectiveUntilDate: '2026-10-12',
+          },
+        ],
+        room_fee_plans: [
+          {
+            feePlanId: '20000000-0000-4000-8000-000000000001',
+            memberId: 'gaurav',
+            amountPaise: 280000,
+            effectiveFromMonth: '2026-10',
+            effectiveUntilMonth: null,
+          },
+          {
+            feePlanId: '20000000-0000-4000-8000-000000000002',
+            memberId: 'gaurav',
+            amountPaise: 300000,
+            effectiveFromMonth: '2026-10',
+            effectiveUntilMonth: null,
+          },
+        ],
+      };
+      const mockDb = {
+        collection: (name) => ({
+          find: () => ({ toArray: async () => fixture[name] || [] }),
+        }),
+      };
+
+      const { passed, issues } = await verifyDataIntegrity({ db: mockDb });
+      assert.equal(passed, false);
+      assert.ok(issues.some((issue) => issue.includes('Overlapping fee plans for member gaurav')));
+      assert.ok(issues.some((issue) => issue.includes('Overlapping room assignments for member gaurav')));
+      assert.ok(issues.some((issue) => issue.includes('Room A exceeds capacity 1')));
+    });
+
+    test('flags broken Stay, deposit, transaction, and clearance references', async () => {
+      const fixture = {
+        rooms: [
+          { roomId: '00000000-0000-4000-8000-000000000001', roomNumber: 'A', capacity: 1 },
+        ],
+        hostel_stays: [
+          {
+            stayId: 'stay-checked-out',
+            memberId: 'gaurav',
+            joinedOn: '2026-10-01',
+            actualLeftOn: '2026-10-10',
+            initialRoomId: '00000000-0000-4000-8000-000000000001',
+            currentRoomId: '00000000-0000-4000-8000-000000000099',
+            status: 'CHECKED_OUT',
+          },
+        ],
+        hostel_deposit_accounts: [
+          {
+            depositAccountId: 'deposit-open',
+            stayId: 'stay-checked-out',
+            memberId: 'gaurav',
+            expectedDepositPaise: 0,
+            status: 'OPEN',
+          },
+          {
+            depositAccountId: 'deposit-orphan',
+            stayId: 'missing-stay',
+            memberId: 'nikhil',
+            expectedDepositPaise: 10000,
+            status: 'OPEN',
+          },
+        ],
+        hostel_deposit_transactions: [
+          {
+            depositTransactionId: 'tx-orphan',
+            depositAccountId: 'missing-account',
+            stayId: 'missing-stay',
+            memberId: 'nikhil',
+            type: 'RECEIVED',
+            amountPaise: 10000,
+            status: 'recorded',
+          },
+        ],
+        hostel_clearances: [
+          {
+            clearanceId: 'clearance-orphan',
+            stayId: 'missing-stay',
+            memberId: 'nikhil',
+            sequence: 1,
+            clearanceStatus: 'NO_DUES',
+            depositSummary: { heldPaise: 0 },
+          },
+        ],
+      };
+      const mockDb = {
+        collection: (name) => ({
+          find: () => ({ toArray: async () => fixture[name] || [] }),
+        }),
+      };
+
+      const { passed, issues } = await verifyDataIntegrity({ db: mockDb });
+      assert.equal(passed, false);
+      assert.ok(issues.some((issue) => issue.includes('currentRoomId references missing room')));
+      assert.ok(issues.some((issue) => issue.includes('Deposit account deposit-orphan references missing stay')));
+      assert.ok(issues.some((issue) => issue.includes('Transaction tx-orphan references missing deposit account')));
+      assert.ok(issues.some((issue) => issue.includes('Clearance clearance-orphan references missing stay')));
+      assert.ok(issues.some((issue) => issue.includes('Checked-out stay stay-checked-out has OPEN deposit account')));
+    });
   });
 
   describe('Full Recovery Drill Simulation', () => {

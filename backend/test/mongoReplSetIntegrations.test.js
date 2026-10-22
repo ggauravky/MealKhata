@@ -1986,6 +1986,50 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
         actorRole: 'admin',
       });
 
+      await roomFeeService.createFeePlan({
+        memberId: 'nikhil',
+        amountPaise: 280000,
+        effectiveFromMonth: '2026-10',
+        actorRole: 'admin',
+      });
+      const { charges } = await roomFeeService.issueCharges('2026-10', 'admin');
+      const roomCharge = charges.find((charge) => charge.memberId === 'nikhil');
+      await roomFeeService.recordPayment({
+        chargeId: roomCharge.chargeId,
+        amountPaise: 280000,
+        method: 'upi',
+        idempotencyKey: randomUUID(),
+        actorRole: 'admin',
+      });
+      await MonthlyMealRate.create({
+        month: '2026-10',
+        morningPricePaise: 10000,
+        nightPricePaise: 0,
+      });
+      await MealDay.create({
+        date: '2026-10-05',
+        meals: {
+          morning: { gaurav: 'skip', nikhil: 'taking', devansh: 'skip' },
+          night: { gaurav: 'skip', nikhil: 'skip', devansh: 'skip' },
+        },
+      });
+      await Payment.create({
+        paymentId: randomUUID(),
+        month: '2026-10',
+        memberId: 'nikhil',
+        amountPaise: 10000,
+        method: 'upi',
+        upiReference: null,
+        billAmountAtPaymentPaise: 10000,
+        periodTypeAtPayment: 'past',
+        payeeSnapshot: { receiverName: 'Hostel Admin', upiId: null, receiverMobile: null },
+        recordedAt: new Date('2026-10-05T12:00:00.000Z'),
+        recordedByRole: 'admin',
+        recordedByMemberId: null,
+        idempotencyKey: randomUUID(),
+        status: 'recorded',
+      });
+
       // Checkout Stay 1 on 2026-10-10
       await stayService.finalizeCheckout({
         stayId: stay1.stayId,
@@ -2024,6 +2068,17 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
       // Verify that Stay 1 tracked spending contains only exp1 (₹400), not exp2 (₹700)
       assert.equal(review1.totalExpenseSharePaise, 40000, 'Stay 1 only accounts for Oct 1-10 spending');
       assert.equal(review2.totalExpenseSharePaise, 70000, 'Stay 2 only accounts for Oct 20+ spending');
+      assert.equal(review1.totalMessBilledPaise + review2.totalMessBilledPaise, 0);
+      assert.equal(review1.totalRoomBilledPaise + review2.totalRoomBilledPaise, 0);
+      const unresolvedMessBill = review1.monthlyOverviews[0].unattributed.mess.billPaise;
+      assert.ok(unresolvedMessBill > 0);
+      assert.equal(review2.monthlyOverviews[0].unattributed.mess.billPaise, unresolvedMessBill);
+      assert.equal(review1.monthlyOverviews[0].unattributed.room.issuedChargePaise, 280000);
+      assert.equal(review2.monthlyOverviews[0].unattributed.room.issuedChargePaise, 280000);
+      assert.ok(review1.attributionWarnings.some((warning) => warning.domain === 'MESS'));
+      assert.ok(review1.attributionWarnings.some((warning) => warning.domain === 'ROOM_FEES'));
+      assert.equal(review1.isEligibleForNoDues, false);
+      assert.equal(review2.isEligibleForNoDues, false);
     });
   });
 });
