@@ -6,6 +6,7 @@ import mongoose from 'mongoose';
 import { MEMBER_IDS } from '../config/members.js';
 import {
   CLEARANCE_STATUSES,
+  CLEARANCE_VALIDITY_STATUSES,
   DEPOSIT_ACCOUNT_STATUSES,
   DEPOSIT_HOLDER_TYPES,
   DEPOSIT_METHODS,
@@ -448,6 +449,32 @@ export const hostelClearanceSchema = new mongoose.Schema(
       type: String,
       required: true,
       enum: Object.values(CLEARANCE_STATUSES),
+    },
+    validityStatus: {
+      type: String,
+      required: true,
+      enum: Object.values(CLEARANCE_VALIDITY_STATUSES),
+      default: CLEARANCE_VALIDITY_STATUSES.ACTIVE,
+      index: true,
+    },
+    revokedAt: {
+      type: Date,
+      default: null,
+    },
+    revokedByRole: {
+      type: String,
+      default: null,
+    },
+    revocationReason: {
+      type: String,
+      default: null,
+      trim: true,
+      maxlength: MAX_NOTE_LENGTH,
+    },
+    restorationId: {
+      type: String,
+      default: null,
+      trim: true,
     },
     exceptionReason: {
       type: String,

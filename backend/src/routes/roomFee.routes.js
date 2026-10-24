@@ -247,6 +247,36 @@ export function createRoomFeeRouter({
     }
   });
 
+  router.post('/plans/:memberId/reconciliation-preview', requireSuperAdmin, async (req, res, next) => {
+    try {
+      const preview = await service.previewFeePlanReconciliation({
+        memberId: req.params.memberId,
+        schedule: req.body?.schedule,
+        reason: req.body?.reason,
+        actorRole: req.auth.role,
+      });
+      return res.json({ success: true, data: preview });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post('/plans/:memberId/reconcile', requireSuperAdmin, async (req, res, next) => {
+    try {
+      const result = await service.reconcileFeePlans({
+        memberId: req.params.memberId,
+        schedule: req.body?.schedule,
+        reason: req.body?.reason,
+        previewToken: req.body?.previewToken,
+        actorRole: req.auth.role,
+      });
+      notifyChange();
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   // --- Monthly Charges ---
   router.post('/charges/preview', requireAdminOrAbove, async (req, res, next) => {
     try {

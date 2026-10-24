@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { MEMBER_IDS, MEMBERS } from '../config/members.js';
 import { HttpError } from '../utils/HttpError.js';
 import { isValidLogicalMonth, getPreviousLogicalMonth, compareLogicalMonths, getClampedDueDate, lastDateOfMonth } from '../utils/month.js';
@@ -104,6 +104,151 @@ export function createRoomFeeService({
 }) {
   function getCurrentMonth() {
     return getLogicalDateInTimeZone(now(), timezone).slice(0, 7);
+  }
+
+  function validateReconciliationRequest({ memberId, schedule, reason, actorRole }) {
+    if (actorRole !== 'superadmin') {
+      throw new HttpError(403, 'Only Super Admin can reconcile Fee Plans.');
+    }
+    if (!MEMBER_IDS.includes(memberId)) {
+      throw new HttpError(400, 'Invalid member ID.');
+    }
+    if (typeof reason !== 'string' || !reason.trim() || reason.trim().length > MAX_REASON_LENGTH) {
+      throw new HttpError(400, `Reason is required and must not exceed ${MAX_REASON_LENGTH} characters.`);
+    }
+    if (!Array.isArray(schedule) || schedule.length === 0) {
+      throw new HttpError(400, 'At least one Fee Plan schedule period is required.');
+    }
+
+    const normalizedSchedule = schedule.map((period) => {
+      const effectiveUntilMonth = period.effectiveUntilMonth ?? null;
+      const dueDay = Number(period.dueDay ?? DEFAULT_DUE_DAY);
+      if (!isValidLogicalMonth(period.effectiveFromMonth)) {
+        throw new HttpError(400, 'Every schedule period requires a valid effectiveFromMonth.');
+      }
+      if (effectiveUntilMonth !== null && !isValidLogicalMonth(effectiveUntilMonth)) {
+        throw new HttpError(400, 'effectiveUntilMonth must be in YYYY-MM format or null.');
+      }
+      if (effectiveUntilMonth && compareLogicalMonths(period.effectiveFromMonth, effectiveUntilMonth) > 0) {
+        throw new HttpError(400, 'A schedule period cannot end before it starts.');
+      }
+      if (!isValidRoomFeeAmount(period.amountPaise)) {
+        throw new HttpError(400, 'Every schedule period requires a valid non-negative amount in paise.');
+      }
+      if (!Number.isInteger(dueDay) || dueDay < MIN_DUE_DAY || dueDay > MAX_DUE_DAY) {
+        throw new HttpError(400, `Every dueDay must be between ${MIN_DUE_DAY} and ${MAX_DUE_DAY}.`);
+      }
+      return {
+        effectiveFromMonth: period.effectiveFromMonth,
+        effectiveUntilMonth,
+        amountPaise: period.amountPaise,
+        dueDay,
+      };
+    }).sort((a, b) => compareLogicalMonths(a.effectiveFromMonth, b.effectiveFromMonth));
+
+    for (let index = 1; index < normalizedSchedule.length; index += 1) {
+      const previous = normalizedSchedule[index - 1];
+      const current = normalizedSchedule[index];
+      if (!previous.effectiveUntilMonth
+        || compareLogicalMonths(current.effectiveFromMonth, previous.effectiveUntilMonth) <= 0) {
+        throw new HttpError(400, 'The approved Fee Plan schedule must not contain overlapping periods.');
+      }
+    }
+
+    return { normalizedSchedule, normalizedReason: reason.trim() };
+  }
+
+  async function buildFeePlanReconciliationPreview({
+    memberId,
+    schedule,
+    reason,
+    actorRole,
+    session = null,
+    scheduleRevision = null,
+  }) {
+    const { normalizedSchedule, normalizedReason } = validateReconciliationRequest({
+      memberId,
+      schedule,
+      reason,
+      actorRole,
+    });
+    const [plans, charges, persistedState] = await Promise.all([
+      repository.findFeePlansForMember(memberId, { session }),
+      repository.findChargesForMember(memberId, { session }),
+      repository.getFeeScheduleState(memberId, { session }),
+    ]);
+    const activePlans = plans.filter((plan) => !plan.supersededAt);
+    const overlappingPairs = [];
+    for (let left = 0; left < activePlans.length; left += 1) {
+      for (let right = left + 1; right < activePlans.length; right += 1) {
+        const first = activePlans[left];
+        const second = activePlans[right];
+        const firstUntil = first.effectiveUntilMonth || '9999-12';
+        const secondUntil = second.effectiveUntilMonth || '9999-12';
+        if (first.effectiveFromMonth <= secondUntil && second.effectiveFromMonth <= firstUntil) {
+          overlappingPairs.push({
+            feePlanIds: [first.feePlanId, second.feePlanId].sort(),
+            fromMonth: first.effectiveFromMonth > second.effectiveFromMonth
+              ? first.effectiveFromMonth
+              : second.effectiveFromMonth,
+            untilMonth: firstUntil < secondUntil ? firstUntil : secondUntil,
+          });
+        }
+      }
+    }
+    overlappingPairs.sort((a, b) => a.feePlanIds.join(':').localeCompare(b.feePlanIds.join(':')));
+
+    const chargesByPlan = new Map();
+    for (const charge of charges) {
+      if (!charge.feePlanId) continue;
+      if (!chargesByPlan.has(charge.feePlanId)) chargesByPlan.set(charge.feePlanId, []);
+      chargesByPlan.get(charge.feePlanId).push(charge.chargeId);
+    }
+    const referencedPlans = plans
+      .filter((plan) => chargesByPlan.has(plan.feePlanId))
+      .map((plan) => ({
+        feePlanId: plan.feePlanId,
+        chargeIds: chargesByPlan.get(plan.feePlanId).sort(),
+      }))
+      .sort((a, b) => a.feePlanId.localeCompare(b.feePlanId));
+    const revision = scheduleRevision ?? persistedState?.revision ?? 0;
+    const fingerprint = {
+      memberId,
+      revision,
+      schedule: normalizedSchedule,
+      reason: normalizedReason,
+      plans: plans.map((plan) => ({
+        feePlanId: plan.feePlanId,
+        amountPaise: plan.amountPaise,
+        effectiveFromMonth: plan.effectiveFromMonth,
+        effectiveUntilMonth: plan.effectiveUntilMonth,
+        dueDay: plan.dueDay,
+        supersededAt: plan.supersededAt ? new Date(plan.supersededAt).toISOString() : null,
+        updatedAt: plan.updatedAt ? new Date(plan.updatedAt).toISOString() : null,
+      })).sort((a, b) => a.feePlanId.localeCompare(b.feePlanId)),
+      charges: charges.map((charge) => ({
+        chargeId: charge.chargeId,
+        feePlanId: charge.feePlanId,
+        baseAmountPaise: charge.baseAmountPaise,
+        updatedAt: charge.updatedAt ? new Date(charge.updatedAt).toISOString() : null,
+      })).sort((a, b) => a.chargeId.localeCompare(b.chargeId)),
+    };
+    const previewToken = createHash('sha256').update(JSON.stringify(fingerprint)).digest('hex');
+
+    return {
+      memberId,
+      scheduleRevision: revision,
+      currentPlans: plans.map(serializeFeePlan),
+      proposedSchedule: normalizedSchedule,
+      overlappingPairs,
+      referencedPlans,
+      changes: {
+        supersedePlanIds: activePlans.map((plan) => plan.feePlanId).sort(),
+        createPeriods: normalizedSchedule,
+      },
+      canApply: true,
+      previewToken,
+    };
   }
 
   return Object.freeze({
@@ -588,7 +733,7 @@ export function createRoomFeeService({
     },
 
     async endActiveRoomAssignment({ memberId, endMonth, endDate = null, session = null }) {
-      const assignments = await repository.findAssignmentsForMember(memberId);
+      const assignments = await repository.findAssignmentsForMember(memberId, { session });
       const targetMonth = endDate ? endDate.slice(0, 7) : endMonth;
       const targetDate = endDate || (targetMonth ? lastDateOfMonth(targetMonth) : null);
 
@@ -611,6 +756,148 @@ export function createRoomFeeService({
         }
       }
       return { success: true };
+    },
+
+    async previewRestoreAssignment({
+      memberId,
+      roomId,
+      occupancyFromDate,
+      assignmentAction,
+      assignmentId = null,
+      session = null,
+    }) {
+      if (!MEMBER_IDS.includes(memberId)) throw new HttpError(400, 'Invalid member ID.');
+      if (!isValidLogicalDate(occupancyFromDate)) {
+        throw new HttpError(400, 'occupancyFromDate must be a valid YYYY-MM-DD date.');
+      }
+      if (!['REOPEN_EXISTING', 'CREATE_NEW', 'LINK_EXISTING'].includes(assignmentAction)) {
+        throw new HttpError(400, 'A valid assignmentAction is required.');
+      }
+
+      const room =
+        (await repository.findRoomById(roomId, { session }))
+        || (await repository.findRoomByNumber(roomId, { session }));
+      if (!room || !room.active) throw new HttpError(400, 'Selected room does not exist or is inactive.');
+
+      const memberAssignments = await repository.findAssignmentsForMember(memberId, { session });
+      const selectedAssignment = assignmentId
+        ? memberAssignments.find((assignment) => assignment.assignmentId === assignmentId) || null
+        : null;
+      const conflicts = [];
+      if (assignmentAction !== 'CREATE_NEW' && !selectedAssignment) {
+        conflicts.push({ code: 'ASSIGNMENT_NOT_FOUND', message: 'The selected Room Assignment does not belong to this resident.' });
+      }
+      if (selectedAssignment && selectedAssignment.roomId !== room.roomId) {
+        conflicts.push({ code: 'ASSIGNMENT_ROOM_MISMATCH', message: 'The selected Room Assignment belongs to a different room.' });
+      }
+
+      const proposedAssignment = assignmentAction === 'CREATE_NEW'
+        ? {
+          assignmentId: null,
+          memberId,
+          roomId: room.roomId,
+          effectiveFromDate: occupancyFromDate,
+          effectiveFromMonth: occupancyFromDate.slice(0, 7),
+          effectiveUntilDate: null,
+          effectiveUntilMonth: null,
+        }
+        : {
+          ...selectedAssignment,
+          effectiveFromDate: assignmentAction === 'REOPEN_EXISTING'
+            ? occupancyFromDate
+            : selectedAssignment?.effectiveFromDate,
+          effectiveFromMonth: assignmentAction === 'REOPEN_EXISTING'
+            ? occupancyFromDate.slice(0, 7)
+            : selectedAssignment?.effectiveFromMonth,
+          effectiveUntilDate: null,
+          effectiveUntilMonth: null,
+        };
+
+      for (const assignment of memberAssignments) {
+        if (assignment.cancelledAt || assignment.assignmentId === selectedAssignment?.assignmentId) continue;
+        const from = assignment.effectiveFromDate || `${assignment.effectiveFromMonth}-01`;
+        const until = assignment.effectiveUntilDate
+          || (assignment.effectiveUntilMonth ? lastDateOfMonth(assignment.effectiveUntilMonth) : null);
+        if (occupancyFromDate <= (until || '9999-12-31')) {
+          conflicts.push({
+            code: 'MEMBER_ASSIGNMENT_OVERLAP',
+            assignmentId: assignment.assignmentId,
+            message: `Resident already has an overlapping Room Assignment from ${from} to ${until || 'present'}.`,
+          });
+        }
+      }
+
+      if (conflicts.length === 0) {
+        const roomAssignments = await repository.findAssignmentsForRoom(room.roomId, { session });
+        const occupancy = calculateMaxSimultaneousOccupancy({
+          roomAssignments,
+          targetAssignment: proposedAssignment,
+          roomCapacity: room.capacity,
+        });
+        if (occupancy > room.capacity) {
+          conflicts.push({
+            code: 'ROOM_CAPACITY_CONFLICT',
+            message: `Room ${room.roomNumber} exceeds capacity ${room.capacity} during the restored period.`,
+          });
+        }
+      }
+
+      return { room, currentAssignment: selectedAssignment, proposedAssignment, conflicts };
+    },
+
+    async restoreAssignmentForResident({
+      memberId,
+      roomId,
+      occupancyFromDate,
+      assignmentAction,
+      assignmentId = null,
+      actorRole,
+      session,
+    }) {
+      if (!session) throw new HttpError(503, 'Database transaction support is required.');
+      const room =
+        (await repository.findRoomById(roomId, { session }))
+        || (await repository.findRoomByNumber(roomId, { session }));
+      if (!room) throw new HttpError(400, 'Selected room does not exist.');
+      await repository.updateRoom(room.roomId, { $inc: { occupancyRevision: 1 } }, { session });
+
+      const preview = await this.previewRestoreAssignment({
+        memberId,
+        roomId: room.roomId,
+        occupancyFromDate,
+        assignmentAction,
+        assignmentId,
+        session,
+      });
+      if (preview.conflicts.length > 0) {
+        const error = new HttpError(409, 'Room Assignment conflicts prevent resident restoration.');
+        error.details = { code: 'RESTORATION_ASSIGNMENT_CONFLICT', conflicts: preview.conflicts };
+        throw error;
+      }
+      if (assignmentAction === 'LINK_EXISTING') return preview.currentAssignment;
+      if (assignmentAction === 'REOPEN_EXISTING') {
+        return repository.updateAssignment(
+          assignmentId,
+          {
+            effectiveFromDate: occupancyFromDate,
+            effectiveFromMonth: occupancyFromDate.slice(0, 7),
+            effectiveUntilDate: null,
+            effectiveUntilMonth: null,
+          },
+          { session },
+        );
+      }
+      return repository.createAssignment({
+        assignmentId: randomUUID(),
+        memberId,
+        roomId: preview.room.roomId,
+        effectiveFromDate: occupancyFromDate,
+        effectiveFromMonth: occupancyFromDate.slice(0, 7),
+        effectiveUntilDate: null,
+        effectiveUntilMonth: null,
+        assignedAt: now(),
+        assignedByRole: actorRole,
+      }, { session });
     },
 
     // --- Fee Plans ---
@@ -675,6 +962,19 @@ export function createRoomFeeService({
       const activeSession = session || localSession;
 
       try {
+        if (typeof repository.lockFeeSchedule === 'function') {
+          const scheduleState = await repository.getFeeScheduleState(memberId, { session: activeSession });
+          const lockedState = await repository.lockFeeSchedule(
+            memberId,
+            scheduleState?.revision ?? 0,
+            actorRole,
+            { session: activeSession },
+          );
+          if (!lockedState) {
+            throw new HttpError(409, 'The Fee Plan schedule changed concurrently. Please retry.');
+          }
+        }
+
         // Handle existing open-ended plans for this member starting before the new effective month
         const existingPlans = await repository.findFeePlansForMember(memberId, { session: activeSession });
         for (const p of existingPlans) {
@@ -726,6 +1026,11 @@ export function createRoomFeeService({
         if (localSession && localSession.inTransaction()) {
           await localSession.abortTransaction();
         }
+        if (err.code === 11000 || err.code === 112 || err.message?.includes('WriteConflict')) {
+          const conflict = new HttpError(409, 'The Fee Plan schedule changed concurrently. Please retry.');
+          conflict.details = { code: 'FEE_PLAN_SCHEDULE_CONFLICT' };
+          throw conflict;
+        }
         throw err;
       } finally {
         if (localSession) {
@@ -745,6 +1050,93 @@ export function createRoomFeeService({
     async getActiveFeePlan(memberId, month) {
       const plan = await repository.findActiveFeePlan(memberId, month);
       return serializeFeePlan(plan);
+    },
+
+    async previewFeePlanReconciliation({ memberId, schedule, reason, actorRole }) {
+      return buildFeePlanReconciliationPreview({ memberId, schedule, reason, actorRole });
+    },
+
+    async reconcileFeePlans({ memberId, schedule, reason, actorRole, previewToken }) {
+      if (typeof previewToken !== 'string' || !/^[a-f0-9]{64}$/.test(previewToken)) {
+        throw new HttpError(400, 'A valid reconciliation previewToken is required.');
+      }
+
+      const applyReconciliation = async (session) => {
+        const currentState = await repository.getFeeScheduleState(memberId, { session });
+        const expectedRevision = currentState?.revision ?? 0;
+        const lockedState = await repository.lockFeeSchedule(
+          memberId,
+          expectedRevision,
+          actorRole,
+          { session },
+        );
+        if (!lockedState) {
+          const conflict = new HttpError(409, 'The Fee Plan schedule changed after preview. Generate a new preview.');
+          conflict.details = { code: 'FEE_PLAN_RECONCILIATION_CONFLICT' };
+          throw conflict;
+        }
+
+        const preview = await buildFeePlanReconciliationPreview({
+          memberId,
+          schedule,
+          reason,
+          actorRole,
+          session,
+          scheduleRevision: expectedRevision,
+        });
+        if (preview.previewToken !== previewToken) {
+          const stale = new HttpError(409, 'The Fee Plan reconciliation preview is stale. Generate a new preview.');
+          stale.details = { code: 'FEE_PLAN_RECONCILIATION_STALE' };
+          throw stale;
+        }
+
+        const reconciliationId = randomUUID();
+        const changedAt = now();
+        for (const feePlanId of preview.changes.supersedePlanIds) {
+          await repository.updateFeePlan(feePlanId, {
+            supersededAt: changedAt,
+            supersededBy: actorRole,
+            supersededReason: reason.trim(),
+            supersededReconciliationId: reconciliationId,
+          }, { session });
+        }
+
+        const createdPlans = [];
+        for (const period of preview.proposedSchedule) {
+          const plan = await repository.createFeePlan({
+            feePlanId: randomUUID(),
+            memberId,
+            ...period,
+            reason: reason.trim(),
+            createdByRole: actorRole,
+            createdReconciliationId: reconciliationId,
+          }, { session });
+          createdPlans.push(serializeFeePlan(plan));
+        }
+
+        return {
+          reconciliationId,
+          memberId,
+          supersededPlanIds: preview.changes.supersedePlanIds,
+          createdPlans,
+          preservedReferencedPlans: preview.referencedPlans,
+          scheduleRevision: lockedState.revision,
+        };
+      };
+
+      try {
+        if (repository.requiresTransactions) {
+          return await runFinancialTransaction(applyReconciliation, { retryOnDuplicateKey: true });
+        }
+        return await applyReconciliation(null);
+      } catch (error) {
+        if (error.code === 11000 || error.code === 112 || error.message?.includes('WriteConflict')) {
+          const conflict = new HttpError(409, 'The Fee Plan schedule changed concurrently. Generate a new preview.');
+          conflict.details = { code: 'FEE_PLAN_RECONCILIATION_CONFLICT' };
+          throw conflict;
+        }
+        throw error;
+      }
     },
 
     // --- Monthly Charges ---

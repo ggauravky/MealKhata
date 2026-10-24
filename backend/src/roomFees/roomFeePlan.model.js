@@ -73,6 +73,20 @@ export const roomFeePlanSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    supersededReason: {
+      type: String,
+      trim: true,
+      maxlength: MAX_REASON_LENGTH,
+      default: null,
+    },
+    supersededReconciliationId: {
+      type: String,
+      default: null,
+    },
+    createdReconciliationId: {
+      type: String,
+      default: null,
+    },
   },
   {
     collection: 'room_fee_plans',

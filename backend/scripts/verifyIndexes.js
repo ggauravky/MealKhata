@@ -14,6 +14,7 @@ import { PushDelivery } from '../src/push/pushDelivery.model.js';
 import { Room } from '../src/roomFees/room.model.js';
 import { RoomAssignment } from '../src/roomFees/roomAssignment.model.js';
 import { RoomFeePlan } from '../src/roomFees/roomFeePlan.model.js';
+import { RoomFeeScheduleState } from '../src/roomFees/roomFeeScheduleState.model.js';
 import { RoomCharge } from '../src/roomFees/roomCharge.model.js';
 import { RoomPayment } from '../src/roomFees/roomPayment.model.js';
 import { RoomPaymentSettings } from '../src/roomFees/roomPaymentSettings.model.js';
@@ -40,6 +41,7 @@ export const MONITORED_MODELS = [
   Room,
   RoomAssignment,
   RoomFeePlan,
+  RoomFeeScheduleState,
   RoomCharge,
   RoomPayment,
   RoomPaymentSettings,

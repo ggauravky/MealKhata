@@ -1,4 +1,4 @@
-import { BedDouble, CircleDollarSign, Edit, History, Plus, RefreshCw, AlertCircle } from 'lucide-react';
+import { AlertCircle, AlertTriangle, Edit, History, Plus, RefreshCw, Scale, ShieldCheck, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { Badge } from '../../ui/badge.jsx';
 import { Button } from '../../ui/button.jsx';
@@ -28,6 +28,7 @@ export function AdminFeePlansTab({
   error = '',
   memberErrors = {},
   targetMonth = null,
+  role = 'admin',
 }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
@@ -39,6 +40,13 @@ export function AdminFeePlansTab({
   const [reason, setReason] = useState('Standard monthly hostel room fee');
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
+  const [reconcileOpen, setReconcileOpen] = useState(false);
+  const [reconcileMemberId, setReconcileMemberId] = useState('gaurav');
+  const [reconcileSchedule, setReconcileSchedule] = useState([]);
+  const [reconcileReason, setReconcileReason] = useState('');
+  const [reconcilePreview, setReconcilePreview] = useState(null);
+  const [reconcileError, setReconcileError] = useState('');
+  const [reconcileSubmitting, setReconcileSubmitting] = useState(false);
 
   const openConfigure = (memberId) => {
     setSelectedMemberId(memberId);
@@ -57,6 +65,78 @@ export function AdminFeePlansTab({
   const openHistory = (memberId) => {
     setHistoryMemberId(memberId);
     setHistoryDialogOpen(true);
+  };
+
+  const openReconciliation = (memberId) => {
+    const current = (plans[memberId]?.allPlans || [])
+      .filter((plan) => !plan.supersededAt)
+      .sort((a, b) => a.effectiveFromMonth.localeCompare(b.effectiveFromMonth));
+    setReconcileMemberId(memberId);
+    setReconcileSchedule((current.length ? current : [{
+      effectiveFromMonth: targetMonth || getIndiaCurrentLogicalMonth(),
+      effectiveUntilMonth: '',
+      amountPaise: 0,
+      dueDay: 5,
+    }]).map((plan) => ({
+      effectiveFromMonth: plan.effectiveFromMonth,
+      effectiveUntilMonth: plan.effectiveUntilMonth || '',
+      rupeesAmount: plan.amountPaise ? String(plan.amountPaise / 100) : '',
+      dueDay: String(plan.dueDay || 5),
+    })));
+    setReconcileReason('');
+    setReconcilePreview(null);
+    setReconcileError('');
+    setReconcileOpen(true);
+  };
+
+  const updateReconcilePeriod = (index, key, value) => {
+    setReconcileSchedule((periods) => periods.map((period, periodIndex) => (
+      periodIndex === index ? { ...period, [key]: value } : period
+    )));
+    setReconcilePreview(null);
+  };
+
+  const reconciliationPayload = () => ({
+    schedule: reconcileSchedule.map((period) => ({
+      effectiveFromMonth: period.effectiveFromMonth,
+      effectiveUntilMonth: period.effectiveUntilMonth || null,
+      amountPaise: rupeesToPaise(period.rupeesAmount),
+      dueDay: Number(period.dueDay),
+    })),
+    reason: reconcileReason.trim(),
+  });
+
+  const handleReconciliationPreview = async (event) => {
+    event.preventDefault();
+    setReconcileSubmitting(true);
+    setReconcileError('');
+    try {
+      const response = await api.post(`/api/room-fees/plans/${reconcileMemberId}/reconciliation-preview`, reconciliationPayload());
+      setReconcilePreview(response.data);
+    } catch (requestError) {
+      setReconcilePreview(null);
+      setReconcileError(requestError?.message || 'Unable to preview Fee Plan reconciliation.');
+    } finally {
+      setReconcileSubmitting(false);
+    }
+  };
+
+  const handleReconcile = async () => {
+    setReconcileSubmitting(true);
+    setReconcileError('');
+    try {
+      await api.post(`/api/room-fees/plans/${reconcileMemberId}/reconcile`, {
+        ...reconciliationPayload(),
+        previewToken: reconcilePreview.previewToken,
+      });
+      setReconcileOpen(false);
+      onRefresh();
+    } catch (requestError) {
+      setReconcilePreview(null);
+      setReconcileError(requestError?.message || 'Unable to reconcile Fee Plans. Generate a fresh preview.');
+    } finally {
+      setReconcileSubmitting(false);
+    }
   };
 
   const handleSavePlan = async (e) => {
@@ -256,6 +336,17 @@ export function AdminFeePlansTab({
                           <Edit className="h-3.5 w-3.5" />
                           <span>{hasActive ? 'Update / Change Rate' : 'Configure Fee'}</span>
                         </Button>
+                        {role === 'superadmin' && hasHistorical && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => openReconciliation(roommate.id)}
+                            className="gap-1.5 text-xs font-semibold border-amber-300 text-amber-700 dark:border-amber-800 dark:text-amber-300"
+                          >
+                            <Scale className="h-3.5 w-3.5" />
+                            <span>Reconcile history</span>
+                          </Button>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -347,6 +438,72 @@ export function AdminFeePlansTab({
               <Button type="submit" size="sm" disabled={submitting}>
                 {submitting ? 'Saving Plan...' : 'Save Plan'}
               </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={reconcileOpen} onOpenChange={setReconcileOpen}>
+        <DialogContent className="max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base font-bold text-slate-900 dark:text-slate-100">
+              <Scale className="h-4 w-4 text-amber-600" />
+              Reconcile Fee Plan history — {ROOMMATES.find((member) => member.id === reconcileMemberId)?.name}
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Enter the verified schedule. Existing plans remain in history; only their active status changes. Issued charges remain linked to their original plans.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleReconciliationPreview} className="space-y-4 pt-2">
+            <div className="space-y-2">
+              {reconcileSchedule.map((period, index) => (
+                <div key={index} className="grid gap-2 rounded-md border border-slate-200 p-3 sm:grid-cols-[1fr_1fr_1fr_80px_auto] dark:border-slate-800">
+                  <div className="space-y-1">
+                    <Label htmlFor={`reconcileFrom-${index}`}>From</Label>
+                    <Input id={`reconcileFrom-${index}`} type="month" value={period.effectiveFromMonth} onChange={(event) => updateReconcilePeriod(index, 'effectiveFromMonth', event.target.value)} required />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor={`reconcileUntil-${index}`}>Until</Label>
+                    <Input id={`reconcileUntil-${index}`} type="month" value={period.effectiveUntilMonth} onChange={(event) => updateReconcilePeriod(index, 'effectiveUntilMonth', event.target.value)} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor={`reconcileAmount-${index}`}>Monthly ₹</Label>
+                    <Input id={`reconcileAmount-${index}`} type="number" min="1" step="1" value={period.rupeesAmount} onChange={(event) => updateReconcilePeriod(index, 'rupeesAmount', event.target.value)} required />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor={`reconcileDue-${index}`}>Due</Label>
+                    <Input id={`reconcileDue-${index}`} type="number" min="1" max="28" value={period.dueDay} onChange={(event) => updateReconcilePeriod(index, 'dueDay', event.target.value)} required />
+                  </div>
+                  <Button type="button" variant="ghost" size="sm" aria-label="Remove period" disabled={reconcileSchedule.length === 1} onClick={() => { setReconcileSchedule((periods) => periods.filter((_, itemIndex) => itemIndex !== index)); setReconcilePreview(null); }} className="self-end text-rose-600">
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+              <Button type="button" variant="outline" size="sm" onClick={() => { setReconcileSchedule((periods) => [...periods, { effectiveFromMonth: '', effectiveUntilMonth: '', rupeesAmount: '', dueDay: '5' }]); setReconcilePreview(null); }}>
+                <Plus className="mr-1 h-3.5 w-3.5" /> Add schedule period
+              </Button>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="reconcileReason">Audit reason</Label>
+              <Input id="reconcileReason" value={reconcileReason} onChange={(event) => { setReconcileReason(event.target.value); setReconcilePreview(null); }} maxLength={500} placeholder="Source and reason for the verified schedule" required />
+            </div>
+
+            {reconcileError && <p role="alert" className="text-xs text-rose-600">{reconcileError}</p>}
+            {reconcilePreview && (
+              <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs dark:border-slate-800 dark:bg-slate-900/60">
+                <div className="flex items-center gap-2 font-semibold text-slate-900 dark:text-slate-100">
+                  {reconcilePreview.canApply ? <ShieldCheck className="h-4 w-4 text-teal-600" /> : <AlertTriangle className="h-4 w-4 text-rose-600" />}
+                  {reconcilePreview.changes?.supersedePlanIds?.length || 0} existing plans will be superseded; {reconcilePreview.proposedSchedule?.length || 0} verified periods will be created.
+                </div>
+                <p className="mt-2 text-slate-500">Detected {reconcilePreview.overlappingPairs?.length || 0} legacy overlap pairs and {reconcilePreview.referencedPlans?.length || 0} plans referenced by issued charges.</p>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => setReconcileOpen(false)} disabled={reconcileSubmitting}>Cancel</Button>
+              {!reconcilePreview && <Button type="submit" size="sm" disabled={reconcileSubmitting}>{reconcileSubmitting ? 'Checking…' : 'Preview reconciliation'}</Button>}
+              {reconcilePreview && <Button type="button" size="sm" onClick={handleReconcile} disabled={reconcileSubmitting || !reconcilePreview.canApply} className="bg-amber-600 text-white hover:bg-amber-700">{reconcileSubmitting ? 'Applying…' : 'Apply verified schedule'}</Button>}
             </div>
           </form>
         </DialogContent>

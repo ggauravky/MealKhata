@@ -463,6 +463,7 @@ export function createLifetimePdfService({
 
     buildClearancePdf({ stay, clearance }) {
       const isNoDues = clearance.clearanceStatus === CLEARANCE_STATUSES.NO_DUES;
+      const isRevoked = clearance.validityStatus === 'REVOKED';
 
       const doc = new PDFDocument({
         size: 'A4',
@@ -480,7 +481,7 @@ export function createLifetimePdfService({
       const contentWidth = pageWidth - 80;
 
       // Top Brand Bar
-      doc.rect(40, 40, contentWidth, 6).fill(isNoDues ? COLORS.primary : COLORS.accentDanger);
+      doc.rect(40, 40, contentWidth, 6).fill(isRevoked ? '#d97706' : (isNoDues ? COLORS.primary : COLORS.accentDanger));
 
       // Header Banner
       doc.y = 56;
@@ -488,7 +489,7 @@ export function createLifetimePdfService({
         .fontSize(18)
         .font('Helvetica-Bold')
         .fillColor(COLORS.textDark)
-        .text(isNoDues ? 'MEALKHATA HOSTEL CLEARANCE CERTIFICATE' : 'MEALKHATA DEPARTURE RECORD — DUES REMAIN', 40, doc.y, {
+        .text(isRevoked ? 'REVOKED HOSTEL CLEARANCE — HISTORICAL SNAPSHOT' : (isNoDues ? 'MEALKHATA HOSTEL CLEARANCE CERTIFICATE' : 'MEALKHATA DEPARTURE RECORD — DUES REMAIN'), 40, doc.y, {
           align: 'center',
           width: contentWidth,
         });
@@ -499,7 +500,9 @@ export function createLifetimePdfService({
         .font('Helvetica')
         .fillColor(COLORS.textMuted)
         .text(
-          isNoDues
+          isRevoked
+            ? 'This preserved record is no longer a valid resident clearance'
+            : isNoDues
             ? 'Official statement of complete financial and room clearance'
             : 'Departure completed with unresolved financial obligations (Super Admin Exception)',
           40,
@@ -512,18 +515,20 @@ export function createLifetimePdfService({
       doc.y += 16;
 
       // Status Box
-      doc.roundedRect(40, doc.y, contentWidth, 48, 4).fillAndStroke(isNoDues ? '#ecfdf5' : '#fef2f2', isNoDues ? '#6ee7b7' : '#fca5a5');
+      doc.roundedRect(40, doc.y, contentWidth, 48, 4).fillAndStroke(isRevoked ? '#fffbeb' : (isNoDues ? '#ecfdf5' : '#fef2f2'), isRevoked ? '#f59e0b' : (isNoDues ? '#6ee7b7' : '#fca5a5'));
       doc
         .fontSize(11)
         .font('Helvetica-Bold')
-        .fillColor(isNoDues ? COLORS.accentSuccess : COLORS.accentDanger)
-        .text(isNoDues ? '✓ NO DUES CERTIFIED' : '⚠ OUTSTANDING DUES REMAIN', 55, doc.y + 12);
+        .fillColor(isRevoked ? '#b45309' : (isNoDues ? COLORS.accentSuccess : COLORS.accentDanger))
+        .text(isRevoked ? 'REVOKED — NOT A CURRENT CLEARANCE' : (isNoDues ? '✓ NO DUES CERTIFIED' : '⚠ OUTSTANDING DUES REMAIN'), 55, doc.y + 12);
       doc
         .fontSize(8.5)
         .font('Helvetica')
         .fillColor(COLORS.textDark)
         .text(
-          isNoDues
+          isRevoked
+            ? `Revoked after resident restoration: "${clearance.revocationReason || 'Resident restoration'}"`
+            : isNoDues
             ? 'All meal bills, room fees, shared purchases, and deposit refunds have been fully reconciled.'
             : `Super Admin exception authorized departure: "${clearance.exceptionReason || 'Documented at departure'}"`,
           55,
@@ -542,6 +547,7 @@ export function createLifetimePdfService({
         ['Hostel Departure Date', clearance.actualLeftOn],
         ['Final Room Assigned', clearance.lastRoomId || '—'],
         ['Clearance Sequence', `#${clearance.sequence} (Version ${clearance.snapshotVersion})`],
+        ['Validity', isRevoked ? `REVOKED on ${formatDateIST(clearance.revokedAt)}` : (clearance.validityStatus || 'ACTIVE')],
         ['Clearance Finalized On', formatDateIST(clearance.finalizedAt)],
         ['Authorized by Role', clearance.finalizedByRole.toUpperCase()],
       ];

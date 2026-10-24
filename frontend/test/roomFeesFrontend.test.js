@@ -192,6 +192,10 @@ describe('MealKhata 2.0 Phase 1: Frontend Architecture & Component Tests', () =>
       assert.match(feePlansTab, /rupeesToPaise/);
       assert.match(feePlansTab, /effectiveFromMonth/);
       assert.match(feePlansTab, /Fee not configured/);
+      assert.match(feePlansTab, /reconciliation-preview/);
+      assert.match(feePlansTab, /previewToken/);
+      assert.match(feePlansTab, /Issued charges remain linked to their original plans/);
+      assert.match(feePlansTab, /Reconcile history/);
     });
 
     test('AdminMonthlyChargesTab requires preview before explicit issuance and supports Super Admin adjustments', async () => {

@@ -405,6 +405,48 @@ export function createStayRouter({
   // Lifecycle Management Actions
   // ==========================================
 
+  router.post('/:stayId/restoration-preview', requireSuperAdmin, assertStayAccess, async (req, res, next) => {
+    try {
+      const preview = await service.previewRestoreResident({
+        stayId: req.stay.stayId,
+        joinedOn: req.body?.joinedOn,
+        occupancyFromDate: req.body?.occupancyFromDate,
+        roomId: req.body?.roomId,
+        assignmentAction: req.body?.assignmentAction,
+        assignmentId: req.body?.assignmentId || null,
+        expectedRevision: req.body?.expectedRevision,
+        reason: req.body?.reason,
+        actorRole: req.auth.role,
+      });
+      return res.json({ success: true, data: preview });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post('/:stayId/restore', requireSuperAdmin, assertStayAccess, async (req, res, next) => {
+    try {
+      const restored = await service.restoreResident({
+        stayId: req.stay.stayId,
+        joinedOn: req.body?.joinedOn,
+        occupancyFromDate: req.body?.occupancyFromDate,
+        roomId: req.body?.roomId,
+        assignmentAction: req.body?.assignmentAction,
+        assignmentId: req.body?.assignmentId || null,
+        expectedRevision: req.body?.expectedRevision,
+        reason: req.body?.reason,
+        previewToken: req.body?.previewToken,
+        actorRole: req.auth.role,
+      });
+      notifyStayChange();
+      notifyClearanceChange();
+      notifyAccommodationChange({ memberId: req.stay.memberId });
+      return res.json({ success: true, data: restored });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   router.post('/:stayId/cancel', requireSuperAdmin, assertStayAccess, async (req, res, next) => {
     try {
       const cancelled = await service.cancelIncorrectStay({
@@ -546,6 +588,23 @@ export function createStayRouter({
   // ==========================================
   // Deposit Management Actions
   // ==========================================
+
+  router.patch('/:stayId/deposit/configuration', requireSuperAdmin, assertStayAccess, async (req, res, next) => {
+    try {
+      const configured = await deposits.configureRequirement({
+        stayId: req.stay.stayId,
+        required: req.body?.required,
+        expectedDepositPaise: req.body?.expectedDepositPaise,
+        expectedRevision: req.body?.expectedRevision,
+        reason: req.body?.reason,
+        actorRole: req.auth.role,
+      });
+      notifyDepositChange();
+      return res.json({ success: true, data: configured });
+    } catch (error) {
+      return next(error);
+    }
+  });
 
   router.post('/:stayId/deposit/transactions', requireAdminOrAbove, assertStayAccess, async (req, res, next) => {
     try {

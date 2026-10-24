@@ -19,6 +19,7 @@ import {
 import { Room } from '../src/roomFees/room.model.js';
 import { RoomAssignment } from '../src/roomFees/roomAssignment.model.js';
 import { RoomFeePlan } from '../src/roomFees/roomFeePlan.model.js';
+import { RoomFeeScheduleState } from '../src/roomFees/roomFeeScheduleState.model.js';
 import { RoomCharge } from '../src/roomFees/roomCharge.model.js';
 import { RoomPayment } from '../src/roomFees/roomPayment.model.js';
 import { RoomPaymentSettings } from '../src/roomFees/roomPaymentSettings.model.js';
@@ -173,6 +174,7 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
       Room.init(),
       RoomAssignment.init(),
       RoomFeePlan.init(),
+      RoomFeeScheduleState.init(),
       RoomCharge.init(),
       RoomPayment.init(),
       RoomPaymentSettings.init(),
@@ -254,6 +256,120 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
   // 1. CONCURRENT DEPOSIT TRANSACTIONS & FINANCIAL INVARIANTS
   // =========================================================================
   describe('Deposit Concurrency & Invariants', () => {
+    it('treats a zero expected deposit as not required without fabricating a transaction', async () => {
+      const room = await ensureRoom('no-deposit', 1);
+      const stay = await stayService.createStay({
+        memberId: 'gaurav',
+        joinedOn: '2026-10-01',
+        initialRoomId: room.roomId,
+        expectedDepositPaise: 0,
+        actorRole: 'admin',
+      });
+
+      const beforeCheckout = await depositService.getDepositSummary(stay.stayId);
+      assert.equal(beforeCheckout.account.status, 'NOT_REQUIRED');
+      assert.deepEqual(beforeCheckout.summary, {
+        expectedPaise: 0,
+        receivedPaise: 0,
+        refundedPaise: 0,
+        deductedPaise: 0,
+        heldPaise: 0,
+      });
+      assert.equal(beforeCheckout.transactions.length, 0);
+
+      const result = await stayService.finalizeCheckout({
+        stayId: stay.stayId,
+        actualLeftOn: '2026-10-20',
+        actorRole: 'admin',
+      });
+      assert.equal(result.clearance.clearanceStatus, 'NO_DUES');
+      assert.equal(await HostelDepositTransaction.countDocuments({ stayId: stay.stayId }), 0);
+    });
+
+    it('configures optional deposits transactionally without inventing financial movements', async () => {
+      const room = await ensureRoom('deposit-config', 1);
+      const stay = await stayService.createStay({
+        memberId: 'gaurav',
+        joinedOn: '2026-10-01',
+        initialRoomId: room.roomId,
+        expectedDepositPaise: 0,
+        actorRole: 'admin',
+      });
+      const initial = await depositService.getDepositSummary(stay.stayId);
+
+      await assert.rejects(
+        depositService.configureRequirement({
+          stayId: stay.stayId,
+          required: true,
+          expectedDepositPaise: 500000,
+          expectedRevision: initial.account.revision,
+          reason: 'Security deposit is now required',
+          actorRole: 'admin',
+        }),
+        (error) => error.statusCode === 403,
+      );
+
+      const required = await depositService.configureRequirement({
+        stayId: stay.stayId,
+        required: true,
+        expectedDepositPaise: 500000,
+        expectedRevision: initial.account.revision,
+        reason: 'Security deposit is now required',
+        actorRole: 'superadmin',
+      });
+      assert.equal(required.status, 'OPEN');
+      assert.equal(required.expectedDepositPaise, 500000);
+
+      const notRequired = await depositService.configureRequirement({
+        stayId: stay.stayId,
+        required: false,
+        expectedDepositPaise: 0,
+        expectedRevision: required.revision,
+        reason: 'Resident is exempt from a security deposit',
+        actorRole: 'superadmin',
+      });
+      assert.equal(notRequired.status, 'NOT_REQUIRED');
+      assert.equal(notRequired.expectedDepositPaise, 0);
+      assert.equal(await HostelDepositTransaction.countDocuments({ stayId: stay.stayId }), 0);
+
+      const persisted = await HostelDepositAccount.findOne({ stayId: stay.stayId }).lean();
+      assert.deepEqual(
+        persisted.history.slice(-2).map((entry) => entry.event),
+        ['DEPOSIT_REQUIREMENT_CONFIGURED', 'DEPOSIT_MARKED_NOT_REQUIRED'],
+      );
+    });
+
+    it('refuses to mark a deposit not required while recorded transactions exist', async () => {
+      const room = await ensureRoom('deposit-history', 1);
+      const stay = await stayService.createStay({
+        memberId: 'gaurav',
+        joinedOn: '2026-10-01',
+        initialRoomId: room.roomId,
+        expectedDepositPaise: 500000,
+        actorRole: 'admin',
+      });
+      await depositService.recordDepositReceipt({
+        stayId: stay.stayId,
+        amountPaise: 500000,
+        method: 'upi',
+        idempotencyKey: randomUUID(),
+        actorRole: 'superadmin',
+      });
+      const account = await HostelDepositAccount.findOne({ stayId: stay.stayId }).lean();
+
+      await assert.rejects(
+        depositService.configureRequirement({
+          stayId: stay.stayId,
+          required: false,
+          expectedDepositPaise: 0,
+          expectedRevision: account.revision,
+          reason: 'Correct an erroneously configured deposit',
+          actorRole: 'superadmin',
+        }),
+        (error) => error.statusCode === 409 && error.details?.code === 'DEPOSIT_HISTORY_REQUIRES_RECONCILIATION',
+      );
+    });
+
     it('Held ₹5,000: concurrent refunds of ₹4,000 each can NEVER overdraw held balance', async () => {
       const room = await ensureRoom('204', 2);
       const stay = await stayService.createStay({
@@ -802,6 +918,179 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
       assert.equal(assignment.roomId, correctedRoom.roomId);
       assert.equal(assignment.effectiveFromDate, '2026-10-10');
       assert.equal(persisted.history.at(-1).event, 'ADMISSION_CORRECTED');
+    });
+  });
+
+  describe('Incorrect checkout restoration', () => {
+    it('restores one checked-out Stay atomically while preserving financial history and revoking its clearance', async () => {
+      const room = await ensureRoom('restore-lower', 1);
+      const stay = await stayService.createStay({
+        memberId: 'gaurav',
+        joinedOn: '2026-10-01',
+        initialRoomId: room.roomId,
+        expectedDepositPaise: 0,
+        actorRole: 'admin',
+      });
+      await roomFeeService.createFeePlan({
+        memberId: 'gaurav',
+        amountPaise: 480000,
+        effectiveFromMonth: '2026-10',
+        actorRole: 'admin',
+      });
+      const { charges } = await roomFeeService.issueCharges('2026-10', 'admin');
+      const charge = charges.find((item) => item.memberId === 'gaurav');
+      await roomFeeService.recordPayment({
+        chargeId: charge.chargeId,
+        amountPaise: 480000,
+        method: 'upi',
+        idempotencyKey: randomUUID(),
+        actorRole: 'admin',
+      });
+      const checkout = await stayService.finalizeCheckout({
+        stayId: stay.stayId,
+        actualLeftOn: '2026-10-20',
+        actorRole: 'admin',
+      });
+      const chargeCount = await RoomCharge.countDocuments({});
+      const paymentCount = await RoomPayment.countDocuments({});
+
+      const request = {
+        stayId: stay.stayId,
+        joinedOn: '2026-10-01',
+        occupancyFromDate: '2026-10-01',
+        roomId: room.roomId,
+        assignmentAction: 'REOPEN_EXISTING',
+        assignmentId: stay.admissionAssignmentId,
+        expectedRevision: checkout.stay.revision,
+        reason: 'Checkout was recorded even though the resident never left',
+        actorRole: 'superadmin',
+      };
+      const preview = await stayService.previewRestoreResident(request);
+      assert.equal(preview.canApply, true);
+      assert.equal(preview.conflicts.length, 0);
+      assert.ok(preview.previewToken);
+      assert.ok(preview.changes.some((change) => change.collection === 'hostel_stays'));
+      assert.ok(preview.changes.some((change) => change.collection === 'room_assignments'));
+      assert.ok(preview.changes.some((change) => change.collection === 'hostel_clearances'));
+
+      const restored = await stayService.restoreResident({
+        ...request,
+        previewToken: preview.previewToken,
+      });
+      assert.equal(restored.stay.status, 'ACTIVE');
+      assert.equal(restored.stay.actualLeftOn, null);
+      assert.equal(restored.stay.currentRoomId, room.roomId);
+
+      const assignment = await RoomAssignment.findOne({ assignmentId: stay.admissionAssignmentId }).lean();
+      assert.equal(assignment.effectiveUntilDate, null);
+      assert.equal(assignment.effectiveUntilMonth, null);
+      const clearance = await HostelClearance.findOne({ clearanceId: checkout.clearance.clearanceId }).lean();
+      assert.equal(clearance.validityStatus, 'REVOKED');
+      assert.equal(clearance.revocationReason, request.reason);
+      assert.equal(await RoomCharge.countDocuments({}), chargeCount);
+      assert.equal(await RoomPayment.countDocuments({}), paymentCount);
+      assert.equal(await HostelDepositTransaction.countDocuments({ stayId: stay.stayId }), 0);
+
+      const persistedStay = await HostelStay.findOne({ stayId: stay.stayId }).lean();
+      const restorationEvent = persistedStay.history.find((entry) => entry.event === 'RESIDENT_RESTORED');
+      assert.equal(restorationEvent.details.previousActualLeftOn, '2026-10-20');
+      assert.equal(restorationEvent.details.revokedClearanceIds[0], checkout.clearance.clearanceId);
+    });
+  });
+
+  describe('Fee Plan reconciliation', () => {
+    it('previews six legacy overlap pairs and preserves referenced plans while applying the approved schedule', async () => {
+      const room = await ensureRoom('fee-reconcile', 1);
+      const assignment = await roomFeeService.assignMemberToRoom({
+        memberId: 'gaurav',
+        roomId: room.roomId,
+        effectiveFromMonth: '2026-10',
+        effectiveFromDate: '2026-10-01',
+        actorRole: 'admin',
+      });
+      const planIds = Array.from({ length: 4 }, () => randomUUID());
+      await RoomFeePlan.insertMany(planIds.map((feePlanId, index) => ({
+        feePlanId,
+        memberId: 'gaurav',
+        amountPaise: index === 1 ? 250000 : 480000,
+        effectiveFromMonth: '2026-10',
+        effectiveUntilMonth: null,
+        dueDay: 5,
+        reason: `Legacy plan ${index + 1}`,
+        createdByRole: 'superadmin',
+      })));
+      const chargeId = randomUUID();
+      await RoomCharge.create({
+        chargeId,
+        memberId: 'gaurav',
+        roomId: room.roomId,
+        roomNumber: room.roomNumber,
+        feePlanId: planIds[2],
+        month: '2026-10',
+        baseAmountPaise: 480000,
+        dueDate: '2026-10-05',
+        status: 'issued',
+        issuedByRole: 'superadmin',
+      });
+
+      const request = {
+        memberId: 'gaurav',
+        schedule: [{
+          effectiveFromMonth: '2026-10',
+          effectiveUntilMonth: null,
+          amountPaise: 450000,
+          dueDay: 5,
+        }],
+        reason: 'Apply the verified historical rent schedule',
+        actorRole: 'superadmin',
+      };
+      const preview = await roomFeeService.previewFeePlanReconciliation(request);
+      assert.equal(preview.overlappingPairs.length, 6);
+      assert.equal(preview.canApply, true);
+      assert.ok(preview.previewToken);
+      assert.equal(preview.referencedPlans[0].feePlanId, planIds[2]);
+      assert.equal(preview.referencedPlans[0].chargeIds[0], chargeId);
+
+      const result = await roomFeeService.reconcileFeePlans({
+        ...request,
+        previewToken: preview.previewToken,
+      });
+      assert.equal(result.createdPlans.length, 1);
+      assert.equal(result.supersededPlanIds.length, 4);
+
+      const historicalPlans = await RoomFeePlan.find({ feePlanId: { $in: planIds } }).lean();
+      assert.equal(historicalPlans.length, 4);
+      assert.ok(historicalPlans.every((plan) => plan.supersededAt));
+      const activePlans = await RoomFeePlan.find({ memberId: 'gaurav', supersededAt: null }).lean();
+      assert.equal(activePlans.length, 1);
+      assert.equal(activePlans[0].amountPaise, 450000);
+      const preservedCharge = await RoomCharge.findOne({ chargeId }).lean();
+      assert.equal(preservedCharge.feePlanId, planIds[2]);
+      assert.equal(preservedCharge.baseAmountPaise, 480000);
+    });
+
+    it('serializes concurrent Fee Plan changes for one member', async () => {
+      const changes = await Promise.allSettled([
+        roomFeeService.createFeePlan({
+          memberId: 'gaurav',
+          amountPaise: 450000,
+          effectiveFromMonth: '2026-10',
+          reason: 'First verified schedule',
+          actorRole: 'superadmin',
+        }),
+        roomFeeService.createFeePlan({
+          memberId: 'gaurav',
+          amountPaise: 480000,
+          effectiveFromMonth: '2026-10',
+          reason: 'Concurrent verified schedule',
+          actorRole: 'superadmin',
+        }),
+      ]);
+
+      assert.equal(changes.filter((change) => change.status === 'fulfilled').length, 1);
+      assert.equal(changes.filter((change) => change.status === 'rejected').length, 1);
+      assert.equal(changes.find((change) => change.status === 'rejected').reason.statusCode, 409);
+      assert.equal(await RoomFeePlan.countDocuments({ memberId: 'gaurav', supersededAt: null }), 1);
     });
   });
 

@@ -6,6 +6,7 @@ import { RoomFeePlan } from './roomFeePlan.model.js';
 import { RoomCharge } from './roomCharge.model.js';
 import { RoomPayment } from './roomPayment.model.js';
 import { RoomPaymentSettings } from './roomPaymentSettings.model.js';
+import { RoomFeeScheduleState } from './roomFeeScheduleState.model.js';
 import { ROOM_SETTINGS_KEY } from './roomFee.constants.js';
 import { selectAssignmentForDate, selectAssignmentForMonth } from './assignmentResolution.js';
 import { guardFinancialMutation } from '../finance/financialMutationGuard.js';
@@ -137,6 +138,30 @@ export const roomRepository = {
     return RoomFeePlan.findOneAndUpdate({ feePlanId }, { $set: updates }, options).lean();
   },
 
+  async getFeeScheduleState(memberId, { session } = {}) {
+    const q = RoomFeeScheduleState.findOne({ memberId });
+    if (session) q.session(session);
+    return q.lean();
+  },
+
+  async lockFeeSchedule(memberId, expectedRevision, actorRole, { session } = {}) {
+    const options = {
+      returnDocument: 'after',
+      runValidators: true,
+      upsert: expectedRevision === 0,
+    };
+    if (session) options.session = session;
+    return RoomFeeScheduleState.findOneAndUpdate(
+      { memberId, revision: expectedRevision },
+      {
+        $inc: { revision: 1 },
+        $set: { lastChangedAt: new Date(), lastChangedByRole: actorRole },
+        $setOnInsert: { memberId },
+      },
+      options,
+    ).lean();
+  },
+
   // Charges
   async createCharge(data, { session } = {}) {
     if (session) {
@@ -160,8 +185,10 @@ export const roomRepository = {
     return RoomCharge.find({ month }).lean();
   },
 
-  async findChargesForMember(memberId) {
-    return RoomCharge.find({ memberId }).sort({ month: -1 }).lean();
+  async findChargesForMember(memberId, { session } = {}) {
+    const q = RoomCharge.find({ memberId }).sort({ month: -1 });
+    if (session) q.session(session);
+    return q.lean();
   },
 
   async updateCharge(chargeId, updates, { session } = {}) {

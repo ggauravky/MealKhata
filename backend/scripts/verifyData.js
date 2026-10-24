@@ -993,6 +993,14 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
     let depositIssues = 0;
 
     const stayMap = new Map(stays.map((stay) => [stay.stayId, stay]));
+    const recordedTransactionsByAccount = new Map();
+    for (const transaction of transactions) {
+      if (transaction.status !== 'recorded') continue;
+      recordedTransactionsByAccount.set(
+        transaction.depositAccountId,
+        (recordedTransactionsByAccount.get(transaction.depositAccountId) || 0) + 1,
+      );
+    }
     const accountMap = new Map();
     const accountIdMap = new Map();
     for (const a of accounts) {
@@ -1004,6 +1012,18 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
       accountIdMap.set(a.depositAccountId, a);
       if (typeof a.expectedDepositPaise !== 'number' || a.expectedDepositPaise < 0) {
         issues.push(`[hostel_deposit_accounts] Invalid expectedDepositPaise in account ${a.depositAccountId}`);
+        depositIssues++;
+      }
+      if (!['NOT_REQUIRED', 'OPEN', 'SETTLED'].includes(a.status)) {
+        issues.push(`[hostel_deposit_accounts] Invalid status ${a.status} in account ${a.depositAccountId}`);
+        depositIssues++;
+      }
+      if (a.status === 'NOT_REQUIRED' && a.expectedDepositPaise !== 0) {
+        issues.push(`[hostel_deposit_accounts] NOT_REQUIRED account ${a.depositAccountId} must have zero expected deposit`);
+        depositIssues++;
+      }
+      if (a.status === 'NOT_REQUIRED' && (recordedTransactionsByAccount.get(a.depositAccountId) || 0) > 0) {
+        issues.push(`[hostel_deposit_accounts] NOT_REQUIRED account ${a.depositAccountId} has recorded deposit transactions`);
         depositIssues++;
       }
       const stay = stayMap.get(a.stayId);
@@ -1079,6 +1099,20 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         depositIssues++;
       } else if (c.memberId !== referencedStay.memberId) {
         issues.push(`[hostel_clearances] Clearance ${c.clearanceId} member does not match stay ${c.stayId}`);
+        depositIssues++;
+      }
+
+      const validityStatus = c.validityStatus || 'ACTIVE';
+      if (!['ACTIVE', 'REVOKED', 'SUPERSEDED'].includes(validityStatus)) {
+        issues.push(`[hostel_clearances] Clearance ${c.clearanceId} has invalid validityStatus ${c.validityStatus}`);
+        depositIssues++;
+      }
+      if (validityStatus === 'REVOKED' && (!c.revokedAt || !c.revokedByRole || !c.revocationReason || !c.restorationId)) {
+        issues.push(`[hostel_clearances] Revoked clearance ${c.clearanceId} is missing revocation audit metadata`);
+        depositIssues++;
+      }
+      if (referencedStay && ['ACTIVE', 'CHECKOUT_REQUESTED', 'CHECKOUT_PENDING'].includes(referencedStay.status) && validityStatus === 'ACTIVE') {
+        issues.push(`[hostel_clearances] Active stay ${c.stayId} has active clearance ${c.clearanceId}`);
         depositIssues++;
       }
 

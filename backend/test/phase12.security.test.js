@@ -653,6 +653,97 @@ describe('Phase 12: Security & Reliability', () => {
       assert.ok(issues.some((issue) => issue.includes('Clearance clearance-orphan references missing stay')));
       assert.ok(issues.some((issue) => issue.includes('Checked-out stay stay-checked-out has OPEN deposit account')));
     });
+
+    test('accepts a not-required deposit and a fully audited revoked clearance on a restored active Stay', async () => {
+      const fixture = {
+        rooms: [{ roomId: 'room-a', roomNumber: 'A', capacity: 1 }],
+        hostel_stays: [{
+          stayId: 'stay-restored',
+          memberId: 'gaurav',
+          joinedOn: '2026-10-01',
+          actualLeftOn: null,
+          initialRoomId: 'room-a',
+          currentRoomId: 'room-a',
+          status: 'ACTIVE',
+        }],
+        hostel_deposit_accounts: [{
+          depositAccountId: 'deposit-none',
+          stayId: 'stay-restored',
+          memberId: 'gaurav',
+          expectedDepositPaise: 0,
+          status: 'NOT_REQUIRED',
+        }],
+        hostel_clearances: [{
+          clearanceId: 'clearance-old',
+          stayId: 'stay-restored',
+          memberId: 'gaurav',
+          sequence: 1,
+          clearanceStatus: 'NO_DUES',
+          validityStatus: 'REVOKED',
+          revokedAt: new Date('2026-10-21T00:00:00.000Z'),
+          revokedByRole: 'superadmin',
+          revocationReason: 'Incorrect checkout restored',
+          restorationId: 'restore-1',
+          depositSummary: { heldPaise: 0 },
+        }],
+      };
+      const mockDb = {
+        collection: (name) => ({ find: () => ({ toArray: async () => fixture[name] || [] }) }),
+      };
+
+      const { issues } = await verifyDataIntegrity({ db: mockDb });
+      assert.ok(!issues.some((issue) => issue.includes('deposit-none')));
+      assert.ok(!issues.some((issue) => issue.includes('clearance-old')));
+    });
+
+    test('flags fabricated not-required deposit history and active clearance on an active Stay', async () => {
+      const fixture = {
+        rooms: [{ roomId: 'room-a', roomNumber: 'A', capacity: 1 }],
+        hostel_stays: [{
+          stayId: 'stay-active',
+          memberId: 'gaurav',
+          joinedOn: '2026-10-01',
+          actualLeftOn: null,
+          initialRoomId: 'room-a',
+          currentRoomId: 'room-a',
+          status: 'ACTIVE',
+        }],
+        hostel_deposit_accounts: [{
+          depositAccountId: 'deposit-invalid-none',
+          stayId: 'stay-active',
+          memberId: 'gaurav',
+          expectedDepositPaise: 10000,
+          status: 'NOT_REQUIRED',
+        }],
+        hostel_deposit_transactions: [{
+          depositTransactionId: 'tx-fabricated',
+          depositAccountId: 'deposit-invalid-none',
+          stayId: 'stay-active',
+          memberId: 'gaurav',
+          type: 'RECEIVED',
+          amountPaise: 10000,
+          status: 'recorded',
+        }],
+        hostel_clearances: [{
+          clearanceId: 'clearance-active',
+          stayId: 'stay-active',
+          memberId: 'gaurav',
+          sequence: 1,
+          clearanceStatus: 'NO_DUES',
+          validityStatus: 'ACTIVE',
+          depositSummary: { heldPaise: 0 },
+        }],
+      };
+      const mockDb = {
+        collection: (name) => ({ find: () => ({ toArray: async () => fixture[name] || [] }) }),
+      };
+
+      const { passed, issues } = await verifyDataIntegrity({ db: mockDb });
+      assert.equal(passed, false);
+      assert.ok(issues.some((issue) => issue.includes('NOT_REQUIRED account deposit-invalid-none must have zero expected deposit')));
+      assert.ok(issues.some((issue) => issue.includes('NOT_REQUIRED account deposit-invalid-none has recorded deposit transactions')));
+      assert.ok(issues.some((issue) => issue.includes('Active stay stay-active has active clearance clearance-active')));
+    });
   });
 
   describe('Full Recovery Drill Simulation', () => {

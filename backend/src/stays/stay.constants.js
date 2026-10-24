@@ -17,6 +17,7 @@ export const DEPOSIT_TRANSACTION_TYPES = Object.freeze({
 });
 
 export const DEPOSIT_ACCOUNT_STATUSES = Object.freeze({
+  NOT_REQUIRED: 'NOT_REQUIRED',
   OPEN: 'OPEN',
   SETTLED: 'SETTLED',
 });
@@ -35,6 +36,12 @@ export const DEPOSIT_HOLDER_TYPES = Object.freeze({
 export const CLEARANCE_STATUSES = Object.freeze({
   NO_DUES: 'NO_DUES',
   OUTSTANDING_DUES: 'OUTSTANDING_DUES',
+});
+
+export const CLEARANCE_VALIDITY_STATUSES = Object.freeze({
+  ACTIVE: 'ACTIVE',
+  REVOKED: 'REVOKED',
+  SUPERSEDED: 'SUPERSEDED',
 });
 
 export const MAX_REASON_LENGTH = 500;

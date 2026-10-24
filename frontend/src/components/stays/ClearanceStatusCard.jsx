@@ -18,8 +18,10 @@ export function ClearanceStatusCard({
     return null;
   }
 
-  // Display latest clearance prominently, and any historical ones below
-  const latestClearance = clearances[clearances.length - 1];
+  const orderedClearances = [...clearances].sort((left, right) => (right.sequence || 0) - (left.sequence || 0));
+  const latestClearance = orderedClearances.find((clearance) => !clearance.validityStatus || clearance.validityStatus === 'ACTIVE')
+    || orderedClearances[0];
+  const historicalClearances = orderedClearances.filter((clearance) => clearance.clearanceId !== latestClearance.clearanceId);
 
   const handleDownload = async (clearance) => {
     setDownloadingId(clearance.clearanceId);
@@ -35,6 +37,7 @@ export function ClearanceStatusCard({
 
   const isNoDues = latestClearance.clearanceStatus === 'NO_DUES';
   const isOutstandingDues = latestClearance.clearanceStatus === 'OUTSTANDING_DUES';
+  const isRevoked = latestClearance.validityStatus === 'REVOKED';
 
   return (
     <Card className="border-slate-200 dark:border-slate-800">
@@ -43,7 +46,10 @@ export function ClearanceStatusCard({
           <FileCheck className="h-4 w-4 text-teal-600 dark:text-teal-400" />
           Hostel Clearance Certificate
         </CardTitle>
-        <ClearanceStatusBadge status={latestClearance.clearanceStatus} />
+        <div className="flex items-center gap-2">
+          {isRevoked && <span className="rounded border border-amber-300 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:border-amber-800 dark:text-amber-300">REVOKED</span>}
+          <ClearanceStatusBadge status={latestClearance.clearanceStatus} />
+        </div>
       </CardHeader>
 
       <CardContent className="space-y-4">
@@ -55,7 +61,9 @@ export function ClearanceStatusCard({
 
         <div
           className={`p-4 rounded-lg border text-xs space-y-2.5 ${
-            isNoDues
+            isRevoked
+              ? 'bg-amber-50/70 border-amber-300 dark:bg-amber-950/30 dark:border-amber-800 text-amber-950 dark:text-amber-200'
+              : isNoDues
               ? 'bg-teal-50/60 border-teal-200/80 dark:bg-teal-950/30 dark:border-teal-900/50 text-teal-950 dark:text-teal-200'
               : 'bg-rose-50/60 border-rose-200/80 dark:bg-rose-950/30 dark:border-rose-900/50 text-rose-950 dark:text-rose-200'
           }`}
@@ -70,12 +78,21 @@ export function ClearanceStatusCard({
           </div>
 
           <p className="text-[11px] leading-relaxed">
-            {isNoDues
+            {isRevoked
+              ? 'This clearance is a preserved historical snapshot and is no longer valid because the resident was restored.'
+              : isNoDues
               ? 'This resident has completed departure with verified NO DUES across all mess, room fees, and expense accounts. Security deposit is settled.'
               : isOutstandingDues
               ? 'This resident departed with recorded outstanding dues (OUTSTANDING_DUES). The clearance certificate reflects unresolved financial obligations at departure.'
               : 'This resident departed with pending settlement.'}
           </p>
+
+          {isRevoked && (
+            <div className="p-2 rounded bg-white/70 dark:bg-slate-900/60 border border-current/20 text-[11px]">
+              <strong>Revocation reason:</strong> {latestClearance.revocationReason || 'Resident restoration'}
+              {latestClearance.revokedAt && <span className="block mt-0.5">Revoked on {latestClearance.revokedAt.slice(0, 10)}</span>}
+            </div>
+          )}
 
           {latestClearance.exceptionReason && (
             <div className="p-2 rounded bg-white/70 dark:bg-slate-900/60 border border-current/20 text-[11px]">
@@ -98,18 +115,18 @@ export function ClearanceStatusCard({
         </div>
 
         {/* Previous revisions if reissued */}
-        {clearances.length > 1 && (
+        {historicalClearances.length > 0 && (
           <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
             <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wider block">
               Previous Clearance Versions
             </span>
             <div className="space-y-1.5">
-              {clearances.slice(0, -1).map((c) => (
+              {historicalClearances.map((c) => (
                 <div
                   key={c.clearanceId}
                   className="flex items-center justify-between p-2 rounded border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400"
                 >
-                  <span>Clearance #{c.sequence} ({c.clearanceStatus}) — {c.finalizedAt?.slice(0, 10)}</span>
+                  <span>Clearance #{c.sequence} ({c.clearanceStatus}) {c.validityStatus === 'REVOKED' ? '· REVOKED' : ''} — {c.finalizedAt?.slice(0, 10)}</span>
                   <Button
                     variant="ghost"
                     size="sm"

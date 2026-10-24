@@ -98,6 +98,10 @@ export function serializeFeePlan(plan) {
     createdByRole: plan.createdByRole,
     createdAt: serializeDate(plan.createdAt),
     supersededAt: serializeDate(plan.supersededAt),
+    supersededBy: plan.supersededBy,
+    supersededReason: plan.supersededReason,
+    supersededReconciliationId: plan.supersededReconciliationId,
+    createdReconciliationId: plan.createdReconciliationId,
   };
 }
 

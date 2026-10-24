@@ -203,6 +203,7 @@ export function AdminRoomFeesPage() {
             error={plansError}
             memberErrors={plansMemberErrors}
             targetMonth={month}
+            role={auth.role}
           />
         </TabsContent>
 

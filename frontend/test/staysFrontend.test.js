@@ -24,6 +24,8 @@ const stayEmptyStatePath = path.join(srcDir, 'components/stays/StayEmptyState.js
 const dashboardStayCardPath = path.join(srcDir, 'components/dashboard/DashboardStayCard.jsx');
 const myStayPagePath = path.join(srcDir, 'pages/MyStayPage.jsx');
 const adminStaysPagePath = path.join(srcDir, 'pages/AdminStaysPage.jsx');
+const restoreResidentDialogPath = path.join(srcDir, 'components/stays/RestoreResidentDialog.jsx');
+const configureDepositDialogPath = path.join(srcDir, 'components/stays/ConfigureDepositDialog.jsx');
 const appPath = path.join(srcDir, 'App.jsx');
 const accountMenuPath = path.join(srcDir, 'components/layout/AccountMenu.jsx');
 const mobileNavPath = path.join(srcDir, 'components/layout/MobileNav.jsx');
@@ -171,6 +173,8 @@ describe('MealKhata 2.0 Phase 4: Complete Hostel Lifecycle, Security Deposits & 
       assert.match(content, /downloadClearancePdf/);
       assert.match(content, /NO_DUES/);
       assert.match(content, /OUTSTANDING_DUES/);
+      assert.match(content, /REVOKED/);
+      assert.match(content, /revocationReason/);
     });
 
     test('LifetimeFinancialOverview displays multi-month consolidated totals and expandable breakdown', async () => {
@@ -216,6 +220,25 @@ describe('MealKhata 2.0 Phase 4: Complete Hostel Lifecycle, Security Deposits & 
       assert.match(content, /JoinStayDialog/);
       assert.match(content, /RoomTransferDialog/);
       assert.match(content, /DepositTransactionDialog/);
+      assert.match(content, /RestoreResidentDialog/);
+      assert.match(content, /ConfigureDepositDialog/);
+    });
+
+    test('Resident restoration requires an exact preview before Super Admin confirmation', async () => {
+      const content = await fs.readFile(restoreResidentDialogPath, 'utf8');
+      assert.match(content, /restoration-preview/);
+      assert.match(content, /previewToken/);
+      assert.match(content, /RESTORATION_ASSIGNMENT_CONFLICT|conflicts/);
+      assert.match(content, /No records are changed by this preview/);
+      assert.match(content, /Restore resident/);
+    });
+
+    test('Deposit requirement configuration is explicit and audited without fake transactions', async () => {
+      const content = await fs.readFile(configureDepositDialogPath, 'utf8');
+      assert.match(content, /deposit\/configuration/);
+      assert.match(content, /required/);
+      assert.match(content, /expectedRevision/);
+      assert.match(content, /No deposit transaction will be created/);
     });
   });
 });

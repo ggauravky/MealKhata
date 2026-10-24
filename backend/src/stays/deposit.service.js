@@ -85,6 +85,55 @@ export function createDepositService({ repository = stayRepository } = {}) {
       };
     },
 
+    async configureRequirement({
+      stayId,
+      required,
+      expectedDepositPaise = 0,
+      expectedRevision,
+      reason,
+      actorRole,
+    }) {
+      if (actorRole !== 'superadmin') {
+        throw new DepositDomainError('Only Super Admin can configure deposit requirements.', 403);
+      }
+      if (!stayId) throw new DepositDomainError('Stay ID required.', 400);
+      if (typeof required !== 'boolean') {
+        throw new DepositDomainError('required must be a boolean.', 400);
+      }
+      if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+        throw new DepositDomainError('expectedRevision must be a non-negative integer.', 400);
+      }
+      if (!reason || reason.trim().length < 3) {
+        throw new DepositDomainError('A deposit configuration reason is required.', 400);
+      }
+      if (
+        !Number.isInteger(expectedDepositPaise)
+        || expectedDepositPaise < 0
+        || expectedDepositPaise > MAX_DEPOSIT_PAISE
+      ) {
+        throw new DepositDomainError('Expected deposit must be a non-negative integer in paise.', 400);
+      }
+      if (required && expectedDepositPaise <= 0) {
+        throw new DepositDomainError('A required deposit must have a positive expected amount.', 400);
+      }
+      if (typeof repository.executeAtomicDepositConfiguration !== 'function') {
+        throw new DepositDomainError('Financial transaction unavailable. Database transaction support is required.', 503);
+      }
+
+      try {
+        return await repository.executeAtomicDepositConfiguration({
+          stayId,
+          required,
+          expectedDepositPaise,
+          expectedRevision,
+          reason: reason.trim().slice(0, 500),
+          actorRole,
+        });
+      } catch (error) {
+        throw new DepositDomainError(error.message, error.statusCode || 400, error.details || {});
+      }
+    },
+
     /**
      * Record a new deposit transaction with database-backed concurrency & balance guard
      */

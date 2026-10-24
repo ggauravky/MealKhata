@@ -3,7 +3,7 @@
  * Manages admission, active stays, room history & transfers, checkout review, and final clearance.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import mongoose from 'mongoose';
 import { MEMBER_IDS } from '../config/members.js';
 import { canEditDate, isValidLogicalDate, getLogicalDateInTimeZone, getPreviousLogicalDate } from '../utils/date.js';
@@ -95,6 +95,157 @@ export function createStayService({
         { code: 'TRANSACTION_REQUIRED' },
       );
     }
+  };
+
+  const buildRestorePreview = async ({
+    stayId,
+    joinedOn,
+    occupancyFromDate,
+    roomId,
+    assignmentAction,
+    assignmentId = null,
+    expectedRevision,
+    reason,
+    actorRole,
+  }, { session = null } = {}) => {
+    if (actorRole !== ROLES.SUPERADMIN) {
+      throw new StayDomainError('Only Super Admin can restore an incorrectly checked-out resident.', 403);
+    }
+    if (!isValidLogicalDate(joinedOn) || !isValidLogicalDate(occupancyFromDate)) {
+      throw new StayDomainError('Valid joining and continuous occupancy dates are required.', 400);
+    }
+    if (occupancyFromDate < joinedOn) {
+      throw new StayDomainError('Continuous occupancy date cannot precede the joining date.', 400);
+    }
+    if (!roomId || !roomId.trim()) throw new StayDomainError('Room is required.', 400);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+      throw new StayDomainError('expectedRevision must be a non-negative integer.', 400);
+    }
+    const normalizedReason = typeof reason === 'string' ? reason.trim().slice(0, 500) : '';
+    if (normalizedReason.length < 3) throw new StayDomainError('A restoration reason is required.', 400);
+
+    const stay = await repository.findStayById(stayId, { session });
+    if (!stay) throw new StayDomainError('Hostel stay not found.', 404);
+    if (stay.status !== STAY_STATUSES.CHECKED_OUT) {
+      throw new StayDomainError('Only a checked-out Stay can be restored.', 409);
+    }
+
+    const [activeStay, clearances, depositAccount, depositTransactions, assignmentPreview] = await Promise.all([
+      repository.findActiveStayForMember(stay.memberId, { session }),
+      repository.findClearancesByStayId(stayId, { session }),
+      repository.findDepositAccountByStayId(stayId, { session }),
+      repository.listDepositTransactionsByStayId(stayId, { includeVoided: false, session }),
+      roomFees.previewRestoreAssignment({
+        memberId: stay.memberId,
+        roomId: roomId.trim(),
+        occupancyFromDate,
+        assignmentAction,
+        assignmentId,
+        session,
+      }),
+    ]);
+
+    const conflicts = [...assignmentPreview.conflicts];
+    if (stay.revision !== expectedRevision) {
+      conflicts.push({ code: 'STAY_REVISION_CONFLICT', message: 'Stay changed since it was loaded.' });
+    }
+    if (activeStay && activeStay.stayId !== stayId) {
+      conflicts.push({
+        code: 'ACTIVE_STAY_EXISTS',
+        stayId: activeStay.stayId,
+        message: 'Another active or pending Stay already exists for this resident.',
+      });
+    }
+
+    const activeClearances = clearances.filter((clearance) => !clearance.validityStatus || clearance.validityStatus === 'ACTIVE');
+    const changes = [
+      {
+        collection: 'hostel_stays',
+        documentId: stay.stayId,
+        revision: stay.revision,
+        current: { status: stay.status, joinedOn: stay.joinedOn, actualLeftOn: stay.actualLeftOn },
+        proposed: { status: STAY_STATUSES.ACTIVE, joinedOn, actualLeftOn: null, currentRoomId: assignmentPreview.room.roomId },
+        reason: normalizedReason,
+      },
+    ];
+    if (assignmentAction !== 'LINK_EXISTING') {
+      changes.push({
+        collection: 'room_assignments',
+        documentId: assignmentPreview.currentAssignment?.assignmentId || 'NEW',
+        revision: assignmentPreview.currentAssignment?.updatedAt || null,
+        current: assignmentPreview.currentAssignment,
+        proposed: assignmentPreview.proposedAssignment,
+        reason: normalizedReason,
+      });
+    }
+    for (const clearance of activeClearances) {
+      changes.push({
+        collection: 'hostel_clearances',
+        documentId: clearance.clearanceId,
+        revision: clearance.updatedAt || clearance.createdAt || null,
+        current: { validityStatus: clearance.validityStatus || 'ACTIVE', clearanceStatus: clearance.clearanceStatus },
+        proposed: { validityStatus: 'REVOKED' },
+        reason: normalizedReason,
+      });
+    }
+
+    const fingerprint = {
+      request: {
+        stayId,
+        joinedOn,
+        occupancyFromDate,
+        roomId: assignmentPreview.room.roomId,
+        assignmentAction,
+        assignmentId,
+        expectedRevision,
+        reason: normalizedReason,
+      },
+      stay: {
+        revision: stay.revision,
+        financialRevision: stay.financialRevision || 0,
+        status: stay.status,
+        joinedOn: stay.joinedOn,
+        actualLeftOn: stay.actualLeftOn,
+        updatedAt: stay.updatedAt || null,
+      },
+      activeStayId: activeStay?.stayId || null,
+      assignment: assignmentPreview.currentAssignment
+        ? {
+          assignmentId: assignmentPreview.currentAssignment.assignmentId,
+          effectiveFromDate: assignmentPreview.currentAssignment.effectiveFromDate,
+          effectiveUntilDate: assignmentPreview.currentAssignment.effectiveUntilDate,
+          updatedAt: assignmentPreview.currentAssignment.updatedAt || null,
+        }
+        : null,
+      deposit: depositAccount
+        ? {
+          depositAccountId: depositAccount.depositAccountId,
+          revision: depositAccount.revision,
+          status: depositAccount.status,
+          expectedDepositPaise: depositAccount.expectedDepositPaise,
+          transactionCount: depositTransactions.length,
+        }
+        : null,
+      clearances: activeClearances.map((clearance) => ({
+        clearanceId: clearance.clearanceId,
+        validityStatus: clearance.validityStatus || 'ACTIVE',
+        updatedAt: clearance.updatedAt || clearance.createdAt || null,
+      })),
+    };
+
+    return {
+      stayId,
+      memberId: stay.memberId,
+      expectedFinancialRevision: stay.financialRevision || 0,
+      canApply: conflicts.length === 0,
+      conflicts,
+      changes,
+      preservedFinancialRecords: {
+        depositTransactionCount: depositTransactions.length,
+        clearanceSnapshotCount: clearances.length,
+      },
+      previewToken: createHash('sha256').update(JSON.stringify(fingerprint)).digest('hex'),
+    };
   };
 
   return {
@@ -322,10 +473,14 @@ export function createStayService({
           expectedDepositPaise: expectedDepositPaise || 0,
           holderType: DEPOSIT_HOLDER_TYPES.ADMIN_COLLECTOR,
           holderName: 'Hostel Administration',
-          status: DEPOSIT_ACCOUNT_STATUSES.OPEN,
+          status: expectedDepositPaise > 0
+            ? DEPOSIT_ACCOUNT_STATUSES.OPEN
+            : DEPOSIT_ACCOUNT_STATUSES.NOT_REQUIRED,
           history: [
             {
-              event: 'DEPOSIT_ACCOUNT_OPENED',
+              event: expectedDepositPaise > 0
+                ? 'DEPOSIT_ACCOUNT_OPENED'
+                : 'DEPOSIT_NOT_REQUIRED',
               timestamp: new Date(),
               actorRole,
               note: `Deposit account initialized for stay ${stayId}`,
@@ -431,6 +586,105 @@ export function createStayService({
         stay,
         ...accommodation,
       };
+    },
+
+    async previewRestoreResident(params) {
+      return buildRestorePreview(params);
+    },
+
+    async restoreResident({ previewToken, ...params }) {
+      if (!previewToken || typeof previewToken !== 'string') {
+        throw new StayDomainError('A current restoration preview token is required.', 400);
+      }
+      const session = await startLifecycleTransaction();
+      const restorationId = randomUUID();
+      const restoredAt = now();
+
+      try {
+        const preview = await buildRestorePreview(params, { session });
+        if (preview.previewToken !== previewToken) {
+          throw new StayDomainError(
+            'Residence records changed after the preview. Generate a new preview and retry.',
+            409,
+            { code: 'RESTORATION_PREVIEW_STALE' },
+          );
+        }
+        if (!preview.canApply) {
+          throw new StayDomainError(
+            'Resident restoration has unresolved conflicts.',
+            409,
+            { code: 'RESTORATION_CONFLICT', conflicts: preview.conflicts },
+          );
+        }
+
+        const stay = await repository.findStayById(params.stayId, { session });
+        if (requiresTransactions) {
+          await guardCheckoutFinancialSnapshot({
+            stayId: params.stayId,
+            expectedFinancialRevision: preview.expectedFinancialRevision,
+            session,
+          });
+        }
+        const assignment = await roomFees.restoreAssignmentForResident({
+          memberId: stay.memberId,
+          roomId: params.roomId,
+          occupancyFromDate: params.occupancyFromDate,
+          assignmentAction: params.assignmentAction,
+          assignmentId: params.assignmentId || null,
+          actorRole: params.actorRole,
+          session,
+        });
+        const revokedClearanceIds = await repository.revokeActiveClearances(
+          params.stayId,
+          {
+            reason: params.reason.trim(),
+            actorRole: params.actorRole,
+            revokedAt: restoredAt,
+            restorationId,
+          },
+          { session },
+        );
+        const restoredStay = await repository.restoreStay(
+          params.stayId,
+          {
+            joinedOn: params.joinedOn,
+            roomId: assignment.roomId,
+            reason: params.reason.trim(),
+            actorRole: params.actorRole,
+            expectedRevision: params.expectedRevision,
+            restoredAt,
+            restorationId,
+            previousActualLeftOn: stay.actualLeftOn,
+            previousCheckoutFinalizedAt: stay.checkoutFinalizedAt,
+            revokedClearanceIds,
+          },
+          { session },
+        );
+        if (!restoredStay) {
+          throw new StayDomainError('Stay changed while restoration was being applied.', 409);
+        }
+
+        if (session) await session.commitTransaction();
+        return { restorationId, stay: restoredStay, assignment, revokedClearanceIds };
+      } catch (error) {
+        if (session?.inTransaction()) await session.abortTransaction();
+        const isConflict =
+          error.code === 11000
+          || error.code === 112
+          || error.errorLabels?.has?.('TransientTransactionError')
+          || error.errorLabelSet?.has?.('TransientTransactionError')
+          || (typeof error.message === 'string' && error.message.includes('WriteConflict'));
+        if (isConflict) {
+          throw new StayDomainError(
+            'Residence records changed while restoration was being applied. Generate a new preview and retry.',
+            409,
+            { code: 'RESTORATION_CONFLICT' },
+          );
+        }
+        throw error;
+      } finally {
+        if (session) await session.endSession();
+      }
     },
 
     /**

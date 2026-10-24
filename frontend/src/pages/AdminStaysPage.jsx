@@ -26,12 +26,14 @@ import { PageHeader } from '../components/common/PageHeader.jsx';
 import { CheckoutReviewWizard } from '../components/stays/CheckoutReviewWizard.jsx';
 import { CancelStayDialog } from '../components/stays/CancelStayDialog.jsx';
 import { CorrectAdmissionDialog } from '../components/stays/CorrectAdmissionDialog.jsx';
+import { ConfigureDepositDialog } from '../components/stays/ConfigureDepositDialog.jsx';
 import { DepositOverviewCard } from '../components/stays/DepositOverviewCard.jsx';
 import { DepositTransactionDialog } from '../components/stays/DepositTransactionDialog.jsx';
 import { DepositTransactionHistory } from '../components/stays/DepositTransactionHistory.jsx';
 import { JoinStayDialog } from '../components/stays/JoinStayDialog.jsx';
 import { RoomHistoryTimeline } from '../components/stays/RoomHistoryTimeline.jsx';
 import { RoomTransferDialog } from '../components/stays/RoomTransferDialog.jsx';
+import { RestoreResidentDialog } from '../components/stays/RestoreResidentDialog.jsx';
 import { StayStatusBadge } from '../components/stays/StayStatusBadge.jsx';
 import { Button } from '../components/ui/button.jsx';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card.jsx';
@@ -79,6 +81,8 @@ export function AdminStaysPage() {
   const [transferTargetStay, setTransferTargetStay] = useState(null);
   const [depositTargetStay, setDepositTargetStay] = useState(null);
   const [depositActionType, setDepositActionType] = useState('RECEIVED');
+  const [depositConfigTargetStay, setDepositConfigTargetStay] = useState(null);
+  const [restoreTargetStay, setRestoreTargetStay] = useState(null);
   const [reviewingStayId, setReviewingStayId] = useState(null);
   const [selectedStayIdForDetails, setSelectedStayIdForDetails] = useState(null);
 
@@ -334,6 +338,15 @@ export function AdminStaysPage() {
                             <Button
                               variant="ghost"
                               size="sm"
+                              onClick={() => setDepositConfigTargetStay(member.stay)}
+                              className="h-7 text-xs text-slate-600 dark:text-slate-300"
+                            >
+                              <Shield className="h-3 w-3 mr-1" />
+                              Requirement
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
                               onClick={() => setCorrectionTargetStay(member.stay)}
                               className="h-7 text-xs text-teal-700 dark:text-teal-400"
                             >
@@ -582,6 +595,15 @@ export function AdminStaysPage() {
                             <Button
                               variant="outline"
                               size="sm"
+                              onClick={() => setDepositConfigTargetStay(s)}
+                              className="h-7 text-xs border-slate-200 text-slate-700 dark:border-slate-700 dark:text-slate-300"
+                            >
+                              <Shield className="h-3 w-3 mr-1" />
+                              Requirement
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
                               onClick={() => handleOpenDepositModal(s, 'DEDUCTED')}
                               className="h-7 text-xs border-amber-200 text-amber-700 dark:text-amber-400"
                             >
@@ -682,15 +704,27 @@ export function AdminStaysPage() {
                         </span>{' '}
                         — Left on {s.actualLeftOn} (Joined {s.joinedOn})
                       </div>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => downloadLifetimeStatementPdf(s.stayId, s.memberId)}
-                        className="h-6 text-xs text-teal-600"
-                      >
-                        <Download className="h-3 w-3 mr-1" />
-                        Lifetime PDF
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => downloadLifetimeStatementPdf(s.stayId, s.memberId)}
+                          className="h-7 text-xs text-teal-600"
+                        >
+                          <Download className="h-3 w-3 mr-1" />
+                          Lifetime PDF
+                        </Button>
+                        {isSuperAdmin && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setRestoreTargetStay(s)}
+                            className="h-7 text-xs border-amber-300 text-amber-700 dark:border-amber-800 dark:text-amber-300"
+                          >
+                            Restore resident
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -790,6 +824,26 @@ export function AdminStaysPage() {
         type={depositActionType}
         depositHeldPaise={100_000_00} // dialog validates with stay details
         onSubmitTransaction={recordDepositTransaction}
+      />
+
+      <ConfigureDepositDialog
+        open={Boolean(depositConfigTargetStay)}
+        onOpenChange={(open) => !open && setDepositConfigTargetStay(null)}
+        stay={depositConfigTargetStay}
+        onConfigured={() => {
+          refresh();
+          detailedStay.refresh();
+        }}
+      />
+
+      <RestoreResidentDialog
+        open={Boolean(restoreTargetStay)}
+        onOpenChange={(open) => !open && setRestoreTargetStay(null)}
+        stay={restoreTargetStay}
+        onRestored={() => {
+          refresh();
+          memberRoster.refresh();
+        }}
       />
     </div>
   );

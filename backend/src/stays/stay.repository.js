@@ -9,7 +9,7 @@ import {
   HostelDepositTransaction,
   HostelStay,
 } from './stay.model.js';
-import { STAY_STATUSES } from './stay.constants.js';
+import { CLEARANCE_VALIDITY_STATUSES, STAY_STATUSES } from './stay.constants.js';
 import { guardFinancialMutation } from '../finance/financialMutationGuard.js';
 import { runFinancialTransaction } from '../finance/financialTransaction.js';
 
@@ -181,6 +181,65 @@ export const stayRepository = {
     ).lean();
   },
 
+  async restoreStay(
+    stayId,
+    {
+      joinedOn,
+      roomId,
+      reason,
+      actorRole,
+      expectedRevision,
+      restoredAt,
+      restorationId,
+      previousActualLeftOn,
+      previousCheckoutFinalizedAt,
+      revokedClearanceIds,
+    },
+    { session } = {},
+  ) {
+    const options = { returnDocument: 'after', runValidators: true };
+    if (session) options.session = session;
+    return HostelStay.findOneAndUpdate(
+      {
+        stayId,
+        status: STAY_STATUSES.CHECKED_OUT,
+        revision: expectedRevision,
+      },
+      {
+        $set: {
+          status: STAY_STATUSES.ACTIVE,
+          joinedOn,
+          currentRoomId: roomId,
+          actualLeftOn: null,
+          checkoutRequestedAt: null,
+          checkoutRequestedFor: null,
+          checkoutRequestNote: null,
+          checkoutFinalizedAt: null,
+          checkoutFinalizedByRole: null,
+        },
+        $inc: { revision: 1, financialRevision: 1 },
+        $push: {
+          history: {
+            event: 'RESIDENT_RESTORED',
+            timestamp: restoredAt,
+            actorRole,
+            note: reason,
+            details: {
+              restorationId,
+              previousStatus: STAY_STATUSES.CHECKED_OUT,
+              previousActualLeftOn,
+              previousCheckoutFinalizedAt,
+              joinedOn,
+              roomId,
+              revokedClearanceIds,
+            },
+          },
+        },
+      },
+      options,
+    ).lean();
+  },
+
   async deleteStay(stayId) {
     return HostelStay.findOneAndDelete({ stayId }).lean();
   },
@@ -230,6 +289,64 @@ export const stayRepository = {
       },
       options,
     ).lean();
+  },
+
+  async executeAtomicDepositConfiguration({
+    stayId,
+    required,
+    expectedDepositPaise,
+    expectedRevision,
+    reason,
+    actorRole,
+  }) {
+    return runFinancialTransaction(async (session) => {
+      const account = await HostelDepositAccount.findOne({ stayId }).session(session);
+      if (!account) {
+        const error = new Error('Deposit account not found for this stay.');
+        error.statusCode = 404;
+        throw error;
+      }
+      if (account.revision !== expectedRevision) {
+        const error = new Error('Deposit account changed while the requirement was being updated. Refresh and retry.');
+        error.statusCode = 409;
+        error.details = { code: 'DEPOSIT_REVISION_CONFLICT' };
+        throw error;
+      }
+
+      await guardFinancialMutation({ stayId, actorRole, session });
+
+      const transactions = await HostelDepositTransaction.find({
+        stayId,
+        status: 'recorded',
+      }).session(session);
+      if (!required && transactions.length > 0) {
+        const error = new Error('Recorded deposit transactions must be reconciled before marking the deposit not required.');
+        error.statusCode = 409;
+        error.details = {
+          code: 'DEPOSIT_HISTORY_REQUIRES_RECONCILIATION',
+          transactionCount: transactions.length,
+        };
+        throw error;
+      }
+
+      const previousExpectedDepositPaise = account.expectedDepositPaise;
+      account.expectedDepositPaise = required ? expectedDepositPaise : 0;
+      account.status = required ? 'OPEN' : 'NOT_REQUIRED';
+      account.revision += 1;
+      account.history.push({
+        event: required ? 'DEPOSIT_REQUIREMENT_CONFIGURED' : 'DEPOSIT_MARKED_NOT_REQUIRED',
+        timestamp: new Date(),
+        actorRole,
+        note: reason,
+        details: {
+          required,
+          previousExpectedDepositPaise,
+          expectedDepositPaise: required ? expectedDepositPaise : 0,
+        },
+      });
+      await account.save({ session });
+      return account.toObject();
+    });
   },
 
   async addDepositAccountHistory(depositAccountId, entry, { session } = {}) {
@@ -325,6 +442,13 @@ export const stayRepository = {
       if (!account) {
         const err = new Error('Deposit account not found for this stay.');
         err.statusCode = 404;
+        throw err;
+      }
+
+      if (account.status === 'NOT_REQUIRED') {
+        const err = new Error('This stay has no deposit requirement. Configure a deposit requirement before recording a receipt.');
+        err.statusCode = 409;
+        err.details = { code: 'DEPOSIT_NOT_REQUIRED' };
         throw err;
       }
 
@@ -495,6 +619,36 @@ export const stayRepository = {
     const q = HostelClearance.findOne({ clearanceId });
     if (session) q.session(session);
     return q.lean();
+  },
+
+  async revokeActiveClearances(
+    stayId,
+    { reason, actorRole, revokedAt, restorationId },
+    { session } = {},
+  ) {
+    const filter = {
+      stayId,
+      validityStatus: { $in: [null, CLEARANCE_VALIDITY_STATUSES.ACTIVE] },
+    };
+    const query = HostelClearance.find(filter).sort({ sequence: 1 });
+    if (session) query.session(session);
+    const clearances = await query.lean();
+    if (clearances.length === 0) return [];
+
+    await HostelClearance.updateMany(
+      { clearanceId: { $in: clearances.map((clearance) => clearance.clearanceId) } },
+      {
+        $set: {
+          validityStatus: CLEARANCE_VALIDITY_STATUSES.REVOKED,
+          revokedAt,
+          revokedByRole: actorRole,
+          revocationReason: reason,
+          restorationId,
+        },
+      },
+      session ? { session } : {},
+    );
+    return clearances.map((clearance) => clearance.clearanceId);
   },
 
   async getNextClearanceSequence(stayId, { session } = {}) {
