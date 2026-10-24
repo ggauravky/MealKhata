@@ -262,7 +262,7 @@ export class ExpenseService {
           actorRole,
         });
       } catch (err) {
-        throw new ExpenseDomainError(err.message, err.statusCode || 400);
+        throw new ExpenseDomainError(err.message, err.statusCode || 400, err.details);
       }
     } else {
       const expense = await this.repository.findExpenseById(expenseId);
@@ -459,7 +459,7 @@ export class ExpenseService {
           isFinancialChange,
         });
       } catch (err) {
-        throw new ExpenseDomainError(err.message, err.statusCode || 400);
+        throw new ExpenseDomainError(err.message, err.statusCode || 400, err.details);
       }
     } else {
       updated = await this.repository.recordExpenseCorrection(expenseId, {
