@@ -491,6 +491,100 @@ describe('Phase 12: Security & Reliability', () => {
       assert.ok(issues.some((issue) => issue.includes('Room A exceeds capacity 1')));
     });
 
+    test('does not report inactive historical assignment or fee-plan overlaps as active conflicts', async () => {
+      const fixture = {
+        rooms: [
+          { roomId: '00000000-0000-4000-8000-000000000001', roomNumber: 'A', capacity: 1 },
+        ],
+        room_assignments: [
+          {
+            assignmentId: '10000000-0000-4000-8000-000000000001',
+            memberId: 'gaurav',
+            roomId: '00000000-0000-4000-8000-000000000001',
+            effectiveFromMonth: '2026-10',
+            effectiveFromDate: '2026-10-01',
+            effectiveUntilMonth: null,
+            effectiveUntilDate: null,
+            cancelledAt: new Date('2026-10-02T00:00:00.000Z'),
+          },
+          {
+            assignmentId: '10000000-0000-4000-8000-000000000002',
+            memberId: 'nikhil',
+            roomId: '00000000-0000-4000-8000-000000000001',
+            effectiveFromMonth: '2026-10',
+            effectiveFromDate: '2026-10-01',
+            effectiveUntilMonth: null,
+            effectiveUntilDate: null,
+          },
+        ],
+        room_fee_plans: [
+          {
+            feePlanId: '20000000-0000-4000-8000-000000000001',
+            memberId: 'gaurav',
+            amountPaise: 280000,
+            effectiveFromMonth: '2026-10',
+            effectiveUntilMonth: null,
+            supersededAt: new Date('2026-10-02T00:00:00.000Z'),
+          },
+          {
+            feePlanId: '20000000-0000-4000-8000-000000000002',
+            memberId: 'gaurav',
+            amountPaise: 300000,
+            effectiveFromMonth: '2026-10',
+            effectiveUntilMonth: null,
+          },
+        ],
+      };
+      const mockDb = {
+        collection: (name) => ({
+          find: () => ({ toArray: async () => fixture[name] || [] }),
+        }),
+      };
+
+      const { issues } = await verifyDataIntegrity({ db: mockDb });
+      assert.ok(!issues.some((issue) => issue.includes('Overlapping fee plans')));
+      assert.ok(!issues.some((issue) => issue.includes('Overlapping room assignments')));
+      assert.ok(!issues.some((issue) => issue.includes('exceeds capacity')));
+    });
+
+    test('flags reversed Room Assignment and Fee Plan intervals', async () => {
+      const fixture = {
+        rooms: [
+          { roomId: '00000000-0000-4000-8000-000000000001', roomNumber: 'A', capacity: 1 },
+        ],
+        room_assignments: [
+          {
+            assignmentId: '10000000-0000-4000-8000-000000000001',
+            memberId: 'gaurav',
+            roomId: '00000000-0000-4000-8000-000000000001',
+            effectiveFromMonth: '2026-10',
+            effectiveFromDate: '2026-10-20',
+            effectiveUntilMonth: '2026-10',
+            effectiveUntilDate: '2026-10-01',
+          },
+        ],
+        room_fee_plans: [
+          {
+            feePlanId: '20000000-0000-4000-8000-000000000001',
+            memberId: 'gaurav',
+            amountPaise: 280000,
+            effectiveFromMonth: '2026-11',
+            effectiveUntilMonth: '2026-10',
+          },
+        ],
+      };
+      const mockDb = {
+        collection: (name) => ({
+          find: () => ({ toArray: async () => fixture[name] || [] }),
+        }),
+      };
+
+      const { passed, issues } = await verifyDataIntegrity({ db: mockDb });
+      assert.equal(passed, false);
+      assert.ok(issues.some((issue) => issue.includes('Assignment 10000000-0000-4000-8000-000000000001 ends before it starts')));
+      assert.ok(issues.some((issue) => issue.includes('Fee plan 20000000-0000-4000-8000-000000000001 ends before it starts')));
+    });
+
     test('flags broken Stay, deposit, transaction, and clearance references', async () => {
       const fixture = {
         rooms: [

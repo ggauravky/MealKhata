@@ -149,6 +149,20 @@ export const hostelStaySchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    clearanceReviewOpenedAt: {
+      type: Date,
+      default: null,
+    },
+    clearanceReviewOpenedByRole: {
+      type: String,
+      default: null,
+    },
+    clearanceReviewReason: {
+      type: String,
+      default: null,
+      trim: true,
+      maxlength: MAX_NOTE_LENGTH,
+    },
     history: {
       type: [auditEntrySchema],
       default: [],

@@ -527,6 +527,22 @@ export function createStayRouter({
     }
   });
 
+  router.post('/:stayId/clearance/review', requireSuperAdmin, assertStayAccess, async (req, res, next) => {
+    try {
+      const { reason } = req.body || {};
+      const result = await service.openClearanceReview({
+        stayId: req.stay.stayId,
+        reason,
+        actorRole: req.auth.role,
+      });
+
+      notifyClearanceChange();
+      return res.json({ success: true, data: result });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   // ==========================================
   // Deposit Management Actions
   // ==========================================

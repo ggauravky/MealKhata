@@ -58,8 +58,9 @@ export function createStayService({
   stayAttribution = null,
   now = () => new Date(),
   enforceHistoricalPolicy = process.env.NODE_ENV !== 'test',
-  requiresTransactions = repository === stayRepository,
+  requiresTransactions = repository.requiresTransactions ?? (repository === stayRepository),
   startSession = () => mongoose.startSession(),
+  isDatabaseReady = () => mongoose.connection?.readyState === 1,
 } = {}) {
   const attributionService =
     stayAttribution ||
@@ -71,8 +72,9 @@ export function createStayService({
     });
 
   const startLifecycleTransaction = async () => {
-    if (mongoose.connection?.readyState !== 1) {
-      if (!requiresTransactions) return null;
+    if (!requiresTransactions) return null;
+
+    if (!isDatabaseReady()) {
       throw new StayDomainError(
         'Database transaction support is required. No records were changed.',
         503,
@@ -80,11 +82,13 @@ export function createStayService({
       );
     }
 
+    let session = null;
     try {
-      const session = await startSession();
+      session = await startSession();
       session.startTransaction();
       return session;
     } catch (_error) {
+      if (session) await session.endSession();
       throw new StayDomainError(
         'Database transaction support is required. No records were changed.',
         503,
@@ -968,7 +972,10 @@ export function createStayService({
      * Get 5-step Checkout Review data across all attributable stay months using canonical Stay Attribution
      */
     async getCheckoutReview(stayId, { session = null, actorRole = 'admin' } = {}) {
-      const stay = await this.getStayById(stayId);
+      const stay = await repository.findStayById(stayId, { session });
+      if (!stay) {
+        throw new StayDomainError('Hostel stay not found.', 404);
+      }
       const memberId = stay.memberId;
       const currentMonth = getLogicalDateInTimeZone(new Date(), 'Asia/Kolkata').slice(0, 7);
 
@@ -1092,7 +1099,15 @@ export function createStayService({
           throw new StayDomainError('Stay modified concurrently. Please retry.', 409);
         }
 
-        // Re-evaluate review inside transaction session to ensure no concurrent financial adjustments occurred!
+        if (requiresTransactions) {
+          await guardCheckoutFinancialSnapshot({
+            stayId,
+            expectedFinancialRevision: freshStay.financialRevision,
+            session,
+          });
+        }
+
+        // Re-evaluate while holding the Stay financial write lock so every guarded writer must serialize.
         const review = await this.getCheckoutReview(stayId, { session, actorRole });
         if (!review.isEligibleForNoDues && !explicitException) {
           throw new StayDomainError(
@@ -1104,8 +1119,6 @@ export function createStayService({
         if (!review.isEligibleForNoDues) {
           clearanceStatus = CLEARANCE_STATUSES.OUTSTANDING_DUES;
         }
-
-        await guardCheckoutFinancialSnapshot({ stayId, session });
 
         // 1. End active room assignment and release capacity with exact departure date
         await roomFees.endActiveRoomAssignment({
@@ -1215,6 +1228,59 @@ export function createStayService({
     },
 
     /**
+     * Open an audited correction window for financial records attributed to a completed Stay.
+     */
+    async openClearanceReview({ stayId, reason, actorRole }) {
+      if (actorRole !== 'superadmin') {
+        throw new StayDomainError('Only Super Admin can open a completed-Stay clearance review.', 403);
+      }
+      if (!reason || !reason.trim()) {
+        throw new StayDomainError('Mandatory clearance review reason is required.', 400);
+      }
+
+      const session = await startLifecycleTransaction();
+      try {
+        const stay = await repository.findStayById(stayId, { session });
+        if (!stay) {
+          throw new StayDomainError('Hostel stay not found.', 404);
+        }
+        if (stay.status !== STAY_STATUSES.CHECKED_OUT) {
+          throw new StayDomainError('Clearance review can only be opened for a checked-out stay.', 400);
+        }
+        if (stay.clearanceReviewOpenedAt) {
+          throw new StayDomainError('A clearance review is already open for this stay.', 409);
+        }
+
+        const opened = await repository.openClearanceReview(
+          stayId,
+          {
+            reason: reason.trim(),
+            actorRole,
+            openedAt: new Date(),
+          },
+          { session },
+        );
+        if (!opened) {
+          throw new StayDomainError('Stay changed while opening clearance review. Refresh and retry.', 409);
+        }
+
+        if (session) await session.commitTransaction();
+        return opened;
+      } catch (error) {
+        if (session?.inTransaction()) await session.abortTransaction();
+        if (
+          error.message?.includes('Transactions are not supported')
+          || error.message?.includes('replica set')
+        ) {
+          throw new StayDomainError('Financial transaction unavailable. Database transaction support is required.', 503);
+        }
+        throw error;
+      } finally {
+        if (session) await session.endSession();
+      }
+    },
+
+    /**
      * Reissue clearance certificate with fresh snapshot (Super Admin only)
      */
     async reissueClearance({ stayId, reissueReason, actorRole }) {
@@ -1225,22 +1291,32 @@ export function createStayService({
         throw new StayDomainError('Mandatory reissue reason is required.', 400);
       }
 
-      const stay = await this.getStayById(stayId);
-      if (stay.status !== STAY_STATUSES.CHECKED_OUT) {
-        throw new StayDomainError('Clearance can only be reissued for a checked-out stay.', 400);
-      }
-
-      const review = await this.getCheckoutReview(stayId);
-      let clearanceStatus = CLEARANCE_STATUSES.NO_DUES;
-      if (!review.isEligibleForNoDues) {
-        clearanceStatus = CLEARANCE_STATUSES.OUTSTANDING_DUES;
-      }
-
       const maxRetries = 5;
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         const session = await startLifecycleTransaction();
 
         try {
+          const stay = await repository.findStayById(stayId, { session });
+          if (!stay) {
+            throw new StayDomainError('Hostel stay not found.', 404);
+          }
+          if (stay.status !== STAY_STATUSES.CHECKED_OUT) {
+            throw new StayDomainError('Clearance can only be reissued for a checked-out stay.', 400);
+          }
+
+          if (requiresTransactions) {
+            await guardCheckoutFinancialSnapshot({
+              stayId,
+              expectedFinancialRevision: stay.financialRevision,
+              session,
+            });
+          }
+
+          const review = await this.getCheckoutReview(stayId, { session, actorRole });
+          const clearanceStatus = review.isEligibleForNoDues
+            ? CLEARANCE_STATUSES.NO_DUES
+            : CLEARANCE_STATUSES.OUTSTANDING_DUES;
+
           const sequence = await repository.getNextClearanceSequence(stayId, { session });
           const clearanceId = randomUUID();
 
@@ -1284,6 +1360,20 @@ export function createStayService({
             note: `Clearance #${sequence} reissued: ${reissueReason.trim()}`,
             details: { clearanceId, sequence, clearanceStatus, reissueReason: reissueReason.trim() },
           }, { session });
+
+          if (stay.clearanceReviewOpenedAt && typeof repository.closeClearanceReview === 'function') {
+            await repository.closeClearanceReview(
+              stayId,
+              {
+                clearanceId,
+                sequence,
+                actorRole,
+                reason: `Clearance review closed by reissue #${sequence}: ${reissueReason.trim()}`,
+                closedAt: new Date(),
+              },
+              { session },
+            );
+          }
 
           if (session) {
             await session.commitTransaction();

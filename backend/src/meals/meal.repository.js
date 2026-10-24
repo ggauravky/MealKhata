@@ -1,12 +1,31 @@
 import { MealDay } from './meal.model.js';
+import { guardFinancialMutation } from '../finance/financialMutationGuard.js';
+import { runFinancialTransaction } from '../finance/financialTransaction.js';
 
 function toPlainObject(document) {
   return document?.toObject ? document.toObject() : document;
 }
 
 export const mealRepository = Object.freeze({
-  async findByDate(date) {
-    return MealDay.findOne({ date }).lean().exec();
+  async executeFinancialMutation({ date, memberIds, actorRole }, work) {
+    return runFinancialTransaction(
+      async (session) => work({
+        session,
+        guard: () => guardFinancialMutation({
+          memberIds,
+          effectiveDate: date,
+          actorRole,
+          session,
+        }),
+      }),
+      { retryOnDuplicateKey: true },
+    );
+  },
+
+  async findByDate(date, { session } = {}) {
+    const q = MealDay.findOne({ date });
+    if (session) q.session(session);
+    return q.lean().exec();
   },
 
   async findInDateRange(startDate, endDate) {
@@ -16,12 +35,15 @@ export const mealRepository = Object.freeze({
       .exec();
   },
 
-  async create(day) {
-    const document = await MealDay.create(day);
-    return toPlainObject(document);
+  async create(day, { session } = {}) {
+    if (session) {
+      const [document] = await MealDay.create([day], { session });
+      return toPlainObject(document);
+    }
+    return toPlainObject(await MealDay.create(day));
   },
 
-  async updateIfCurrent({ date, path, from, to, revision, change }) {
+  async updateIfCurrent({ date, path, from, to, revision, change }, { session } = {}) {
     return MealDay.findOneAndUpdate(
       { date, revision, [path]: from },
       {
@@ -29,7 +51,7 @@ export const mealRepository = Object.freeze({
         $inc: { revision: 1 },
         $push: { changes: change },
       },
-      { returnDocument: 'after', runValidators: true },
+      { returnDocument: 'after', runValidators: true, ...(session ? { session } : {}) },
     )
       .lean()
       .exec();
@@ -44,7 +66,7 @@ export const mealRepository = Object.freeze({
     revision,
     statusChange,
     allocationResetChange,
-  }) {
+  }, { session } = {}) {
     const update = {
       $set: {
         [path]: toStatus,
@@ -61,7 +83,7 @@ export const mealRepository = Object.freeze({
     return MealDay.findOneAndUpdate(
       { date, revision, [path]: fromStatus },
       update,
-      { returnDocument: 'after', runValidators: true },
+      { returnDocument: 'after', runValidators: true, ...(session ? { session } : {}) },
     )
       .lean()
       .exec();
@@ -74,7 +96,7 @@ export const mealRepository = Object.freeze({
     derivedStatuses,
     revision,
     allocationChange,
-  }) {
+  }, { session } = {}) {
     const $set = {
       [`allocations.${mealType}`]: allocation,
     };
@@ -92,13 +114,13 @@ export const mealRepository = Object.freeze({
         $inc: { revision: 1 },
         $push: { allocationChanges: allocationChange },
       },
-      { returnDocument: 'after', runValidators: true },
+      { returnDocument: 'after', runValidators: true, ...(session ? { session } : {}) },
     )
       .lean()
       .exec();
   },
 
-  async clearAllocationIfCurrent({ date, mealType, revision, allocationChange }) {
+  async clearAllocationIfCurrent({ date, mealType, revision, allocationChange }, { session } = {}) {
     return MealDay.findOneAndUpdate(
       { date, revision },
       {
@@ -106,13 +128,13 @@ export const mealRepository = Object.freeze({
         $inc: { revision: 1 },
         $push: { allocationChanges: allocationChange },
       },
-      { returnDocument: 'after', runValidators: true },
+      { returnDocument: 'after', runValidators: true, ...(session ? { session } : {}) },
     )
       .lean()
       .exec();
   },
 
-  async updatePriceOverrideIfCurrent({ date, mealType, priceOverride, revision, priceChange }) {
+  async updatePriceOverrideIfCurrent({ date, mealType, priceOverride, revision, priceChange }, { session } = {}) {
     return MealDay.findOneAndUpdate(
       { date, revision },
       {
@@ -120,13 +142,13 @@ export const mealRepository = Object.freeze({
         $inc: { revision: 1 },
         $push: { priceChanges: priceChange },
       },
-      { returnDocument: 'after', runValidators: true },
+      { returnDocument: 'after', runValidators: true, ...(session ? { session } : {}) },
     )
       .lean()
       .exec();
   },
 
-  async clearPriceOverrideIfCurrent({ date, mealType, revision, priceChange }) {
+  async clearPriceOverrideIfCurrent({ date, mealType, revision, priceChange }, { session } = {}) {
     return MealDay.findOneAndUpdate(
       { date, revision },
       {
@@ -134,7 +156,7 @@ export const mealRepository = Object.freeze({
         $inc: { revision: 1 },
         $push: { priceChanges: priceChange },
       },
-      { returnDocument: 'after', runValidators: true },
+      { returnDocument: 'after', runValidators: true, ...(session ? { session } : {}) },
     )
       .lean()
       .exec();

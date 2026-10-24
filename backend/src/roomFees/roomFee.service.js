@@ -4,6 +4,8 @@ import { MEMBER_IDS, MEMBERS } from '../config/members.js';
 import { HttpError } from '../utils/HttpError.js';
 import { isValidLogicalMonth, getPreviousLogicalMonth, compareLogicalMonths, getClampedDueDate, lastDateOfMonth } from '../utils/month.js';
 import { getLogicalDateInTimeZone, getPreviousLogicalDate, isValidLogicalDate } from '../utils/date.js';
+import { guardFinancialMutation } from '../finance/financialMutationGuard.js';
+import { runFinancialTransaction } from '../finance/financialTransaction.js';
 
 export function calculateMaxSimultaneousOccupancy({
   roomAssignments = [],
@@ -880,44 +882,31 @@ export function createRoomFeeService({
         throw new HttpError(400, 'month must be in YYYY-MM format.');
       }
 
-      const rooms = await repository.findAllRooms();
-      const roomMap = new Map(rooms.map((r) => [r.roomId, r]));
+      const issueWithinTransaction = async (session = null) => {
+        const rooms = await repository.findAllRooms({ session });
+        const roomMap = new Map(rooms.map((r) => [r.roomId, r]));
+        const issuedCharges = [];
+        let skippedCount = 0;
 
-      const issuedCharges = [];
-      let skippedCount = 0;
-
-      let localSession = null;
-      if (mongoose.connection && mongoose.connection.readyState === 1) {
-        try {
-          localSession = await mongoose.startSession();
-          localSession.startTransaction();
-        } catch (_err) {
-          localSession = null;
-        }
-      }
-
-      try {
         for (const member of MEMBERS) {
           const memberId = member.id;
 
           // Check if member has completed hostel stay prior to this month
           let completedStay = false;
-          try {
-            if (mongoose.connection && mongoose.connection.readyState === 1 && mongoose.models.HostelStay) {
-              const stays = await mongoose.models.HostelStay.find({ memberId }).session(localSession).lean();
-              if (stays.length > 0) {
-                const coversMonth = stays.some((s) => {
-                  const joinM = s.joinedOn.slice(0, 7);
-                  const leftM = s.actualLeftOn ? s.actualLeftOn.slice(0, 7) : null;
-                  return joinM <= month && (!leftM || leftM >= month);
-                });
-                if (!coversMonth) {
-                  completedStay = true;
-                }
+          if (mongoose.connection && mongoose.connection.readyState === 1 && mongoose.models.HostelStay) {
+            const stayQuery = mongoose.models.HostelStay.find({ memberId });
+            if (session) stayQuery.session(session);
+            const stays = await stayQuery.lean();
+            if (stays.length > 0) {
+              const coversMonth = stays.some((s) => {
+                const joinM = s.joinedOn.slice(0, 7);
+                const leftM = s.actualLeftOn ? s.actualLeftOn.slice(0, 7) : null;
+                return joinM <= month && (!leftM || leftM >= month);
+              });
+              if (!coversMonth) {
+                completedStay = true;
               }
             }
-          } catch (_err) {
-            completedStay = false;
           }
 
           if (completedStay) {
@@ -925,14 +914,14 @@ export function createRoomFeeService({
             continue;
           }
 
-          const existingCharge = await repository.findChargeByMemberAndMonth(memberId, month);
+          const existingCharge = await repository.findChargeByMemberAndMonth(memberId, month, { session });
           if (existingCharge) {
             skippedCount++;
             continue;
           }
 
-          const assignment = await repository.findActiveAssignment(memberId, month);
-          const plan = await repository.findActiveFeePlan(memberId, month);
+          const assignment = await repository.findActiveAssignment(memberId, month, { session });
+          const plan = await repository.findActiveFeePlan(memberId, month, { session });
 
           if (!assignment || !plan) {
             skippedCount++;
@@ -948,37 +937,33 @@ export function createRoomFeeService({
           const dueDate = getClampedDueDate(month, plan.dueDay);
           const chargeId = randomUUID();
 
-          try {
-            const charge = await repository.createCharge(
-              {
-                chargeId,
-                memberId,
-                roomId: room.roomId,
-                roomNumber: room.roomNumber,
-                month,
-                feePlanId: plan.feePlanId,
-                baseAmountPaise: plan.amountPaise,
-                dueDate,
-                status: ROOM_CHARGE_STATUSES.ISSUED,
-                adjustments: [],
-                issuedAt: now(),
-                issuedByRole: actorRole,
-              },
-              localSession ? { session: localSession } : {},
-            );
-            issuedCharges.push(serializeRoomCharge(charge, { payments: [], now: now() }));
-          } catch (error) {
-            // Idempotency check: if duplicate key under race condition, skip
-            if (error.code === 11000) {
-              skippedCount++;
-            } else {
-              throw error;
-            }
+          if (session) {
+            await guardFinancialMutation({
+              memberId,
+              effectiveMonth: month,
+              actorRole,
+              session,
+            });
           }
-        }
 
-        if (localSession) {
-          await localSession.commitTransaction();
+          const charge = await repository.createCharge(
+            {
+              chargeId,
+              memberId,
+              roomId: room.roomId,
+              roomNumber: room.roomNumber,
+              month,
+              feePlanId: plan.feePlanId,
+              baseAmountPaise: plan.amountPaise,
+              dueDate,
+              status: ROOM_CHARGE_STATUSES.ISSUED,
+              adjustments: [],
+              issuedAt: now(),
+              issuedByRole: actorRole,
+            },
+            session ? { session } : {},
+          );
+          issuedCharges.push(serializeRoomCharge(charge, { payments: [], now: now() }));
         }
 
         return {
@@ -987,16 +972,12 @@ export function createRoomFeeService({
           skippedCount,
           charges: issuedCharges,
         };
-      } catch (err) {
-        if (localSession && localSession.inTransaction()) {
-          await localSession.abortTransaction();
-        }
-        throw err;
-      } finally {
-        if (localSession) {
-          await localSession.endSession();
-        }
+      };
+
+      if (repository.requiresTransactions) {
+        return runFinancialTransaction(issueWithinTransaction, { retryOnDuplicateKey: true });
       }
+      return issueWithinTransaction();
     },
 
     async adjustCharge({ chargeId, amountPaise, reason, actorRole }) {

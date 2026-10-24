@@ -33,10 +33,11 @@ import {
 import { calculateExpenseSplit } from './expenseSplit.service.js';
 
 export class ExpenseDomainError extends Error {
-  constructor(message, statusCode = 400) {
+  constructor(message, statusCode = 400, details = {}) {
     super(message);
     this.name = 'ExpenseDomainError';
     this.statusCode = statusCode;
+    this.details = details;
   }
 }
 
@@ -592,7 +593,7 @@ export class ExpenseService {
         return serializeReimbursement(created);
       } catch (err) {
         if (err.statusCode) {
-          throw new ExpenseDomainError(err.message, err.statusCode);
+          throw new ExpenseDomainError(err.message, err.statusCode, err.details);
         }
         throw err;
       }
@@ -634,7 +635,7 @@ export class ExpenseService {
         return serializeReimbursement(updated);
       } catch (err) {
         if (err.statusCode) {
-          throw new ExpenseDomainError(err.message, err.statusCode);
+          throw new ExpenseDomainError(err.message, err.statusCode, err.details);
         }
         throw err;
       }

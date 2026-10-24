@@ -11,8 +11,11 @@ import {
 } from './stay.model.js';
 import { STAY_STATUSES } from './stay.constants.js';
 import { guardFinancialMutation } from '../finance/financialMutationGuard.js';
+import { runFinancialTransaction } from '../finance/financialTransaction.js';
 
 export const stayRepository = {
+  requiresTransactions: true,
+
   // ----------------------------------------------------
   // Hostel Stay Operations
   // ----------------------------------------------------
@@ -86,6 +89,66 @@ export const stayRepository = {
     return HostelStay.findOneAndUpdate(
       { stayId },
       { $push: { history: entry } },
+      options,
+    ).lean();
+  },
+
+  async openClearanceReview(stayId, { reason, actorRole, openedAt }, { session } = {}) {
+    const options = { returnDocument: 'after', runValidators: true };
+    if (session) options.session = session;
+    return HostelStay.findOneAndUpdate(
+      {
+        stayId,
+        status: STAY_STATUSES.CHECKED_OUT,
+        clearanceReviewOpenedAt: null,
+      },
+      {
+        $set: {
+          clearanceReviewOpenedAt: openedAt,
+          clearanceReviewOpenedByRole: actorRole,
+          clearanceReviewReason: reason,
+        },
+        $inc: { revision: 1, financialRevision: 1 },
+        $push: {
+          history: {
+            event: 'CLEARANCE_REVIEW_OPENED',
+            timestamp: openedAt,
+            actorRole,
+            note: reason,
+            details: { reason },
+          },
+        },
+      },
+      options,
+    ).lean();
+  },
+
+  async closeClearanceReview(
+    stayId,
+    { clearanceId, sequence, actorRole, reason, closedAt },
+    { session } = {},
+  ) {
+    const options = { returnDocument: 'after', runValidators: true };
+    if (session) options.session = session;
+    return HostelStay.findOneAndUpdate(
+      { stayId, status: STAY_STATUSES.CHECKED_OUT },
+      {
+        $set: {
+          clearanceReviewOpenedAt: null,
+          clearanceReviewOpenedByRole: null,
+          clearanceReviewReason: null,
+        },
+        $inc: { revision: 1 },
+        $push: {
+          history: {
+            event: 'CLEARANCE_REVIEW_CLOSED',
+            timestamp: closedAt,
+            actorRole,
+            note: reason,
+            details: { clearanceId, sequence },
+          },
+        },
+      },
       options,
     ).lean();
   },
@@ -235,106 +298,84 @@ export const stayRepository = {
     transactionData,
     actorRole,
   }) {
-    if (mongoose.connection && mongoose.connection.readyState === 1) {
-      let session = null;
-      try {
-        session = await mongoose.startSession();
-        session.startTransaction();
-
-        // 1. Idempotency check with payload verification inside transaction
-        if (transactionData.idempotencyKey) {
-          const existing = await HostelDepositTransaction.findOne({
-            idempotencyKey: transactionData.idempotencyKey,
-          }).session(session);
-
-          if (existing) {
-            const isMatch =
-              existing.stayId === stayId &&
-              existing.type === type &&
-              existing.amountPaise === amountPaise &&
-              existing.method === transactionData.method;
-
-            if (!isMatch) {
-              const err = new Error('Deposit transaction idempotency key reused with different payload.');
-              err.statusCode = 409;
-              throw err;
-            }
-            await session.commitTransaction();
-            return existing.toObject();
-          }
-        }
-
-        const account = await HostelDepositAccount.findOne({ stayId }).session(session);
-        if (!account) {
-          const err = new Error('Deposit account not found for this stay.');
-          err.statusCode = 404;
-          throw err;
-        }
-
-        await guardFinancialMutation({ stayId, session });
-
-        const transactions = await HostelDepositTransaction.find({
-          stayId,
-          status: 'recorded',
+    return runFinancialTransaction(async (session) => {
+      // 1. Idempotency check with payload verification inside transaction
+      if (transactionData.idempotencyKey) {
+        const existing = await HostelDepositTransaction.findOne({
+          idempotencyKey: transactionData.idempotencyKey,
         }).session(session);
 
-        let received = 0;
-        let refunded = 0;
-        let deducted = 0;
-        for (const tx of transactions) {
-          if (tx.type === 'RECEIVED') received += tx.amountPaise;
-          else if (tx.type === 'REFUNDED') refunded += tx.amountPaise;
-          else if (tx.type === 'DEDUCTED') deducted += tx.amountPaise;
-        }
-        const heldPaise = received - refunded - deducted;
+        if (existing) {
+          const isMatch =
+            existing.stayId === stayId &&
+            existing.type === type &&
+            existing.amountPaise === amountPaise &&
+            existing.method === transactionData.method;
 
-        if ((type === 'REFUNDED' || type === 'DEDUCTED') && heldPaise < amountPaise) {
-          const action = type === 'REFUNDED' ? 'refund' : 'deduct';
-          const err = new Error(`Cannot ${action} ₹${(amountPaise / 100).toFixed(2)}: only ₹${(heldPaise / 100).toFixed(2)} currently held.`);
-          err.statusCode = 400;
-          err.details = { heldPaise, requestedPaise: amountPaise };
-          throw err;
-        }
-
-        account.revision += 1;
-        account.history.push({
-          event: `DEPOSIT_${type}`,
-          timestamp: new Date(),
-          actorRole,
-          note: `Recorded ${type} transaction of ${amountPaise} paise`,
-          details: { depositTransactionId: transactionData.depositTransactionId, amountPaise, method: transactionData.method },
-        });
-
-        const nextHeld = heldPaise + (type === 'RECEIVED' ? amountPaise : -amountPaise);
-        const nextReceived = received + (type === 'RECEIVED' ? amountPaise : 0);
-        if (nextHeld === 0 && nextReceived > 0) {
-          account.status = 'SETTLED';
-        }
-        await account.save({ session });
-
-        const created = await HostelDepositTransaction.create([transactionData], { session });
-        await session.commitTransaction();
-        return created[0].toObject();
-      } catch (err) {
-        if (session && session.inTransaction()) {
-          await session.abortTransaction();
-        }
-        if (err.message && (err.message.includes('Transactions are not supported') || err.message.includes('replica set'))) {
-          const error = new Error('Financial transaction unavailable. Database transaction support is required.');
-          error.statusCode = 503;
-          throw error;
-        }
-        throw err;
-      } finally {
-        if (session) {
-          await session.endSession();
+          if (!isMatch) {
+            const err = new Error('Deposit transaction idempotency key reused with different payload.');
+            err.statusCode = 409;
+            throw err;
+          }
+          return existing.toObject();
         }
       }
-    }
 
-    const err = new Error('Financial transaction unavailable. Database connection required.');
-    err.statusCode = 503;
-    throw err;
+      const account = await HostelDepositAccount.findOne({ stayId }).session(session);
+      if (!account) {
+        const err = new Error('Deposit account not found for this stay.');
+        err.statusCode = 404;
+        throw err;
+      }
+
+      await guardFinancialMutation({
+        stayId,
+        actorRole: transactionData.recordedByRole,
+        session,
+      });
+
+      const transactions = await HostelDepositTransaction.find({
+        stayId,
+        status: 'recorded',
+      }).session(session);
+
+      let received = 0;
+      let refunded = 0;
+      let deducted = 0;
+      for (const tx of transactions) {
+        if (tx.type === 'RECEIVED') received += tx.amountPaise;
+        else if (tx.type === 'REFUNDED') refunded += tx.amountPaise;
+        else if (tx.type === 'DEDUCTED') deducted += tx.amountPaise;
+      }
+      const heldPaise = received - refunded - deducted;
+
+      if ((type === 'REFUNDED' || type === 'DEDUCTED') && heldPaise < amountPaise) {
+        const action = type === 'REFUNDED' ? 'refund' : 'deduct';
+        const err = new Error(`Cannot ${action} ₹${(amountPaise / 100).toFixed(2)}: only ₹${(heldPaise / 100).toFixed(2)} currently held.`);
+        err.statusCode = 400;
+        err.details = { heldPaise, requestedPaise: amountPaise };
+        throw err;
+      }
+
+      account.revision += 1;
+      account.history.push({
+        event: `DEPOSIT_${type}`,
+        timestamp: new Date(),
+        actorRole,
+        note: `Recorded ${type} transaction of ${amountPaise} paise`,
+        details: { depositTransactionId: transactionData.depositTransactionId, amountPaise, method: transactionData.method },
+      });
+
+      const nextHeld = heldPaise + (type === 'RECEIVED' ? amountPaise : -amountPaise);
+      const nextReceived = received + (type === 'RECEIVED' ? amountPaise : 0);
+      if (nextHeld === 0 && nextReceived > 0) {
+        account.status = 'SETTLED';
+      }
+      await account.save({ session });
+
+      const created = await HostelDepositTransaction.create([transactionData], { session });
+      return created[0].toObject();
+    }, { retryOnDuplicateKey: true });
   },
 
   async executeAtomicDepositVoid({
@@ -364,7 +405,7 @@ export const stayRepository = {
 
         const targetStayId = tx.stayId || stayId;
 
-        await guardFinancialMutation({ stayId: targetStayId, session });
+        await guardFinancialMutation({ stayId: targetStayId, actorRole, session });
 
         // If voiding a RECEIVED transaction, verify that reducing received funds does not make heldPaise negative
         if (tx.type === 'RECEIVED') {

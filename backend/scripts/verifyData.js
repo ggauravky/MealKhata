@@ -618,8 +618,18 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
       && (!assignment.effectiveFromDate || isValidLogicalDate(assignment.effectiveFromDate))
       && (!assignment.effectiveUntilDate || isValidLogicalDate(assignment.effectiveUntilDate))
     ));
-    for (const memberId of new Set(assignmentsWithValidIntervals.map((assignment) => assignment.memberId))) {
-      const memberAssignments = assignmentsWithValidIntervals.filter((assignment) => assignment.memberId === memberId);
+    const assignmentsWithOrderedIntervals = assignmentsWithValidIntervals.filter((assignment) => {
+      const interval = assignmentInterval(assignment);
+      if (interval.end < interval.start) {
+        issues.push(`[room_assignments] Assignment ${assignment.assignmentId} ends before it starts (${interval.start} to ${interval.end})`);
+        roomIssues++;
+        return false;
+      }
+      return true;
+    });
+    const activeAssignments = assignmentsWithOrderedIntervals.filter((assignment) => !assignment.cancelledAt);
+    for (const memberId of new Set(activeAssignments.map((assignment) => assignment.memberId))) {
+      const memberAssignments = activeAssignments.filter((assignment) => assignment.memberId === memberId);
       for (const [left, right] of overlappingPairs(memberAssignments, assignmentInterval)) {
         issues.push(`[room_assignments] Overlapping room assignments for member ${memberId}: ${left.assignmentId} and ${right.assignmentId}`);
         roomIssues++;
@@ -627,7 +637,7 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
     }
 
     for (const room of rooms) {
-      const roomAssignments = assignmentsWithValidIntervals.filter((assignment) => assignment.roomId === room.roomId);
+      const roomAssignments = activeAssignments.filter((assignment) => assignment.roomId === room.roomId);
       let capacityReported = false;
       for (const candidate of roomAssignments) {
         const candidateStart = assignmentInterval(candidate).start;
@@ -649,8 +659,18 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
       isValidLogicalMonth(plan.effectiveFromMonth)
       && (!plan.effectiveUntilMonth || isValidLogicalMonth(plan.effectiveUntilMonth))
     ));
-    for (const memberId of new Set(validFeePlans.map((plan) => plan.memberId))) {
-      const memberPlans = validFeePlans.filter((plan) => plan.memberId === memberId);
+    const orderedFeePlans = validFeePlans.filter((plan) => {
+      const interval = feePlanInterval(plan);
+      if (interval.end < interval.start) {
+        issues.push(`[room_fee_plans] Fee plan ${plan.feePlanId} ends before it starts (${interval.start} to ${interval.end})`);
+        roomIssues++;
+        return false;
+      }
+      return true;
+    });
+    const activeFeePlans = orderedFeePlans.filter((plan) => !plan.supersededAt);
+    for (const memberId of new Set(activeFeePlans.map((plan) => plan.memberId))) {
+      const memberPlans = activeFeePlans.filter((plan) => plan.memberId === memberId);
       for (const [left, right] of overlappingPairs(memberPlans, feePlanInterval)) {
         issues.push(`[room_fee_plans] Overlapping fee plans for member ${memberId}: ${left.feePlanId} and ${right.feePlanId}`);
         roomIssues++;

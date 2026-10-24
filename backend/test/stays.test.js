@@ -194,7 +194,8 @@ describe('MealKhata 2.0 — Phase 4: Complete Hostel Lifecycle, Security Deposit
           initialRoomId: room204Id,
           monthlyFeePaise: 280000,
           expectedDepositPaise: 500000,
-          actorRole: ROLES.ADMIN,
+          actorRole: ROLES.SUPERADMIN,
+          historicalReason: 'Transaction startup failure regression fixture',
         }),
         (error) => error.statusCode === 503
           && error.message === 'Database transaction support is required. No records were changed.',
@@ -204,6 +205,38 @@ describe('MealKhata 2.0 — Phase 4: Complete Hostel Lifecycle, Security Deposit
       assert.equal((await roomRepository.findFeePlansForMember('gaurav')).length, 0);
       assert.equal((await stayRepository.findStaysByMember('gaurav')).length, 0);
       assert.equal(await stayRepository.findDepositAccountByStayId('missing'), null);
+    });
+
+    test('transaction startup failure closes a session that was already created', async () => {
+      let ended = false;
+      const transactionUnavailableService = createStayService({
+        repository: stayRepository,
+        roomFees: roomFeesService,
+        finance: mockFinanceService,
+        deposits: depositsService,
+        requiresTransactions: true,
+        isDatabaseReady: () => true,
+        startSession: async () => ({
+          startTransaction() {
+            throw new Error('SIMULATED_START_TRANSACTION_FAILURE');
+          },
+          async endSession() {
+            ended = true;
+          },
+        }),
+      });
+
+      await assert.rejects(
+        transactionUnavailableService.createStay({
+          memberId: 'gaurav',
+          joinedOn: '2026-10-20',
+          initialRoomId: room204Id,
+          actorRole: ROLES.SUPERADMIN,
+          historicalReason: 'Transaction startup cleanup regression fixture',
+        }),
+        (error) => error.statusCode === 503,
+      );
+      assert.equal(ended, true);
     });
 
     test('Admin can register a new hostel stay with room fee and deposit expected', async () => {

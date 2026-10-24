@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { Expense } from './expense.model.js';
 import { ExpenseReimbursement } from './expenseReimbursement.model.js';
 import { guardFinancialMutation } from '../finance/financialMutationGuard.js';
+import { runFinancialTransaction } from '../finance/financialTransaction.js';
 
 function expenseMemberIds(expense) {
   return [
@@ -10,10 +11,11 @@ function expenseMemberIds(expense) {
   ];
 }
 
-async function guardExpenseMutation({ expense, updateData = null, session }) {
+async function guardExpenseMutation({ expense, updateData = null, actorRole = null, session }) {
   await guardFinancialMutation({
     memberIds: expenseMemberIds(expense),
     effectiveDate: expense.date,
+    actorRole,
     session,
   });
 
@@ -26,6 +28,7 @@ async function guardExpenseMutation({ expense, updateData = null, session }) {
       await guardFinancialMutation({
         memberIds: nextMembers,
         effectiveDate: nextDate,
+        actorRole,
         session,
       });
     }
@@ -34,7 +37,22 @@ async function guardExpenseMutation({ expense, updateData = null, session }) {
 
 export class ExpenseRepository {
   async createExpense(data) {
-    return Expense.create(data);
+    return runFinancialTransaction(async (session) => {
+      await guardFinancialMutation({
+        memberIds: expenseMemberIds(data),
+        effectiveDate: data.date,
+        actorRole: data.createdByRole,
+        session,
+      });
+
+      if (data.idempotencyKey) {
+        const existing = await Expense.findOne({ idempotencyKey: data.idempotencyKey }).session(session);
+        if (existing) return existing.toObject();
+      }
+
+      const [created] = await Expense.create([data], { session });
+      return created.toObject();
+    }, { retryOnDuplicateKey: true });
   }
 
   async findExpenseById(expenseId) {
@@ -161,6 +179,7 @@ export class ExpenseRepository {
           await guardFinancialMutation({
             memberIds: [fromMemberId, expense.paidByMemberId],
             effectiveDate: expense.date,
+            actorRole: reimbursementData.recordedByRole,
             session,
           });
 
@@ -243,68 +262,44 @@ export class ExpenseRepository {
   }
 
   async executeAtomicReimbursementVoid({ reimbursementId, reason, actorRole }) {
-    if (mongoose.connection && mongoose.connection.readyState === 1) {
-      let session = null;
-      try {
-        session = await mongoose.startSession();
-        session.startTransaction();
-
-        const reimbursement = await ExpenseReimbursement.findOne({ reimbursementId }).session(session);
-        if (!reimbursement) {
-          const err = new Error('Reimbursement not found.');
-          err.statusCode = 404;
-          throw err;
-        }
-        if (reimbursement.status === 'voided') {
-          const err = new Error('Reimbursement is already voided.');
-          err.statusCode = 409;
-          throw err;
-        }
-
-        const expense = await Expense.findOne({ expenseId: reimbursement.expenseId }).session(session);
-        if (!expense) {
-          const err = new Error('Expense not found.');
-          err.statusCode = 404;
-          throw err;
-        }
-
-        await guardFinancialMutation({
-          memberIds: [reimbursement.fromMemberId, reimbursement.toMemberId],
-          effectiveDate: expense.date,
-          session,
-        });
-
-        expense.revision = new Date().toISOString();
-        await expense.save({ session });
-
-        reimbursement.status = 'voided';
-        reimbursement.voidedAt = new Date();
-        reimbursement.voidedByRole = actorRole;
-        reimbursement.voidReason = reason.trim();
-        await reimbursement.save({ session });
-
-        await session.commitTransaction();
-        return reimbursement.toObject();
-      } catch (err) {
-        if (session && session.inTransaction()) {
-          await session.abortTransaction();
-        }
-        if (err.message && (err.message.includes('Transactions are not supported') || err.message.includes('replica set'))) {
-          const error = new Error('Financial transaction unavailable. Database transaction support is required.');
-          error.statusCode = 503;
-          throw error;
-        }
+    return runFinancialTransaction(async (session) => {
+      const reimbursement = await ExpenseReimbursement.findOne({ reimbursementId }).session(session);
+      if (!reimbursement) {
+        const err = new Error('Reimbursement not found.');
+        err.statusCode = 404;
         throw err;
-      } finally {
-        if (session) {
-          await session.endSession();
-        }
       }
-    }
+      if (reimbursement.status === 'voided') {
+        const err = new Error('Reimbursement is already voided.');
+        err.statusCode = 409;
+        throw err;
+      }
 
-    const err = new Error('Financial transaction unavailable. Database connection required.');
-    err.statusCode = 503;
-    throw err;
+      const expense = await Expense.findOne({ expenseId: reimbursement.expenseId }).session(session);
+      if (!expense) {
+        const err = new Error('Expense not found.');
+        err.statusCode = 404;
+        throw err;
+      }
+
+      await guardFinancialMutation({
+        memberIds: [reimbursement.fromMemberId, reimbursement.toMemberId],
+        effectiveDate: expense.date,
+        actorRole,
+        session,
+      });
+
+      expense.revision = new Date().toISOString();
+      await expense.save({ session });
+
+      reimbursement.status = 'voided';
+      reimbursement.voidedAt = new Date();
+      reimbursement.voidedByRole = actorRole;
+      reimbursement.voidReason = reason.trim();
+      await reimbursement.save({ session });
+
+      return reimbursement.toObject();
+    });
   }
 
   async executeAtomicExpenseVoid({ expenseId, reason, actorRole }) {
@@ -328,7 +323,7 @@ export class ExpenseRepository {
             throw err;
           }
 
-          await guardExpenseMutation({ expense, session });
+          await guardExpenseMutation({ expense, actorRole, session });
 
           // Guard against concurrent reimbursement: check active reimbursements inside transaction
           const activeReimbursements = await ExpenseReimbursement.find({
@@ -421,7 +416,12 @@ export class ExpenseRepository {
           }
 
           if (isFinancialChange) {
-            await guardExpenseMutation({ expense, updateData, session });
+            await guardExpenseMutation({
+              expense,
+              updateData,
+              actorRole: correctionRecord.correctedByRole,
+              session,
+            });
           }
 
           // If financial change, check active reimbursements inside transaction

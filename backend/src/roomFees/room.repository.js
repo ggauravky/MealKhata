@@ -11,6 +11,8 @@ import { selectAssignmentForDate, selectAssignmentForMonth } from './assignmentR
 import { guardFinancialMutation } from '../finance/financialMutationGuard.js';
 
 export const roomRepository = {
+  requiresTransactions: true,
+
   // Rooms
   async createRoom(data) {
     return Room.create(data);
@@ -28,9 +30,11 @@ export const roomRepository = {
     return q.lean();
   },
 
-  async findAllRooms({ activeOnly = false } = {}) {
+  async findAllRooms({ activeOnly = false, session = null } = {}) {
     const query = activeOnly ? { active: true } : {};
-    return Room.find(query).sort({ roomNumber: 1 }).lean();
+    const q = Room.find(query).sort({ roomNumber: 1 });
+    if (session) q.session(session);
+    return q.lean();
   },
 
   async updateRoom(roomId, updates, { session } = {}) {
@@ -116,13 +120,15 @@ export const roomRepository = {
     return q.lean();
   },
 
-  async findActiveFeePlan(memberId, month) {
-    return RoomFeePlan.findOne({
+  async findActiveFeePlan(memberId, month, { session } = {}) {
+    const q = RoomFeePlan.findOne({
       memberId,
       effectiveFromMonth: { $lte: month },
       $or: [{ effectiveUntilMonth: null }, { effectiveUntilMonth: { $gte: month } }],
       supersededAt: null,
-    }).sort({ effectiveFromMonth: -1 }).lean();
+    }).sort({ effectiveFromMonth: -1 });
+    if (session) q.session(session);
+    return q.lean();
   },
 
   async updateFeePlan(feePlanId, updates, { session } = {}) {
@@ -144,8 +150,10 @@ export const roomRepository = {
     return RoomCharge.findOne({ chargeId }).lean();
   },
 
-  async findChargeByMemberAndMonth(memberId, month) {
-    return RoomCharge.findOne({ memberId, month }).lean();
+  async findChargeByMemberAndMonth(memberId, month, { session } = {}) {
+    const q = RoomCharge.findOne({ memberId, month });
+    if (session) q.session(session);
+    return q.lean();
   },
 
   async findChargesForMonth(month) {
@@ -252,6 +260,7 @@ export const roomRepository = {
           await guardFinancialMutation({
             memberId: targetMemberId,
             effectiveMonth: targetMonth,
+            actorRole,
             session,
           });
 
@@ -373,6 +382,7 @@ export const roomRepository = {
           await guardFinancialMutation({
             memberId: charge.memberId,
             effectiveMonth: charge.month,
+            actorRole,
             session,
           });
 
@@ -451,6 +461,13 @@ export const roomRepository = {
             err.statusCode = 400;
             throw err;
           }
+
+          await guardFinancialMutation({
+            memberId: charge.memberId,
+            effectiveMonth: charge.month,
+            actorRole,
+            session,
+          });
 
           // Guard / touch charge revision to conflict with concurrent payments
           await RoomCharge.updateOne(
@@ -531,6 +548,7 @@ export const roomRepository = {
           await guardFinancialMutation({
             memberId: payment.memberId,
             effectiveMonth: payment.month,
+            actorRole,
             session,
           });
 

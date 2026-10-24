@@ -11,7 +11,7 @@ function transactionRequiredError() {
 
 function clearanceConflictError() {
   const error = new Error(
-    'This financial record belongs to a completed Stay. Reissue or review its clearance before changing the record.',
+    'This financial record belongs to a completed Stay. A Super Admin must open an audited clearance review before changing the record.',
   );
   error.statusCode = 409;
   error.details = { code: 'CLEARANCE_REVIEW_REQUIRED' };
@@ -30,6 +30,7 @@ export async function guardFinancialMutation({
   effectiveDate = null,
   effectiveMonth = null,
   stayId = null,
+  actorRole = null,
   session,
 }) {
   if (!session) throw transactionRequiredError();
@@ -45,7 +46,8 @@ export async function guardFinancialMutation({
     return stay.joinedOn <= range.end && end >= range.start;
   });
 
-  if (matching.some((stay) => stay.status === STAY_STATUSES.CHECKED_OUT)) {
+  const completedStays = matching.filter((stay) => stay.status === STAY_STATUSES.CHECKED_OUT);
+  if (completedStays.some((stay) => !stay.clearanceReviewOpenedAt || actorRole !== 'superadmin')) {
     throw clearanceConflictError();
   }
   if (matching.length === 0) return;
@@ -57,10 +59,18 @@ export async function guardFinancialMutation({
   );
 }
 
-export async function guardCheckoutFinancialSnapshot({ stayId, session }) {
+export async function guardCheckoutFinancialSnapshot({
+  stayId,
+  expectedFinancialRevision = null,
+  session,
+}) {
   if (!session) throw transactionRequiredError();
+  const query = { stayId, status: { $ne: STAY_STATUSES.CANCELLED } };
+  if (Number.isInteger(expectedFinancialRevision)) {
+    query.financialRevision = expectedFinancialRevision;
+  }
   const result = await HostelStay.updateOne(
-    { stayId, status: { $ne: STAY_STATUSES.CANCELLED } },
+    query,
     { $inc: { financialRevision: 1 } },
     { session },
   );
