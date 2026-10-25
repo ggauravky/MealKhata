@@ -476,6 +476,25 @@ export const hostelClearanceSchema = new mongoose.Schema(
       default: null,
       trim: true,
     },
+    supersededAt: {
+      type: Date,
+      default: null,
+    },
+    supersededByRole: {
+      type: String,
+      default: null,
+    },
+    supersessionReason: {
+      type: String,
+      default: null,
+      trim: true,
+      maxlength: MAX_NOTE_LENGTH,
+    },
+    supersededByClearanceId: {
+      type: String,
+      default: null,
+      trim: true,
+    },
     exceptionReason: {
       type: String,
       default: null,

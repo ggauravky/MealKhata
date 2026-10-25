@@ -114,6 +114,10 @@ export function createStayService({
     if (!isValidLogicalDate(joinedOn) || !isValidLogicalDate(occupancyFromDate)) {
       throw new StayDomainError('Valid joining and continuous occupancy dates are required.', 400);
     }
+    const currentDate = getLogicalDateInTimeZone(now());
+    if (joinedOn > currentDate || occupancyFromDate > currentDate) {
+      throw new StayDomainError('Joining and continuous occupancy dates cannot be in the future.', 400);
+    }
     if (occupancyFromDate < joinedOn) {
       throw new StayDomainError('Continuous occupancy date cannot precede the joining date.', 400);
     }
@@ -130,20 +134,23 @@ export function createStayService({
       throw new StayDomainError('Only a checked-out Stay can be restored.', 409);
     }
 
-    const [activeStay, clearances, depositAccount, depositTransactions, assignmentPreview] = await Promise.all([
-      repository.findActiveStayForMember(stay.memberId, { session }),
-      repository.findClearancesByStayId(stayId, { session }),
-      repository.findDepositAccountByStayId(stayId, { session }),
-      repository.listDepositTransactionsByStayId(stayId, { includeVoided: false, session }),
-      roomFees.previewRestoreAssignment({
-        memberId: stay.memberId,
-        roomId: roomId.trim(),
-        occupancyFromDate,
-        assignmentAction,
-        assignmentId,
-        session,
-      }),
-    ]);
+    // Mongoose does not support parallel operations on one transaction session.
+    // Keep these reads sequential so apply-time preview validation is deterministic.
+    const activeStay = await repository.findActiveStayForMember(stay.memberId, { session });
+    const clearances = await repository.findClearancesByStayId(stayId, { session });
+    const depositAccount = await repository.findDepositAccountByStayId(stayId, { session });
+    const depositTransactions = await repository.listDepositTransactionsByStayId(
+      stayId,
+      { includeVoided: false, session },
+    );
+    const assignmentPreview = await roomFees.previewRestoreAssignment({
+      memberId: stay.memberId,
+      roomId: roomId.trim(),
+      occupancyFromDate,
+      assignmentAction,
+      assignmentId,
+      session,
+    });
 
     const conflicts = [...assignmentPreview.conflicts];
     if (stay.revision !== expectedRevision) {
@@ -158,6 +165,34 @@ export function createStayService({
     }
 
     const activeClearances = clearances.filter((clearance) => !clearance.validityStatus || clearance.validityStatus === 'ACTIVE');
+    const depositLedger = depositTransactions.reduce((totals, transaction) => {
+      if (transaction.type === 'RECEIVED') totals.receivedPaise += transaction.amountPaise;
+      if (transaction.type === 'REFUNDED') totals.refundedPaise += transaction.amountPaise;
+      if (transaction.type === 'DEDUCTED') totals.deductedPaise += transaction.amountPaise;
+      return totals;
+    }, { receivedPaise: 0, refundedPaise: 0, deductedPaise: 0 });
+    const depositSummary = depositAccount
+      ? {
+        accountStatus: depositAccount.status,
+        expectedDepositPaise: depositAccount.expectedDepositPaise,
+        ...depositLedger,
+        heldPaise: depositLedger.receivedPaise - depositLedger.refundedPaise - depositLedger.deductedPaise,
+        transactionCount: depositTransactions.length,
+      }
+      : null;
+    const warnings = [];
+    if (depositTransactions.length > 0) {
+      warnings.push({
+        code: 'DEPOSIT_LEDGER_PRESERVED',
+        message: 'Recorded deposit transactions will be preserved and are not changed by resident restoration.',
+      });
+    }
+    if (depositAccount?.expectedDepositPaise === 0 && depositLedger.receivedPaise > 0) {
+      warnings.push({
+        code: 'DEPOSIT_EXPECTATION_MISMATCH',
+        message: 'This Stay expects no deposit but has recorded receipts. Reconcile the deposit ledger separately; restoration will not rewrite it.',
+      });
+    }
     const changes = [
       {
         collection: 'hostel_stays',
@@ -223,7 +258,15 @@ export function createStayService({
           revision: depositAccount.revision,
           status: depositAccount.status,
           expectedDepositPaise: depositAccount.expectedDepositPaise,
-          transactionCount: depositTransactions.length,
+          transactions: [...depositTransactions]
+            .sort((left, right) => left.depositTransactionId.localeCompare(right.depositTransactionId))
+            .map((transaction) => ({
+            depositTransactionId: transaction.depositTransactionId,
+            type: transaction.type,
+            amountPaise: transaction.amountPaise,
+            status: transaction.status,
+            updatedAt: transaction.updatedAt || transaction.createdAt || null,
+            })),
         }
         : null,
       clearances: activeClearances.map((clearance) => ({
@@ -239,9 +282,11 @@ export function createStayService({
       expectedFinancialRevision: stay.financialRevision || 0,
       canApply: conflicts.length === 0,
       conflicts,
+      warnings,
       changes,
       preservedFinancialRecords: {
         depositTransactionCount: depositTransactions.length,
+        deposit: depositSummary,
         clearanceSnapshotCount: clearances.length,
       },
       previewToken: createHash('sha256').update(JSON.stringify(fingerprint)).digest('hex'),
@@ -509,8 +554,8 @@ export function createStayService({
           if (createdStay && typeof repository?.deleteStay === 'function') {
             try { await repository.deleteStay(stayId); } catch (_err) { /* rollback best-effort */ }
           }
-          if (createdAssignment?.assignmentId && typeof roomFees?.deleteAssignment === 'function') {
-            try { await roomFees.deleteAssignment(createdAssignment.assignmentId, 'superadmin'); } catch (_err) { /* rollback best-effort */ }
+          if (createdAssignment?.assignmentId && typeof roomFees?.rollbackCreatedAssignment === 'function') {
+            try { await roomFees.rollbackCreatedAssignment(createdAssignment.assignmentId); } catch (_err) { /* rollback best-effort */ }
           }
         }
         if (err.message && (err.message.includes('Transactions are not supported') || err.message.includes('replica set'))) {
@@ -1145,8 +1190,8 @@ export function createStayService({
           if (newPlan?.feePlanId && typeof roomFees?.deleteFeePlan === 'function') {
             try { await roomFees.deleteFeePlan(newPlan.feePlanId); } catch (_err) { /* rollback best-effort */ }
           }
-          if (newAssignment?.assignmentId && typeof roomFees?.deleteAssignment === 'function') {
-            try { await roomFees.deleteAssignment(newAssignment.assignmentId, 'superadmin'); } catch (_err) { /* rollback best-effort */ }
+          if (newAssignment?.assignmentId && typeof roomFees?.rollbackCreatedAssignment === 'function') {
+            try { await roomFees.rollbackCreatedAssignment(newAssignment.assignmentId); } catch (_err) { /* rollback best-effort */ }
           }
         }
         if (err.message && (err.message.includes('Transactions are not supported') || err.message.includes('replica set'))) {
@@ -1607,12 +1652,31 @@ export function createStayService({
             finalizedByRole: actorRole,
           }, { session });
 
+          const supersededClearanceIds = typeof repository.supersedeActiveClearances === 'function'
+            ? await repository.supersedeActiveClearances(
+              stayId,
+              {
+                supersededByClearanceId: clearanceId,
+                reason: reissueReason.trim(),
+                actorRole,
+                supersededAt: new Date(),
+              },
+              { session },
+            )
+            : [];
+
           await repository.addStayHistory(stayId, {
             event: 'CLEARANCE_REISSUED',
             timestamp: new Date(),
             actorRole,
             note: `Clearance #${sequence} reissued: ${reissueReason.trim()}`,
-            details: { clearanceId, sequence, clearanceStatus, reissueReason: reissueReason.trim() },
+            details: {
+              clearanceId,
+              sequence,
+              clearanceStatus,
+              reissueReason: reissueReason.trim(),
+              supersededClearanceIds,
+            },
           }, { session });
 
           if (stay.clearanceReviewOpenedAt && typeof repository.closeClearanceReview === 'function') {

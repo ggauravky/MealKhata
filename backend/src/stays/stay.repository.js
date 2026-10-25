@@ -651,6 +651,37 @@ export const stayRepository = {
     return clearances.map((clearance) => clearance.clearanceId);
   },
 
+  async supersedeActiveClearances(
+    stayId,
+    { supersededByClearanceId, reason, actorRole, supersededAt },
+    { session } = {},
+  ) {
+    const filter = {
+      stayId,
+      clearanceId: { $ne: supersededByClearanceId },
+      validityStatus: { $in: [null, CLEARANCE_VALIDITY_STATUSES.ACTIVE] },
+    };
+    const query = HostelClearance.find(filter).sort({ sequence: 1 });
+    if (session) query.session(session);
+    const clearances = await query.lean();
+    if (clearances.length === 0) return [];
+
+    await HostelClearance.updateMany(
+      { clearanceId: { $in: clearances.map((clearance) => clearance.clearanceId) } },
+      {
+        $set: {
+          validityStatus: CLEARANCE_VALIDITY_STATUSES.SUPERSEDED,
+          supersededAt,
+          supersededByRole: actorRole,
+          supersessionReason: reason,
+          supersededByClearanceId,
+        },
+      },
+      session ? { session } : {},
+    );
+    return clearances.map((clearance) => clearance.clearanceId);
+  },
+
   async getNextClearanceSequence(stayId, { session } = {}) {
     if (mongoose.connection && mongoose.connection.readyState === 1 && session) {
       const latest = await HostelClearance.findOne({ stayId }).sort({ sequence: -1 }).session(session).lean();

@@ -204,16 +204,6 @@ export function createRoomFeeRouter({
     }
   });
 
-  router.delete('/assignments/:assignmentId', requireAdminOrAbove, async (req, res, next) => {
-    try {
-      await service.deleteAssignment(req.params.assignmentId, req.auth.role);
-      notifyChange();
-      return res.json({ success: true, message: 'Room assignment removed.' });
-    } catch (error) {
-      return next(error);
-    }
-  });
-
   // --- Fee Plans ---
   router.get('/plans/:memberId', requireAuthenticated, async (req, res, next) => {
     try {

@@ -15,12 +15,22 @@ export const roomFeeScheduleStateSchema = new mongoose.Schema(
       min: 0,
       default: 0,
     },
+    assignmentRevision: {
+      type: Number,
+      required: true,
+      min: 0,
+      default: 0,
+    },
     lastChangedAt: {
       type: Date,
       default: null,
     },
     lastChangedByRole: {
       type: String,
+      default: null,
+    },
+    assignmentLastChangedAt: {
+      type: Date,
       default: null,
     },
   },

@@ -1,6 +1,8 @@
 import { AlertTriangle, RotateCcw, ShieldCheck } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../../lib/api.js';
+import { formatPaise } from '../../lib/money.js';
+import { useServerToday } from '../../hooks/useServerToday.js';
 import { Button } from '../ui/button.jsx';
 import {
   Dialog,
@@ -14,6 +16,7 @@ import { Input } from '../ui/input.jsx';
 import { Label } from '../ui/label.jsx';
 
 export function RestoreResidentDialog({ open, onOpenChange, stay, onRestored }) {
+  const { date: serverToday } = useServerToday();
   const [rooms, setRooms] = useState([]);
   const [assignments, setAssignments] = useState([]);
   const [joinedOn, setJoinedOn] = useState('');
@@ -54,6 +57,16 @@ export function RestoreResidentDialog({ open, onOpenChange, stay, onRestored }) 
     expectedRevision: stay?.revision,
     reason: reason.trim(),
   }), [assignmentAction, assignmentId, joinedOn, occupancyFromDate, reason, roomId, stay?.revision]);
+
+  const eligibleAssignments = useMemo(() => assignments.filter((assignment) => {
+    if (assignment.cancelledAt || assignment.roomId !== roomId) return false;
+    if (assignmentAction !== 'LINK_EXISTING') return true;
+    const startsOn = assignment.effectiveFromDate || `${assignment.effectiveFromMonth}-01`;
+    return !assignment.effectiveUntilDate
+      && !assignment.effectiveUntilMonth
+      && Boolean(occupancyFromDate)
+      && startsOn <= occupancyFromDate;
+  }), [assignmentAction, assignments, occupancyFromDate, roomId]);
 
   const clearPreview = () => setPreview(null);
 
@@ -109,11 +122,11 @@ export function RestoreResidentDialog({ open, onOpenChange, stay, onRestored }) 
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="restoreJoinedOn">Correct joining date</Label>
-              <Input id="restoreJoinedOn" type="date" value={joinedOn} onChange={(event) => { setJoinedOn(event.target.value); clearPreview(); }} required />
+              <Input id="restoreJoinedOn" type="date" max={serverToday || undefined} value={joinedOn} onChange={(event) => { setJoinedOn(event.target.value); clearPreview(); }} required />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="restoreOccupancyFrom">Continuous occupancy from</Label>
-              <Input id="restoreOccupancyFrom" type="date" value={occupancyFromDate} onChange={(event) => { setOccupancyFromDate(event.target.value); clearPreview(); }} required />
+              <Input id="restoreOccupancyFrom" type="date" max={serverToday || undefined} value={occupancyFromDate} onChange={(event) => { setOccupancyFromDate(event.target.value); clearPreview(); }} required />
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -126,7 +139,7 @@ export function RestoreResidentDialog({ open, onOpenChange, stay, onRestored }) 
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="restoreAssignmentAction">Assignment repair</Label>
-              <select id="restoreAssignmentAction" value={assignmentAction} onChange={(event) => { setAssignmentAction(event.target.value); clearPreview(); }} className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm dark:border-slate-800 dark:bg-slate-950">
+              <select id="restoreAssignmentAction" value={assignmentAction} onChange={(event) => { setAssignmentAction(event.target.value); setAssignmentId(''); clearPreview(); }} className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm dark:border-slate-800 dark:bg-slate-950">
                 <option value="REOPEN_EXISTING">Reopen historical assignment</option>
                 <option value="LINK_EXISTING">Link an already-active assignment</option>
                 <option value="CREATE_NEW">Create a new assignment</option>
@@ -137,8 +150,8 @@ export function RestoreResidentDialog({ open, onOpenChange, stay, onRestored }) 
             <div className="space-y-1.5">
               <Label htmlFor="restoreAssignment">Room Assignment</Label>
               <select id="restoreAssignment" value={assignmentId} onChange={(event) => { setAssignmentId(event.target.value); clearPreview(); }} required className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm dark:border-slate-800 dark:bg-slate-950">
-                <option value="">Select an exact historical assignment</option>
-                {assignments.map((assignment) => (
+                <option value="">{eligibleAssignments.length > 0 ? 'Select an exact eligible assignment' : 'No eligible assignment for this action'}</option>
+                {eligibleAssignments.map((assignment) => (
                   <option key={assignment.assignmentId} value={assignment.assignmentId}>
                     {assignment.roomNumber || assignment.roomId}: {assignment.effectiveFromDate || assignment.effectiveFromMonth} to {assignment.effectiveUntilDate || assignment.effectiveUntilMonth || 'present'}
                   </option>
@@ -163,9 +176,27 @@ export function RestoreResidentDialog({ open, onOpenChange, stay, onRestored }) 
                   {preview.conflicts.map((conflict) => <li key={`${conflict.code}-${conflict.assignmentId || conflict.stayId || ''}`}>{conflict.message}</li>)}
                 </ul>
               )}
+              {preview.warnings?.length > 0 && (
+                <div className="mt-2 rounded border border-amber-200 bg-amber-50 p-2 text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+                  <p className="font-semibold">Preserved history requires attention</p>
+                  <ul className="mt-1 list-disc space-y-1 pl-5">
+                    {preview.warnings.map((warning) => (
+                      <li key={warning.code}>
+                        {warning.message}
+                        {warning.code === 'DEPOSIT_EXPECTATION_MISMATCH' ? ' No deposit values will be changed here.' : ''}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <p className="mt-2 text-slate-500">
                 Preserved: {preview.preservedFinancialRecords?.depositTransactionCount || 0} deposit entries and {preview.preservedFinancialRecords?.clearanceSnapshotCount || 0} clearance snapshots.
               </p>
+              {preview.preservedFinancialRecords?.deposit && (
+                <p className="mt-1 text-slate-500">
+                  Deposit ledger: {preview.preservedFinancialRecords.deposit.accountStatus}; expected {formatPaise(preview.preservedFinancialRecords.deposit.expectedDepositPaise)}, received {formatPaise(preview.preservedFinancialRecords.deposit.receivedPaise)}, held {formatPaise(preview.preservedFinancialRecords.deposit.heldPaise)}.
+                </p>
+              )}
             </section>
           )}
 

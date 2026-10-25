@@ -469,7 +469,7 @@ export function AdminFeePlansTab({
                   </div>
                   <div className="space-y-1">
                     <Label htmlFor={`reconcileAmount-${index}`}>Monthly ₹</Label>
-                    <Input id={`reconcileAmount-${index}`} type="number" min="1" step="1" value={period.rupeesAmount} onChange={(event) => updateReconcilePeriod(index, 'rupeesAmount', event.target.value)} required />
+                    <Input id={`reconcileAmount-${index}`} type="number" min="0.01" step="0.01" value={period.rupeesAmount} onChange={(event) => updateReconcilePeriod(index, 'rupeesAmount', event.target.value)} required />
                   </div>
                   <div className="space-y-1">
                     <Label htmlFor={`reconcileDue-${index}`}>Due</Label>

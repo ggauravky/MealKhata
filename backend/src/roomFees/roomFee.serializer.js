@@ -81,6 +81,9 @@ export function serializeRoomAssignment(assignment, roomMap = new Map()) {
     effectiveUntilDate: assignment.effectiveUntilDate ?? null,
     assignedAt: serializeDate(assignment.assignedAt),
     assignedByRole: assignment.assignedByRole,
+    cancelledAt: serializeDate(assignment.cancelledAt),
+    cancelledByRole: assignment.cancelledByRole ?? null,
+    cancelReason: assignment.cancelReason ?? null,
   };
 }
 

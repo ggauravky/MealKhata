@@ -1,6 +1,5 @@
-import { AlertTriangle, CheckCircle2, Download, FileCheck, History, ShieldAlert } from 'lucide-react';
+import { Download, FileCheck } from 'lucide-react';
 import { useState } from 'react';
-import { formatPaise } from '../../lib/money.js';
 import { downloadClearancePdf } from '../../lib/stayDownload.js';
 import { Button } from '../ui/button.jsx';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card.jsx';
@@ -38,6 +37,8 @@ export function ClearanceStatusCard({
   const isNoDues = latestClearance.clearanceStatus === 'NO_DUES';
   const isOutstandingDues = latestClearance.clearanceStatus === 'OUTSTANDING_DUES';
   const isRevoked = latestClearance.validityStatus === 'REVOKED';
+  const isSuperseded = latestClearance.validityStatus === 'SUPERSEDED';
+  const isHistorical = isRevoked || isSuperseded;
 
   return (
     <Card className="border-slate-200 dark:border-slate-800">
@@ -48,6 +49,7 @@ export function ClearanceStatusCard({
         </CardTitle>
         <div className="flex items-center gap-2">
           {isRevoked && <span className="rounded border border-amber-300 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:border-amber-800 dark:text-amber-300">REVOKED</span>}
+          {isSuperseded && <span className="rounded border border-amber-300 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:border-amber-800 dark:text-amber-300">SUPERSEDED</span>}
           <ClearanceStatusBadge status={latestClearance.clearanceStatus} />
         </div>
       </CardHeader>
@@ -61,7 +63,7 @@ export function ClearanceStatusCard({
 
         <div
           className={`p-4 rounded-lg border text-xs space-y-2.5 ${
-            isRevoked
+            isHistorical
               ? 'bg-amber-50/70 border-amber-300 dark:bg-amber-950/30 dark:border-amber-800 text-amber-950 dark:text-amber-200'
               : isNoDues
               ? 'bg-teal-50/60 border-teal-200/80 dark:bg-teal-950/30 dark:border-teal-900/50 text-teal-950 dark:text-teal-200'
@@ -80,6 +82,8 @@ export function ClearanceStatusCard({
           <p className="text-[11px] leading-relaxed">
             {isRevoked
               ? 'This clearance is a preserved historical snapshot and is no longer valid because the resident was restored.'
+              : isSuperseded
+              ? 'This clearance is a preserved historical snapshot and was replaced by a newer clearance.'
               : isNoDues
               ? 'This resident has completed departure with verified NO DUES across all mess, room fees, and expense accounts. Security deposit is settled.'
               : isOutstandingDues
@@ -91,6 +95,13 @@ export function ClearanceStatusCard({
             <div className="p-2 rounded bg-white/70 dark:bg-slate-900/60 border border-current/20 text-[11px]">
               <strong>Revocation reason:</strong> {latestClearance.revocationReason || 'Resident restoration'}
               {latestClearance.revokedAt && <span className="block mt-0.5">Revoked on {latestClearance.revokedAt.slice(0, 10)}</span>}
+            </div>
+          )}
+
+          {isSuperseded && (
+            <div className="p-2 rounded bg-white/70 dark:bg-slate-900/60 border border-current/20 text-[11px]">
+              <strong>Supersession reason:</strong> {latestClearance.supersessionReason || 'Newer verified clearance issued'}
+              {latestClearance.supersededAt && <span className="block mt-0.5">Superseded on {latestClearance.supersededAt.slice(0, 10)}</span>}
             </div>
           )}
 
@@ -126,7 +137,12 @@ export function ClearanceStatusCard({
                   key={c.clearanceId}
                   className="flex items-center justify-between p-2 rounded border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400"
                 >
-                  <span>Clearance #{c.sequence} ({c.clearanceStatus}) {c.validityStatus === 'REVOKED' ? '· REVOKED' : ''} — {c.finalizedAt?.slice(0, 10)}</span>
+                  <span>
+                    Clearance #{c.sequence} ({c.clearanceStatus})
+                    {c.validityStatus === 'REVOKED' ? ' · REVOKED' : ''}
+                    {c.validityStatus === 'SUPERSEDED' ? ' · SUPERSEDED' : ''}
+                    {' — '}{c.finalizedAt?.slice(0, 10)}
+                  </span>
                   <Button
                     variant="ghost"
                     size="sm"

@@ -657,6 +657,15 @@ describe('Phase 12: Security & Reliability', () => {
     test('accepts a not-required deposit and a fully audited revoked clearance on a restored active Stay', async () => {
       const fixture = {
         rooms: [{ roomId: 'room-a', roomNumber: 'A', capacity: 1 }],
+        room_assignments: [{
+          assignmentId: 'assignment-current',
+          memberId: 'gaurav',
+          roomId: 'room-a',
+          effectiveFromMonth: '2026-10',
+          effectiveFromDate: '2026-10-01',
+          effectiveUntilMonth: null,
+          effectiveUntilDate: null,
+        }],
         hostel_stays: [{
           stayId: 'stay-restored',
           memberId: 'gaurav',
@@ -685,6 +694,18 @@ describe('Phase 12: Security & Reliability', () => {
           revocationReason: 'Incorrect checkout restored',
           restorationId: 'restore-1',
           depositSummary: { heldPaise: 0 },
+        }, {
+          clearanceId: 'clearance-superseded',
+          stayId: 'stay-restored',
+          memberId: 'gaurav',
+          sequence: 0,
+          clearanceStatus: 'NO_DUES',
+          validityStatus: 'SUPERSEDED',
+          supersededAt: new Date('2026-10-20T00:00:00.000Z'),
+          supersededByRole: 'superadmin',
+          supersessionReason: 'Verified replacement issued',
+          supersededByClearanceId: 'clearance-old',
+          depositSummary: { heldPaise: 0 },
         }],
       };
       const mockDb = {
@@ -694,6 +715,78 @@ describe('Phase 12: Security & Reliability', () => {
       const { issues } = await verifyDataIntegrity({ db: mockDb });
       assert.ok(!issues.some((issue) => issue.includes('deposit-none')));
       assert.ok(!issues.some((issue) => issue.includes('clearance-old')));
+      assert.ok(!issues.some((issue) => issue.includes('clearance-superseded')));
+    });
+
+    test('flags active Stays without a matching current assignment and invalid current clearances', async () => {
+      const fixture = {
+        rooms: [{ roomId: 'room-a', roomNumber: 'A', capacity: 1 }],
+        room_assignments: [{
+          assignmentId: 'assignment-ended',
+          memberId: 'gaurav',
+          roomId: 'room-a',
+          effectiveFromMonth: '2026-10',
+          effectiveFromDate: '2026-10-01',
+          effectiveUntilMonth: '2026-10',
+          effectiveUntilDate: '2026-10-20',
+        }],
+        hostel_stays: [{
+          stayId: 'stay-active-ended-assignment',
+          memberId: 'gaurav',
+          joinedOn: '2026-10-01',
+          actualLeftOn: null,
+          initialRoomId: 'room-a',
+          currentRoomId: 'room-a',
+          admissionAssignmentId: 'assignment-ended',
+          status: 'ACTIVE',
+        }, {
+          stayId: 'stay-checked-out-clearances',
+          memberId: 'nikhil',
+          joinedOn: '2026-10-01',
+          actualLeftOn: '2026-10-20',
+          initialRoomId: 'room-a',
+          currentRoomId: 'room-a',
+          status: 'CHECKED_OUT',
+        }],
+        hostel_clearances: [{
+          clearanceId: 'clearance-one',
+          stayId: 'stay-checked-out-clearances',
+          memberId: 'nikhil',
+          sequence: 1,
+          clearanceStatus: 'NO_DUES',
+          validityStatus: 'ACTIVE',
+          depositSummary: { heldPaise: 0 },
+        }, {
+          clearanceId: 'clearance-two',
+          stayId: 'stay-checked-out-clearances',
+          memberId: 'nikhil',
+          sequence: 2,
+          clearanceStatus: 'NO_DUES',
+          validityStatus: 'ACTIVE',
+          depositSummary: { heldPaise: 0 },
+        }, {
+          clearanceId: 'clearance-bad-link',
+          stayId: 'stay-checked-out-clearances',
+          memberId: 'nikhil',
+          sequence: 0,
+          clearanceStatus: 'NO_DUES',
+          validityStatus: 'SUPERSEDED',
+          supersededAt: new Date('2026-10-20T00:00:00.000Z'),
+          supersededByRole: 'superadmin',
+          supersessionReason: 'Fixture replacement',
+          supersededByClearanceId: 'missing-clearance',
+          depositSummary: { heldPaise: 0 },
+        }],
+      };
+      const mockDb = {
+        collection: (name) => ({ find: () => ({ toArray: async () => fixture[name] || [] }) }),
+      };
+
+      const { passed, issues } = await verifyDataIntegrity({ db: mockDb });
+      assert.equal(passed, false);
+      assert.ok(issues.some((issue) => issue.includes('has no uncancelled current Room Assignment')));
+      assert.ok(issues.some((issue) => issue.includes('multiple active clearances')));
+      assert.ok(issues.some((issue) => issue.includes('references invalid replacement missing-clearance')));
     });
 
     test('flags fabricated not-required deposit history and active clearance on an active Stay', async () => {
@@ -732,6 +825,14 @@ describe('Phase 12: Security & Reliability', () => {
           clearanceStatus: 'NO_DUES',
           validityStatus: 'ACTIVE',
           depositSummary: { heldPaise: 0 },
+        }, {
+          clearanceId: 'clearance-invalid-superseded',
+          stayId: 'stay-active',
+          memberId: 'gaurav',
+          sequence: 0,
+          clearanceStatus: 'NO_DUES',
+          validityStatus: 'SUPERSEDED',
+          depositSummary: { heldPaise: 0 },
         }],
       };
       const mockDb = {
@@ -743,6 +844,7 @@ describe('Phase 12: Security & Reliability', () => {
       assert.ok(issues.some((issue) => issue.includes('NOT_REQUIRED account deposit-invalid-none must have zero expected deposit')));
       assert.ok(issues.some((issue) => issue.includes('NOT_REQUIRED account deposit-invalid-none has recorded deposit transactions')));
       assert.ok(issues.some((issue) => issue.includes('Active stay stay-active has active clearance clearance-active')));
+      assert.ok(issues.some((issue) => issue.includes('Superseded clearance clearance-invalid-superseded is missing supersession audit metadata')));
     });
   });
 

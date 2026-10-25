@@ -359,6 +359,7 @@ export class InMemoryStayRepository {
   async createClearance(data) {
     const doc = {
       ...data,
+      validityStatus: data.validityStatus || 'ACTIVE',
       createdAt: new Date(),
     };
     this.clearances.push(doc);
@@ -375,6 +376,30 @@ export class InMemoryStayRepository {
   async findClearanceById(clearanceId) {
     const clearance = this.clearances.find((c) => c.clearanceId === clearanceId);
     return clearance ? JSON.parse(JSON.stringify(clearance)) : null;
+  }
+
+  async supersedeActiveClearances(stayId, {
+    supersededByClearanceId,
+    reason,
+    actorRole,
+    supersededAt,
+  }) {
+    const supersededIds = [];
+    for (const clearance of this.clearances) {
+      if (
+        clearance.stayId === stayId
+        && clearance.clearanceId !== supersededByClearanceId
+        && (!clearance.validityStatus || clearance.validityStatus === 'ACTIVE')
+      ) {
+        clearance.validityStatus = 'SUPERSEDED';
+        clearance.supersededAt = supersededAt;
+        clearance.supersededByRole = actorRole;
+        clearance.supersessionReason = reason;
+        clearance.supersededByClearanceId = supersededByClearanceId;
+        supersededIds.push(clearance.clearanceId);
+      }
+    }
+    return supersededIds;
   }
 
   async getNextClearanceSequence(stayId) {

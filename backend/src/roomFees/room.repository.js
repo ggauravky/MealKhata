@@ -162,6 +162,24 @@ export const roomRepository = {
     ).lean();
   },
 
+  async lockAssignmentSchedule(memberId, { session } = {}) {
+    const options = {
+      returnDocument: 'after',
+      runValidators: true,
+      upsert: true,
+    };
+    if (session) options.session = session;
+    return RoomFeeScheduleState.findOneAndUpdate(
+      { memberId },
+      {
+        $inc: { assignmentRevision: 1 },
+        $set: { assignmentLastChangedAt: new Date() },
+        $setOnInsert: { memberId },
+      },
+      options,
+    ).lean();
+  },
+
   // Charges
   async createCharge(data, { session } = {}) {
     if (session) {

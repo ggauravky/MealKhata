@@ -79,7 +79,7 @@ export function ConfigureDepositDialog({ open, onOpenChange, stay, onConfigured 
           {required && (
             <div className="space-y-1.5">
               <Label htmlFor="depositExpectedAmount">Expected deposit (₹)</Label>
-              <Input id="depositExpectedAmount" type="number" min="1" step="1" value={rupees} onChange={(event) => setRupees(event.target.value)} required />
+              <Input id="depositExpectedAmount" type="number" min="0.01" step="0.01" value={rupees} onChange={(event) => setRupees(event.target.value)} required />
             </div>
           )}
           <div className="space-y-1.5">

@@ -175,6 +175,8 @@ describe('MealKhata 2.0 Phase 4: Complete Hostel Lifecycle, Security Deposits & 
       assert.match(content, /OUTSTANDING_DUES/);
       assert.match(content, /REVOKED/);
       assert.match(content, /revocationReason/);
+      assert.match(content, /SUPERSEDED/);
+      assert.match(content, /supersessionReason/);
     });
 
     test('LifetimeFinancialOverview displays multi-month consolidated totals and expandable breakdown', async () => {
@@ -231,6 +233,13 @@ describe('MealKhata 2.0 Phase 4: Complete Hostel Lifecycle, Security Deposits & 
       assert.match(content, /RESTORATION_ASSIGNMENT_CONFLICT|conflicts/);
       assert.match(content, /No records are changed by this preview/);
       assert.match(content, /Restore resident/);
+      assert.match(content, /preview\.warnings/);
+      assert.match(content, /DEPOSIT_EXPECTATION_MISMATCH/);
+      assert.match(content, /eligibleAssignments/);
+      assert.match(content, /assignment\.cancelledAt/);
+      assert.match(content, /assignment\.effectiveUntilDate/);
+      assert.match(content, /useServerToday/);
+      assert.match(content, /max=\{serverToday/);
     });
 
     test('Deposit requirement configuration is explicit and audited without fake transactions', async () => {

@@ -479,6 +479,9 @@ export function createRoomFeeService({
         }
 
         if (activeSession) {
+          if (typeof repository.lockAssignmentSchedule === 'function') {
+            await repository.lockAssignmentSchedule(memberId, { session: activeSession });
+          }
           // Database-backed concurrency guard: touch occupancyRevision on room document
           // inside the transaction to serialize concurrent occupancy checks for the same room.
           await repository.updateRoom(room.roomId, { $inc: { occupancyRevision: 1 } }, { session: activeSession });
@@ -600,10 +603,7 @@ export function createRoomFeeService({
       return serializeRoomAssignment(assignment, new Map([[room?.roomId, room]]));
     },
 
-    async deleteAssignment(assignmentId, actorRole) {
-      if (!canManageRooms(actorRole)) {
-        throw new HttpError(403, 'Permission denied to delete room assignments.');
-      }
+    async rollbackCreatedAssignment(assignmentId) {
       const deleted = await repository.deleteAssignment(assignmentId);
       if (!deleted) {
         throw new HttpError(404, 'Assignment not found.');
@@ -623,6 +623,9 @@ export function createRoomFeeService({
         const assignment = await repository.findAssignmentById(assignmentId, { session });
         if (!assignment) {
           throw new HttpError(409, 'The admission room assignment no longer exists.');
+        }
+        if (session && typeof repository.lockAssignmentSchedule === 'function') {
+          await repository.lockAssignmentSchedule(assignment.memberId, { session });
         }
         await repository.updateAssignment(
           assignmentId,
@@ -669,6 +672,9 @@ export function createRoomFeeService({
         throw new HttpError(400, 'A corrected room is required.');
       }
 
+      if (session && typeof repository.lockAssignmentSchedule === 'function') {
+        await repository.lockAssignmentSchedule(memberId, { session });
+      }
       const assignment = await repository.findAssignmentById(assignmentId, { session });
       if (!assignment || assignment.memberId !== memberId || assignment.cancelledAt) {
         throw new HttpError(409, 'The admission room assignment cannot be corrected safely.');
@@ -733,6 +739,9 @@ export function createRoomFeeService({
     },
 
     async endActiveRoomAssignment({ memberId, endMonth, endDate = null, session = null }) {
+      if (session && typeof repository.lockAssignmentSchedule === 'function') {
+        await repository.lockAssignmentSchedule(memberId, { session });
+      }
       const assignments = await repository.findAssignmentsForMember(memberId, { session });
       const targetMonth = endDate ? endDate.slice(0, 7) : endMonth;
       const targetDate = endDate || (targetMonth ? lastDateOfMonth(targetMonth) : null);
@@ -791,6 +800,37 @@ export function createRoomFeeService({
         conflicts.push({ code: 'ASSIGNMENT_ROOM_MISMATCH', message: 'The selected Room Assignment belongs to a different room.' });
       }
 
+      const selectedFrom = selectedAssignment
+        ? selectedAssignment.effectiveFromDate || `${selectedAssignment.effectiveFromMonth}-01`
+        : null;
+      const selectedUntil = selectedAssignment
+        ? selectedAssignment.effectiveUntilDate
+          || (selectedAssignment.effectiveUntilMonth ? lastDateOfMonth(selectedAssignment.effectiveUntilMonth) : null)
+        : null;
+      if (selectedAssignment?.cancelledAt) {
+        conflicts.push({
+          code: 'ASSIGNMENT_CANCELLED',
+          assignmentId: selectedAssignment.assignmentId,
+          message: 'A cancelled Room Assignment cannot be linked or reopened.',
+        });
+      }
+      if (assignmentAction === 'LINK_EXISTING' && selectedAssignment && !selectedAssignment.cancelledAt) {
+        if (selectedUntil) {
+          conflicts.push({
+            code: 'ASSIGNMENT_NOT_ACTIVE',
+            assignmentId: selectedAssignment.assignmentId,
+            message: 'LINK_EXISTING requires an open-ended Room Assignment. Reopen this historical assignment instead.',
+          });
+        }
+        if (selectedFrom > occupancyFromDate) {
+          conflicts.push({
+            code: 'ASSIGNMENT_DOES_NOT_COVER_OCCUPANCY',
+            assignmentId: selectedAssignment.assignmentId,
+            message: 'The selected Room Assignment starts after the approved continuous occupancy date.',
+          });
+        }
+      }
+
       const proposedAssignment = assignmentAction === 'CREATE_NEW'
         ? {
           assignmentId: null,
@@ -801,17 +841,15 @@ export function createRoomFeeService({
           effectiveUntilDate: null,
           effectiveUntilMonth: null,
         }
-        : {
+        : assignmentAction === 'REOPEN_EXISTING'
+          ? {
           ...selectedAssignment,
-          effectiveFromDate: assignmentAction === 'REOPEN_EXISTING'
-            ? occupancyFromDate
-            : selectedAssignment?.effectiveFromDate,
-          effectiveFromMonth: assignmentAction === 'REOPEN_EXISTING'
-            ? occupancyFromDate.slice(0, 7)
-            : selectedAssignment?.effectiveFromMonth,
+          effectiveFromDate: occupancyFromDate,
+          effectiveFromMonth: occupancyFromDate.slice(0, 7),
           effectiveUntilDate: null,
           effectiveUntilMonth: null,
-        };
+          }
+          : selectedAssignment;
 
       for (const assignment of memberAssignments) {
         if (assignment.cancelledAt || assignment.assignmentId === selectedAssignment?.assignmentId) continue;
@@ -859,6 +897,9 @@ export function createRoomFeeService({
         (await repository.findRoomById(roomId, { session }))
         || (await repository.findRoomByNumber(roomId, { session }));
       if (!room) throw new HttpError(400, 'Selected room does not exist.');
+      if (typeof repository.lockAssignmentSchedule === 'function') {
+        await repository.lockAssignmentSchedule(memberId, { session });
+      }
       await repository.updateRoom(room.roomId, { $inc: { occupancyRevision: 1 } }, { session });
 
       const preview = await this.previewRestoreAssignment({

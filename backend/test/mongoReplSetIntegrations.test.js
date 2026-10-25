@@ -922,6 +922,244 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
   });
 
   describe('Incorrect checkout restoration', () => {
+    async function createCheckedOutRestoreFixture({ roomNumber, memberId = 'gaurav' }) {
+      const room = await ensureRoom(roomNumber, 1);
+      const stay = await stayService.createStay({
+        memberId,
+        joinedOn: '2026-10-01',
+        initialRoomId: room.roomId,
+        expectedDepositPaise: 0,
+        actorRole: 'superadmin',
+        historicalReason: 'Verified historical restoration fixture',
+      });
+      const checkout = await stayService.finalizeCheckout({
+        stayId: stay.stayId,
+        actualLeftOn: '2026-10-20',
+        actorRole: 'admin',
+      });
+      const request = {
+        stayId: stay.stayId,
+        joinedOn: '2026-10-01',
+        occupancyFromDate: '2026-10-01',
+        roomId: room.roomId,
+        assignmentAction: 'REOPEN_EXISTING',
+        assignmentId: stay.admissionAssignmentId,
+        expectedRevision: checkout.stay.revision,
+        reason: 'Resident never left; correct the recorded checkout',
+        actorRole: 'superadmin',
+      };
+      return { room, stay, checkout, request };
+    }
+
+    it('allows LINK_EXISTING only for an uncancelled open assignment covering the approved occupancy date', async () => {
+      const ended = await createCheckedOutRestoreFixture({ roomNumber: 'link-ended' });
+      const endedPreview = await stayService.previewRestoreResident({
+        ...ended.request,
+        assignmentAction: 'LINK_EXISTING',
+      });
+      assert.equal(endedPreview.canApply, false);
+      assert.ok(endedPreview.conflicts.some((conflict) => conflict.code === 'ASSIGNMENT_NOT_ACTIVE'));
+
+      const cancelled = await createCheckedOutRestoreFixture({ roomNumber: 'link-cancelled', memberId: 'nikhil' });
+      await RoomAssignment.updateOne(
+        { assignmentId: cancelled.stay.admissionAssignmentId },
+        { $set: { cancelledAt: new Date(), cancelledByRole: 'superadmin', cancelReason: 'Fixture cancellation' } },
+      );
+      const cancelledPreview = await stayService.previewRestoreResident(cancelled.request);
+      assert.equal(cancelledPreview.canApply, false);
+      assert.ok(cancelledPreview.conflicts.some((conflict) => conflict.code === 'ASSIGNMENT_CANCELLED'));
+
+      const future = await createCheckedOutRestoreFixture({ roomNumber: 'link-future', memberId: 'devansh' });
+      await RoomAssignment.updateOne(
+        { assignmentId: future.stay.admissionAssignmentId },
+        {
+          $set: {
+            effectiveFromDate: '2026-11-01',
+            effectiveFromMonth: '2026-11',
+            effectiveUntilDate: null,
+            effectiveUntilMonth: null,
+          },
+        },
+      );
+      const futurePreview = await stayService.previewRestoreResident({
+        ...future.request,
+        assignmentAction: 'LINK_EXISTING',
+      });
+      assert.equal(futurePreview.canApply, false);
+      assert.ok(futurePreview.conflicts.some((conflict) => conflict.code === 'ASSIGNMENT_DOES_NOT_COVER_OCCUPANCY'));
+    });
+
+    it('rejects restoration dates later than the current server date', async () => {
+      const fixture = await createCheckedOutRestoreFixture({ roomNumber: 'restore-future' });
+      await assert.rejects(
+        stayService.previewRestoreResident({
+          ...fixture.request,
+          joinedOn: '2099-01-01',
+          occupancyFromDate: '2099-01-01',
+        }),
+        (error) => error.statusCode === 400 && error.message.includes('future'),
+      );
+    });
+
+    it('LINK_EXISTING preserves a valid active assignment unchanged', async () => {
+      const fixture = await createCheckedOutRestoreFixture({ roomNumber: 'link-valid' });
+      await RoomAssignment.updateOne(
+        { assignmentId: fixture.stay.admissionAssignmentId },
+        { $set: { effectiveUntilDate: null, effectiveUntilMonth: null } },
+      );
+      const request = { ...fixture.request, assignmentAction: 'LINK_EXISTING' };
+      const preview = await stayService.previewRestoreResident(request);
+      assert.equal(preview.canApply, true);
+      assert.ok(!preview.changes.some((change) => change.collection === 'room_assignments'));
+
+      await stayService.restoreResident({ ...request, previewToken: preview.previewToken });
+      const assignment = await RoomAssignment.findOne({ assignmentId: fixture.stay.admissionAssignmentId }).lean();
+      assert.equal(assignment.effectiveFromDate, '2026-10-01');
+      assert.equal(assignment.effectiveUntilDate, null);
+      assert.equal(assignment.cancelledAt, null);
+    });
+
+    it('serializes restoration against a concurrent assignment for the same resident in another room', async () => {
+      const fixture = await createCheckedOutRestoreFixture({ roomNumber: 'restore-race' });
+      const otherRoom = await ensureRoom('restore-race-2', 1);
+      const preview = await stayService.previewRestoreResident(fixture.request);
+
+      await Promise.allSettled([
+        stayService.restoreResident({ ...fixture.request, previewToken: preview.previewToken }),
+        roomFeeService.assignMemberToRoom({
+          memberId: 'gaurav',
+          roomId: otherRoom.roomId,
+          effectiveFromMonth: '2026-10',
+          effectiveFromDate: '2026-10-21',
+          actorRole: 'admin',
+        }),
+      ]);
+
+      const assignments = await RoomAssignment.find({ memberId: 'gaurav', cancelledAt: null }).lean();
+      const activeOnRaceDate = assignments.filter((assignment) => {
+        const from = assignment.effectiveFromDate || `${assignment.effectiveFromMonth}-01`;
+        const until = assignment.effectiveUntilDate || '9999-12-31';
+        return from <= '2026-10-21' && '2026-10-21' <= until;
+      });
+      assert.ok(activeOnRaceDate.length <= 1, 'Per-member assignment lock prevents overlapping commits');
+    });
+
+    it('rejects restoration when another active Stay already exists for the resident', async () => {
+      const fixture = await createCheckedOutRestoreFixture({ roomNumber: 'restore-active' });
+      const currentRoom = await ensureRoom('restore-current', 1);
+      const activeStay = await stayService.createStay({
+        memberId: 'gaurav',
+        joinedOn: '2026-10-21',
+        initialRoomId: currentRoom.roomId,
+        expectedDepositPaise: 0,
+        actorRole: 'superadmin',
+        historicalReason: 'Verified replacement Stay fixture',
+      });
+
+      const preview = await stayService.previewRestoreResident(fixture.request);
+      assert.equal(preview.canApply, false);
+      assert.ok(preview.conflicts.some((conflict) => conflict.code === 'ACTIVE_STAY_EXISTS'));
+      await assert.rejects(
+        stayService.restoreResident({ ...fixture.request, previewToken: preview.previewToken }),
+        (error) => error.statusCode === 409 && error.details.code === 'RESTORATION_CONFLICT',
+      );
+      assert.equal((await HostelStay.findOne({ stayId: fixture.stay.stayId }).lean()).status, 'CHECKED_OUT');
+      assert.equal((await HostelStay.findOne({ stayId: activeStay.stayId }).lean()).status, 'ACTIVE');
+    });
+
+    it('rejects a stale restoration preview after the Stay revision changes', async () => {
+      const fixture = await createCheckedOutRestoreFixture({ roomNumber: 'restore-stale' });
+      const preview = await stayService.previewRestoreResident(fixture.request);
+      assert.equal(preview.canApply, true);
+
+      await HostelStay.updateOne({ stayId: fixture.stay.stayId }, { $inc: { revision: 1 } });
+      await assert.rejects(
+        stayService.restoreResident({ ...fixture.request, previewToken: preview.previewToken }),
+        (error) => error.statusCode === 409 && error.details.code === 'RESTORATION_PREVIEW_STALE',
+      );
+      assert.equal((await HostelStay.findOne({ stayId: fixture.stay.stayId }).lean()).status, 'CHECKED_OUT');
+    });
+
+    it('rejects restoration when the requested room period exceeds capacity', async () => {
+      const fixture = await createCheckedOutRestoreFixture({ roomNumber: 'restore-capacity' });
+      await roomFeeService.assignMemberToRoom({
+        memberId: 'nikhil',
+        roomId: fixture.room.roomId,
+        effectiveFromMonth: '2026-10',
+        effectiveFromDate: '2026-10-21',
+        actorRole: 'admin',
+      });
+
+      const preview = await stayService.previewRestoreResident(fixture.request);
+      assert.equal(preview.canApply, false);
+      assert.ok(preview.conflicts.some((conflict) => conflict.code === 'ROOM_CAPACITY_CONFLICT'));
+      await assert.rejects(
+        stayService.restoreResident({ ...fixture.request, previewToken: preview.previewToken }),
+        (error) => error.statusCode === 409 && error.details.code === 'RESTORATION_CONFLICT',
+      );
+      assert.equal((await HostelStay.findOne({ stayId: fixture.stay.stayId }).lean()).status, 'CHECKED_OUT');
+    });
+
+    it('warns without mutating a contradictory historical deposit ledger during preview', async () => {
+      const room = await ensureRoom('restore-deposit', 1);
+      const stay = await stayService.createStay({
+        memberId: 'gaurav',
+        joinedOn: '2026-10-01',
+        initialRoomId: room.roomId,
+        expectedDepositPaise: 0,
+        actorRole: 'superadmin',
+        historicalReason: 'Verified historical restoration fixture',
+      });
+      const checkout = await stayService.finalizeCheckout({
+        stayId: stay.stayId,
+        actualLeftOn: '2026-10-20',
+        actorRole: 'admin',
+      });
+      const account = await HostelDepositAccount.findOneAndUpdate(
+        { stayId: stay.stayId },
+        { $set: { status: 'OPEN', expectedDepositPaise: 0 } },
+        { returnDocument: 'after' },
+      ).lean();
+      await HostelDepositTransaction.create({
+        depositTransactionId: randomUUID(),
+        depositAccountId: account.depositAccountId,
+        stayId: stay.stayId,
+        memberId: 'gaurav',
+        type: 'RECEIVED',
+        amountPaise: 4_800_000,
+        method: 'cash',
+        idempotencyKey: randomUUID(),
+        recordedByRole: 'superadmin',
+      });
+
+      const preview = await stayService.previewRestoreResident({
+        stayId: stay.stayId,
+        joinedOn: '2026-10-01',
+        occupancyFromDate: '2026-10-01',
+        roomId: room.roomId,
+        assignmentAction: 'REOPEN_EXISTING',
+        assignmentId: stay.admissionAssignmentId,
+        expectedRevision: checkout.stay.revision,
+        reason: 'Resident never left; preserve contradictory deposit ledger for separate review',
+        actorRole: 'superadmin',
+      });
+
+      assert.deepEqual(preview.warnings.map((warning) => warning.code), [
+        'DEPOSIT_LEDGER_PRESERVED',
+        'DEPOSIT_EXPECTATION_MISMATCH',
+      ]);
+      assert.deepEqual(preview.preservedFinancialRecords.deposit, {
+        accountStatus: 'OPEN',
+        expectedDepositPaise: 0,
+        receivedPaise: 4_800_000,
+        refundedPaise: 0,
+        deductedPaise: 0,
+        heldPaise: 4_800_000,
+        transactionCount: 1,
+      });
+      assert.equal(await HostelDepositTransaction.countDocuments({ stayId: stay.stayId }), 1);
+    });
+
     it('restores one checked-out Stay atomically while preserving financial history and revoking its clearance', async () => {
       const room = await ensureRoom('restore-lower', 1);
       const stay = await stayService.createStay({
@@ -929,7 +1167,8 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
         joinedOn: '2026-10-01',
         initialRoomId: room.roomId,
         expectedDepositPaise: 0,
-        actorRole: 'admin',
+        actorRole: 'superadmin',
+        historicalReason: 'Verified historical restoration fixture',
       });
       await roomFeeService.createFeePlan({
         memberId: 'gaurav',
@@ -1177,7 +1416,8 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
         memberId: 'gaurav',
         joinedOn: '2026-10-01',
         initialRoomId: room.roomId,
-        actorRole: 'admin',
+        actorRole: 'superadmin',
+        historicalReason: 'Verified historical clearance fixture',
       });
 
       await stayService.finalizeCheckout({
@@ -1199,7 +1439,13 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
       const all = await stayRepository.findClearancesByStayId(stay.stayId);
       assert.equal(all.length, 2);
       assert.equal(all[0].sequence, 2);
+      assert.equal(all[0].validityStatus, 'ACTIVE');
       assert.equal(all[1].sequence, 1);
+      assert.equal(all[1].validityStatus, 'SUPERSEDED');
+      assert.equal(all[1].supersededByClearanceId, c2.clearanceId);
+      assert.equal(all[1].supersessionReason, 'Post-departure verification statement');
+      assert.ok(all[1].supersededAt);
+      assert.equal(all[1].supersededByRole, 'superadmin');
     });
   });
 

@@ -14,6 +14,16 @@ async function cookieFor(role) {
 }
 
 describe('resident repair administration routes', () => {
+  test('does not expose hard deletion of Room Assignments', () => {
+    const router = createRoomFeeRouter({
+      service: {},
+      notifyChange: () => {},
+    });
+    const deleteAssignmentRoute = router.stack.find((layer) => (
+      layer.route?.path === '/assignments/:assignmentId' && layer.route?.methods?.delete
+    ));
+    assert.equal(deleteAssignmentRoute, undefined);
+  });
   test('Stay restoration preview and confirm are Super Admin only and forward the approved payload', async () => {
     const calls = [];
     const stay = { stayId: 'stay-1', memberId: 'gaurav', revision: 3 };

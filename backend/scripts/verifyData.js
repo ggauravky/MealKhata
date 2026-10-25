@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import { env } from '../src/config/env.js';
 import { connectDatabase, disconnectDatabase } from '../src/config/db.js';
 import { MEMBER_IDS } from '../src/config/members.js';
-import { isValidLogicalDate } from '../src/utils/date.js';
+import { getLogicalDateInTimeZone, isValidLogicalDate } from '../src/utils/date.js';
 import { isValidLogicalMonth, lastDateOfMonth } from '../src/utils/month.js';
 import { isValidPaymentAmount, isValidUuid } from '../src/payments/payment.constants.js';
 import { isValidPricePaise } from '../src/billing/monthlyRate.constants.js';
@@ -916,6 +916,7 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
     const roomIds = new Set(rooms.map((room) => room.roomId));
     const assignmentIds = new Set(assignments.map((assignment) => assignment.assignmentId));
     const feePlanIds = new Set(feePlans.map((plan) => plan.feePlanId));
+    const currentDate = getLogicalDateInTimeZone();
 
     for (const s of stays) {
       if (!s.stayId || typeof s.stayId !== 'string') {
@@ -971,6 +972,15 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
           stayIssues++;
         }
         activeStayMembers.add(s.memberId);
+        const currentAssignments = assignments.filter((assignment) => {
+          if (assignment.cancelledAt || assignment.memberId !== s.memberId || assignment.roomId !== s.currentRoomId) return false;
+          const interval = assignmentInterval(assignment);
+          return interval.start <= currentDate && currentDate <= interval.end;
+        });
+        if (currentAssignments.length !== 1) {
+          issues.push(`[hostel_stays] Active or pending stay ${s.stayId} has no uncancelled current Room Assignment matching member ${s.memberId} and room ${s.currentRoomId}`);
+          stayIssues++;
+        }
       }
     }
 
@@ -1085,6 +1095,8 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
     }
 
     const seenClearanceKeys = new Set();
+    const clearanceMap = new Map(clearances.map((clearance) => [clearance.clearanceId, clearance]));
+    const activeClearancesByStay = new Map();
     for (const c of clearances) {
       const key = `${c.stayId}:${c.sequence}`;
       if (seenClearanceKeys.has(key)) {
@@ -1103,6 +1115,9 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
       }
 
       const validityStatus = c.validityStatus || 'ACTIVE';
+      if (validityStatus === 'ACTIVE') {
+        activeClearancesByStay.set(c.stayId, (activeClearancesByStay.get(c.stayId) || 0) + 1);
+      }
       if (!['ACTIVE', 'REVOKED', 'SUPERSEDED'].includes(validityStatus)) {
         issues.push(`[hostel_clearances] Clearance ${c.clearanceId} has invalid validityStatus ${c.validityStatus}`);
         depositIssues++;
@@ -1111,6 +1126,20 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         issues.push(`[hostel_clearances] Revoked clearance ${c.clearanceId} is missing revocation audit metadata`);
         depositIssues++;
       }
+      if (
+        validityStatus === 'SUPERSEDED'
+        && (!c.supersededAt || !c.supersededByRole || !c.supersessionReason || !c.supersededByClearanceId)
+      ) {
+        issues.push(`[hostel_clearances] Superseded clearance ${c.clearanceId} is missing supersession audit metadata`);
+        depositIssues++;
+      }
+      if (validityStatus === 'SUPERSEDED' && c.supersededByClearanceId) {
+        const replacement = clearanceMap.get(c.supersededByClearanceId);
+        if (!replacement || replacement.stayId !== c.stayId || replacement.sequence <= c.sequence) {
+          issues.push(`[hostel_clearances] Superseded clearance ${c.clearanceId} references invalid replacement ${c.supersededByClearanceId}`);
+          depositIssues++;
+        }
+      }
       if (referencedStay && ['ACTIVE', 'CHECKOUT_REQUESTED', 'CHECKOUT_PENDING'].includes(referencedStay.status) && validityStatus === 'ACTIVE') {
         issues.push(`[hostel_clearances] Active stay ${c.stayId} has active clearance ${c.clearanceId}`);
         depositIssues++;
@@ -1118,6 +1147,17 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
 
       if (c.clearanceStatus === 'NO_DUES' && c.depositSummary?.heldPaise > 0) {
         issues.push(`[hostel_clearances] No-Dues clearance ${c.clearanceId} has unrefunded deposit (${c.depositSummary.heldPaise})`);
+        depositIssues++;
+      }
+    }
+
+    for (const stay of stays.filter((candidate) => candidate.status === 'CHECKED_OUT')) {
+      const activeCount = activeClearancesByStay.get(stay.stayId) || 0;
+      if (activeCount === 0) {
+        issues.push(`[hostel_clearances] Checked-out stay ${stay.stayId} has no active clearance`);
+        depositIssues++;
+      } else if (activeCount > 1) {
+        issues.push(`[hostel_clearances] Checked-out stay ${stay.stayId} has multiple active clearances (${activeCount})`);
         depositIssues++;
       }
     }

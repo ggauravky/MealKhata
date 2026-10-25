@@ -464,6 +464,9 @@ export function createLifetimePdfService({
     buildClearancePdf({ stay, clearance }) {
       const isNoDues = clearance.clearanceStatus === CLEARANCE_STATUSES.NO_DUES;
       const isRevoked = clearance.validityStatus === 'REVOKED';
+      const isSuperseded = clearance.validityStatus === 'SUPERSEDED';
+      const isHistorical = isRevoked || isSuperseded;
+      const historicalLabel = isRevoked ? 'REVOKED' : 'SUPERSEDED';
 
       const doc = new PDFDocument({
         size: 'A4',
@@ -481,7 +484,7 @@ export function createLifetimePdfService({
       const contentWidth = pageWidth - 80;
 
       // Top Brand Bar
-      doc.rect(40, 40, contentWidth, 6).fill(isRevoked ? '#d97706' : (isNoDues ? COLORS.primary : COLORS.accentDanger));
+      doc.rect(40, 40, contentWidth, 6).fill(isHistorical ? '#d97706' : (isNoDues ? COLORS.primary : COLORS.accentDanger));
 
       // Header Banner
       doc.y = 56;
@@ -489,7 +492,7 @@ export function createLifetimePdfService({
         .fontSize(18)
         .font('Helvetica-Bold')
         .fillColor(COLORS.textDark)
-        .text(isRevoked ? 'REVOKED HOSTEL CLEARANCE — HISTORICAL SNAPSHOT' : (isNoDues ? 'MEALKHATA HOSTEL CLEARANCE CERTIFICATE' : 'MEALKHATA DEPARTURE RECORD — DUES REMAIN'), 40, doc.y, {
+        .text(isHistorical ? `${historicalLabel} HOSTEL CLEARANCE — HISTORICAL SNAPSHOT` : (isNoDues ? 'MEALKHATA HOSTEL CLEARANCE CERTIFICATE' : 'MEALKHATA DEPARTURE RECORD — DUES REMAIN'), 40, doc.y, {
           align: 'center',
           width: contentWidth,
         });
@@ -500,7 +503,7 @@ export function createLifetimePdfService({
         .font('Helvetica')
         .fillColor(COLORS.textMuted)
         .text(
-          isRevoked
+          isHistorical
             ? 'This preserved record is no longer a valid resident clearance'
             : isNoDues
             ? 'Official statement of complete financial and room clearance'
@@ -515,12 +518,12 @@ export function createLifetimePdfService({
       doc.y += 16;
 
       // Status Box
-      doc.roundedRect(40, doc.y, contentWidth, 48, 4).fillAndStroke(isRevoked ? '#fffbeb' : (isNoDues ? '#ecfdf5' : '#fef2f2'), isRevoked ? '#f59e0b' : (isNoDues ? '#6ee7b7' : '#fca5a5'));
+      doc.roundedRect(40, doc.y, contentWidth, 48, 4).fillAndStroke(isHistorical ? '#fffbeb' : (isNoDues ? '#ecfdf5' : '#fef2f2'), isHistorical ? '#f59e0b' : (isNoDues ? '#6ee7b7' : '#fca5a5'));
       doc
         .fontSize(11)
         .font('Helvetica-Bold')
-        .fillColor(isRevoked ? '#b45309' : (isNoDues ? COLORS.accentSuccess : COLORS.accentDanger))
-        .text(isRevoked ? 'REVOKED — NOT A CURRENT CLEARANCE' : (isNoDues ? '✓ NO DUES CERTIFIED' : '⚠ OUTSTANDING DUES REMAIN'), 55, doc.y + 12);
+        .fillColor(isHistorical ? '#b45309' : (isNoDues ? COLORS.accentSuccess : COLORS.accentDanger))
+        .text(isHistorical ? `${historicalLabel} — NOT A CURRENT CLEARANCE` : (isNoDues ? '✓ NO DUES CERTIFIED' : '⚠ OUTSTANDING DUES REMAIN'), 55, doc.y + 12);
       doc
         .fontSize(8.5)
         .font('Helvetica')
@@ -528,6 +531,8 @@ export function createLifetimePdfService({
         .text(
           isRevoked
             ? `Revoked after resident restoration: "${clearance.revocationReason || 'Resident restoration'}"`
+            : isSuperseded
+            ? `Superseded by a newer clearance: "${clearance.supersessionReason || 'Newer verified clearance issued'}"`
             : isNoDues
             ? 'All meal bills, room fees, shared purchases, and deposit refunds have been fully reconciled.'
             : `Super Admin exception authorized departure: "${clearance.exceptionReason || 'Documented at departure'}"`,
@@ -547,7 +552,11 @@ export function createLifetimePdfService({
         ['Hostel Departure Date', clearance.actualLeftOn],
         ['Final Room Assigned', clearance.lastRoomId || '—'],
         ['Clearance Sequence', `#${clearance.sequence} (Version ${clearance.snapshotVersion})`],
-        ['Validity', isRevoked ? `REVOKED on ${formatDateIST(clearance.revokedAt)}` : (clearance.validityStatus || 'ACTIVE')],
+        ['Validity', isRevoked
+          ? `REVOKED on ${formatDateIST(clearance.revokedAt)}`
+          : isSuperseded
+          ? `SUPERSEDED on ${formatDateIST(clearance.supersededAt)}`
+          : (clearance.validityStatus || 'ACTIVE')],
         ['Clearance Finalized On', formatDateIST(clearance.finalizedAt)],
         ['Authorized by Role', clearance.finalizedByRole.toUpperCase()],
       ];
