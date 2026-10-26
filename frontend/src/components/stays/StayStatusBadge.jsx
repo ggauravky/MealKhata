@@ -17,6 +17,10 @@ export const STAY_STATUS_CONFIG = {
     label: 'Checked Out',
     className: 'bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700',
   },
+  SUPERSEDED: {
+    label: 'Superseded history',
+    className: 'bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-950/40 dark:text-violet-300 dark:border-violet-800',
+  },
   CANCELLED: {
     label: 'Cancelled',
     className: 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/40 dark:text-rose-400 dark:border-rose-800',

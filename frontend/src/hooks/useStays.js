@@ -235,6 +235,45 @@ export function useAdminStays(filter = {}) {
     return res.data;
   };
 
+  const previewRoomAssignmentRepair = async (stayId, payload) => {
+    const res = await api.post(`/api/stays/${stayId}/room-repair-preview`, payload);
+    return res.data;
+  };
+
+  const repairRoomAssignment = async (stayId, payload) => {
+    const res = await api.post(`/api/stays/${stayId}/room-repair`, payload);
+    refresh();
+    return res.data;
+  };
+
+  const previewHistoricalStayReconciliation = async (stayId, payload) => {
+    const res = await api.post(`/api/stays/${stayId}/historical-reconciliation-preview`, payload);
+    return res.data;
+  };
+
+  const reconcileHistoricalStay = async (stayId, payload) => {
+    const res = await api.post(`/api/stays/${stayId}/historical-reconcile`, payload);
+    refresh();
+    return res.data;
+  };
+
+  const previewPaymentReclassification = async (stayId, payload) => {
+    const res = await api.post(`/api/stays/${stayId}/deposit/reclassification-preview`, payload);
+    return res.data;
+  };
+
+  const reclassifyPayment = async (stayId, payload) => {
+    const res = await api.post(`/api/stays/${stayId}/deposit/reclassify`, payload);
+    refresh();
+    return res.data;
+  };
+
+  const openClearanceReview = async (stayId, reason) => {
+    const res = await api.post(`/api/stays/${stayId}/clearance/review`, { reason });
+    refresh();
+    return res.data;
+  };
+
   const recordDepositTransaction = async (stayId, payload) => {
     if (!navigator.onLine) {
       throw new Error('You are offline. Connect to the internet to record deposit transactions.');
@@ -288,6 +327,13 @@ export function useAdminStays(filter = {}) {
     createStay,
     cancelStay,
     correctAdmission,
+    previewRoomAssignmentRepair,
+    repairRoomAssignment,
+    previewHistoricalStayReconciliation,
+    reconcileHistoricalStay,
+    previewPaymentReclassification,
+    reclassifyPayment,
+    openClearanceReview,
     transferRoom,
     recordDepositTransaction,
     voidDepositTransaction,

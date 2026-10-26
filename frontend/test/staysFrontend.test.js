@@ -24,6 +24,7 @@ const stayEmptyStatePath = path.join(srcDir, 'components/stays/StayEmptyState.js
 const dashboardStayCardPath = path.join(srcDir, 'components/dashboard/DashboardStayCard.jsx');
 const myStayPagePath = path.join(srcDir, 'pages/MyStayPage.jsx');
 const adminStaysPagePath = path.join(srcDir, 'pages/AdminStaysPage.jsx');
+const targetedReconciliationDialogsPath = path.join(srcDir, 'components/stays/TargetedReconciliationDialogs.jsx');
 const restoreResidentDialogPath = path.join(srcDir, 'components/stays/RestoreResidentDialog.jsx');
 const configureDepositDialogPath = path.join(srcDir, 'components/stays/ConfigureDepositDialog.jsx');
 const appPath = path.join(srcDir, 'App.jsx');
@@ -248,6 +249,25 @@ describe('MealKhata 2.0 Phase 4: Complete Hostel Lifecycle, Security Deposits & 
       assert.match(content, /required/);
       assert.match(content, /expectedRevision/);
       assert.match(content, /No deposit transaction will be created/);
+    });
+
+    test('targeted reconciliation UI previews room repair, historical supersession, and real-money reclassification', async () => {
+      const page = await fs.readFile(adminStaysPagePath, 'utf8');
+      const dialogs = await fs.readFile(targetedReconciliationDialogsPath, 'utf8');
+      const hooks = await fs.readFile(useStaysPath, 'utf8');
+      assert.match(page, /Repair Room Assignment/);
+      assert.match(page, /Reconcile incorrect history/);
+      assert.match(page, /Correct Payment Category/);
+      assert.match(page, /Review ledger/);
+      assert.match(page, /setSelectedStayIdForDetails\(s\.stayId\)/);
+      assert.match(dialogs, /EXTEND_EXISTING_ASSIGNMENT/);
+      assert.match(dialogs, /UNALLOCATED_CREDIT/);
+      assert.match(dialogs, /previewToken/);
+      assert.match(dialogs, /Affected records/);
+      assert.match(dialogs, /Open required clearance review/);
+      assert.match(hooks, /room-repair-preview/);
+      assert.match(hooks, /historical-reconciliation-preview/);
+      assert.match(hooks, /deposit\/reclassification-preview/);
     });
   });
 });

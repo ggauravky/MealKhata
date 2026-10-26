@@ -26,6 +26,8 @@ import {
   HostelDepositTransaction,
   HostelClearance,
 } from '../src/stays/stay.model.js';
+import { PaymentReclassification, UnallocatedCredit } from '../src/stays/paymentReclassification.model.js';
+import { PaymentReferenceClaim } from '../src/finance/paymentReference.model.js';
 
 export const MONITORED_MODELS = [
   MealDay,
@@ -51,6 +53,9 @@ export const MONITORED_MODELS = [
   HostelDepositAccount,
   HostelDepositTransaction,
   HostelClearance,
+  PaymentReclassification,
+  UnallocatedCredit,
+  PaymentReferenceClaim,
 ];
 
 function normalizeIndexKey(keyObj) {

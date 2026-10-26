@@ -883,6 +883,81 @@ export function createRoomFeeService({
       return { room, currentAssignment: selectedAssignment, proposedAssignment, conflicts };
     },
 
+    async previewActiveStayAssignmentRepair({
+      memberId,
+      roomId,
+      occupancyFromDate,
+      assignmentAction,
+      assignmentId = null,
+      session = null,
+    }) {
+      const actionMap = {
+        EXTEND_EXISTING_ASSIGNMENT: 'REOPEN_EXISTING',
+        LINK_VALID_ASSIGNMENT: 'LINK_EXISTING',
+        CREATE_NEW_ASSIGNMENT: 'CREATE_NEW',
+      };
+      const restoreAction = actionMap[assignmentAction];
+      if (!restoreAction) throw new HttpError(400, 'A valid assignmentAction is required.');
+
+      let effectiveOccupancyFromDate = occupancyFromDate;
+      if (assignmentAction === 'EXTEND_EXISTING_ASSIGNMENT') {
+        const selected = assignmentId
+          ? await repository.findAssignmentById(assignmentId, { session })
+          : null;
+        effectiveOccupancyFromDate = selected
+          ? selected.effectiveFromDate || `${selected.effectiveFromMonth}-01`
+          : occupancyFromDate;
+      }
+
+      const preview = await this.previewRestoreAssignment({
+        memberId,
+        roomId,
+        occupancyFromDate: effectiveOccupancyFromDate,
+        assignmentAction: restoreAction,
+        assignmentId,
+        session,
+      });
+      return {
+        ...preview,
+        assignmentAction,
+        effectiveOccupancyFromDate,
+      };
+    },
+
+    async repairActiveStayAssignment({
+      memberId,
+      roomId,
+      occupancyFromDate,
+      assignmentAction,
+      assignmentId = null,
+      actorRole,
+      session,
+    }) {
+      if (!session) throw new HttpError(503, 'Database transaction support is required.');
+      const preview = await this.previewActiveStayAssignmentRepair({
+        memberId,
+        roomId,
+        occupancyFromDate,
+        assignmentAction,
+        assignmentId,
+        session,
+      });
+      const actionMap = {
+        EXTEND_EXISTING_ASSIGNMENT: 'REOPEN_EXISTING',
+        LINK_VALID_ASSIGNMENT: 'LINK_EXISTING',
+        CREATE_NEW_ASSIGNMENT: 'CREATE_NEW',
+      };
+      return this.restoreAssignmentForResident({
+        memberId,
+        roomId,
+        occupancyFromDate: preview.effectiveOccupancyFromDate,
+        assignmentAction: actionMap[assignmentAction],
+        assignmentId,
+        actorRole,
+        session,
+      });
+    },
+
     async restoreAssignmentForResident({
       memberId,
       roomId,

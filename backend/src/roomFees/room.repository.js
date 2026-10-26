@@ -10,6 +10,7 @@ import { RoomFeeScheduleState } from './roomFeeScheduleState.model.js';
 import { ROOM_SETTINGS_KEY } from './roomFee.constants.js';
 import { selectAssignmentForDate, selectAssignmentForMonth } from './assignmentResolution.js';
 import { guardFinancialMutation } from '../finance/financialMutationGuard.js';
+import { claimExternalPaymentReference } from '../finance/paymentReference.service.js';
 
 export const roomRepository = {
   requiresTransactions: true,
@@ -364,6 +365,14 @@ export const roomRepository = {
             recordedByRole: actorRole,
             status: 'verified',
           };
+
+          await claimExternalPaymentReference({
+            reference,
+            ledger: 'ROOM_PAYMENT',
+            documentId: roomPaymentId,
+            memberId: targetMemberId,
+            session,
+          });
 
           const created = await RoomPayment.create([paymentData], { session });
           await session.commitTransaction();

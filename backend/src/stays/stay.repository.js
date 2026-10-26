@@ -3,6 +3,7 @@
  */
 
 import mongoose from 'mongoose';
+import { randomUUID } from 'node:crypto';
 import {
   HostelClearance,
   HostelDepositAccount,
@@ -12,6 +13,14 @@ import {
 import { CLEARANCE_VALIDITY_STATUSES, STAY_STATUSES } from './stay.constants.js';
 import { guardFinancialMutation } from '../finance/financialMutationGuard.js';
 import { runFinancialTransaction } from '../finance/financialTransaction.js';
+import { PaymentReclassification, UnallocatedCredit } from './paymentReclassification.model.js';
+import { RoomPayment } from '../roomFees/roomPayment.model.js';
+import { Payment } from '../payments/payment.model.js';
+import { ExpenseReimbursement } from '../expenses/expenseReimbursement.model.js';
+import {
+  claimExternalPaymentReference,
+  normalizeExternalPaymentReference,
+} from '../finance/paymentReference.service.js';
 
 export const stayRepository = {
   requiresTransactions: true,
@@ -181,11 +190,96 @@ export const stayRepository = {
     ).lean();
   },
 
+  async reconcileHistoricalStay(
+    stayId,
+    {
+      supersededByStayId,
+      reconciliationId,
+      reason,
+      actorRole,
+      expectedRevision,
+      reconciledAt,
+      revokedClearanceIds,
+    },
+    { session } = {},
+  ) {
+    const options = { returnDocument: 'after', runValidators: true };
+    if (session) options.session = session;
+    return HostelStay.findOneAndUpdate(
+      { stayId, status: STAY_STATUSES.CHECKED_OUT, revision: expectedRevision },
+      {
+        $set: {
+          status: STAY_STATUSES.SUPERSEDED,
+          supersededByStayId,
+          reconciliationId,
+          reconciledAt,
+          reconciledByRole: actorRole,
+          reconciliationReason: reason,
+        },
+        $push: {
+          history: {
+            event: 'HISTORICAL_STAY_RECONCILED',
+            timestamp: reconciledAt,
+            actorRole,
+            note: reason,
+            details: {
+              previousStatus: STAY_STATUSES.CHECKED_OUT,
+              supersededByStayId,
+              reconciliationId,
+              revokedClearanceIds,
+            },
+          },
+        },
+        $inc: { revision: 1 },
+      },
+      options,
+    ).lean();
+  },
+
+  async lockHistoricalReplacementStay(
+    stayId,
+    {
+      memberId,
+      expectedRevision,
+      historicalStayId,
+      reconciliationId,
+      reason,
+      actorRole,
+      reconciledAt,
+    },
+    { session } = {},
+  ) {
+    const options = { returnDocument: 'after', runValidators: true };
+    if (session) options.session = session;
+    return HostelStay.findOneAndUpdate(
+      {
+        stayId,
+        memberId,
+        status: STAY_STATUSES.ACTIVE,
+        revision: expectedRevision,
+      },
+      {
+        $inc: { revision: 1 },
+        $push: {
+          history: {
+            event: 'HISTORICAL_STAY_LINKED',
+            timestamp: reconciledAt,
+            actorRole,
+            note: reason,
+            details: { historicalStayId, reconciliationId },
+          },
+        },
+      },
+      options,
+    ).lean();
+  },
+
   async restoreStay(
     stayId,
     {
       joinedOn,
       roomId,
+      assignmentId,
       reason,
       actorRole,
       expectedRevision,
@@ -210,6 +304,7 @@ export const stayRepository = {
           status: STAY_STATUSES.ACTIVE,
           joinedOn,
           currentRoomId: roomId,
+          currentAssignmentId: assignmentId,
           actualLeftOn: null,
           checkoutRequestedAt: null,
           checkoutRequestedFor: null,
@@ -391,6 +486,313 @@ export const stayRepository = {
     return q.lean();
   },
 
+  async findPaymentReclassificationByIdempotencyKey(idempotencyKey, { session } = {}) {
+    const q = PaymentReclassification.findOne({ idempotencyKey });
+    if (session) q.session(session);
+    return q.lean();
+  },
+
+  async findPaymentReclassificationBySource(sourceDepositTransactionId, { session } = {}) {
+    const q = PaymentReclassification.findOne({ sourceDepositTransactionId });
+    if (session) q.session(session);
+    return q.lean();
+  },
+
+  async listPaymentReclassificationsByStayId(stayId, { session = null } = {}) {
+    const q = PaymentReclassification.find({ sourceStayId: stayId }).sort({ completedAt: -1 });
+    if (session) q.session(session);
+    return q.lean();
+  },
+
+  async listUnallocatedCreditsByStayId(stayId, { session = null } = {}) {
+    const journalsQuery = PaymentReclassification.find({ sourceStayId: stayId }).select({ reclassificationId: 1 });
+    if (session) journalsQuery.session(session);
+    const journals = await journalsQuery.lean();
+    if (journals.length === 0) return [];
+    const q = UnallocatedCredit.find({
+      reclassificationId: { $in: journals.map((journal) => journal.reclassificationId) },
+    }).sort({ createdAt: -1 });
+    if (session) q.session(session);
+    return q.lean();
+  },
+
+  async findDuplicatePaymentReference({ reference, sourceDepositTransactionId }, { session } = {}) {
+    const normalizedReference = normalizeExternalPaymentReference(reference);
+    if (!normalizedReference) return null;
+    const exactReference = new RegExp(
+      `^${normalizedReference.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ /g, '\\s+')}$`,
+      'i',
+    );
+    const queryOptions = session ? { session } : {};
+    const deposit = await HostelDepositTransaction.findOne({
+      depositTransactionId: { $ne: sourceDepositTransactionId },
+      reference: exactReference,
+      status: { $in: ['recorded', 'reclassified'] },
+    }, null, queryOptions).lean();
+    if (deposit) return { collection: 'hostel_deposit_transactions', documentId: deposit.depositTransactionId };
+    const room = await RoomPayment.findOne({ reference: exactReference, status: 'verified' }, null, queryOptions).lean();
+    if (room) return { collection: 'room_payments', documentId: room.roomPaymentId };
+    const mess = await Payment.findOne({ upiReference: exactReference, status: 'recorded' }, null, queryOptions).lean();
+    if (mess) return { collection: 'payments', documentId: mess.paymentId };
+    const reimbursement = await ExpenseReimbursement.findOne({
+      reference: exactReference,
+      status: 'recorded',
+    }, null, queryOptions).lean();
+    if (reimbursement) {
+      return { collection: 'expense_reimbursements', documentId: reimbursement.reimbursementId };
+    }
+    const credit = await UnallocatedCredit.findOne({ reference: exactReference }, null, queryOptions).lean();
+    if (credit) return { collection: 'unallocated_credits', documentId: credit.creditId };
+    return null;
+  },
+
+  async executeAtomicPaymentReclassification({
+    stayId,
+    sourceDepositTransactionId,
+    expectedAccountRevision,
+    allocations,
+    reason,
+    idempotencyKey,
+    requestFingerprint,
+    actorRole,
+  }) {
+    try {
+      return await runFinancialTransaction(async (session) => {
+        const existing = await PaymentReclassification.findOne({ idempotencyKey }).session(session);
+        if (existing) {
+          if (existing.requestFingerprint !== requestFingerprint) {
+            const error = new Error('Reclassification idempotency key was reused with a different payload.');
+            error.statusCode = 409;
+            throw error;
+          }
+          const credits = await UnallocatedCredit.find({
+            reclassificationId: existing.reclassificationId,
+          }).session(session).lean();
+          return { reclassificationId: existing.reclassificationId, journal: existing.toObject(), credits };
+        }
+
+        const source = await HostelDepositTransaction.findOne({ depositTransactionId: sourceDepositTransactionId }).session(session);
+        if (!source || source.stayId !== stayId) {
+          const error = new Error('Source deposit receipt was not found for this Stay.');
+          error.statusCode = 404;
+          throw error;
+        }
+        if (source.status !== 'recorded' || source.type !== 'RECEIVED') {
+          const error = new Error('Source receipt is not an active deposit receipt or was already reconciled.');
+          error.statusCode = 409;
+          error.details = { code: 'SOURCE_RECEIPT_NOT_ACTIVE' };
+          throw error;
+        }
+
+        const account = await HostelDepositAccount.findOne({ depositAccountId: source.depositAccountId }).session(session);
+        if (!account || account.stayId !== stayId || account.revision !== expectedAccountRevision) {
+          const error = new Error('Deposit account changed after preview. Refresh and retry.');
+          error.statusCode = 409;
+          error.details = { code: 'DEPOSIT_REVISION_CONFLICT' };
+          throw error;
+        }
+        await guardFinancialMutation({ stayId, actorRole, session });
+
+        if (!Array.isArray(allocations) || allocations.length === 0) {
+          const error = new Error('At least one exact allocation is required.');
+          error.statusCode = 400;
+          error.details = { code: 'INVALID_ALLOCATIONS' };
+          throw error;
+        }
+        let allocatedAmountPaise = 0;
+        for (const allocation of allocations) {
+          if (allocation?.category !== 'UNALLOCATED_CREDIT') {
+            const error = new Error('The requested destination category is not supported.');
+            error.statusCode = 409;
+            error.details = { code: 'UNSUPPORTED_DESTINATION', category: allocation?.category || null };
+            throw error;
+          }
+          if (allocation.memberId !== source.memberId) {
+            const error = new Error('Allocation member must match the transactionally loaded source receipt.');
+            error.statusCode = 409;
+            error.details = { code: 'MEMBER_MISMATCH' };
+            throw error;
+          }
+          if (typeof allocation.targetAccount !== 'string' || !allocation.targetAccount.trim() || allocation.targetAccount.trim().length > 120) {
+            const error = new Error('A recognized target account label is required.');
+            error.statusCode = 400;
+            error.details = { code: 'TARGET_ACCOUNT_REQUIRED' };
+            throw error;
+          }
+          if (!Number.isSafeInteger(allocation.amountPaise) || allocation.amountPaise <= 0) {
+            const error = new Error('Every allocation must be positive integer paise.');
+            error.statusCode = 400;
+            error.details = { code: 'INVALID_ALLOCATION_AMOUNT' };
+            throw error;
+          }
+          allocatedAmountPaise += allocation.amountPaise;
+          if (!Number.isSafeInteger(allocatedAmountPaise)) {
+            const error = new Error('Allocation total exceeds the supported money range.');
+            error.statusCode = 400;
+            error.details = { code: 'INVALID_ALLOCATION_AMOUNT' };
+            throw error;
+          }
+        }
+        if (allocatedAmountPaise !== source.amountPaise) {
+          const error = new Error('Allocations must equal the transactionally loaded source receipt exactly.');
+          error.statusCode = 409;
+          error.details = {
+            code: 'MONEY_CONSERVATION_FAILED',
+            sourceAmountPaise: source.amountPaise,
+            allocatedAmountPaise,
+          };
+          throw error;
+        }
+
+        const activeTransactions = await HostelDepositTransaction.find({ stayId, status: 'recorded' }).session(session);
+        const totals = activeTransactions.reduce((sum, transaction) => {
+          if (transaction.type === 'RECEIVED') sum.received += transaction.amountPaise;
+          if (transaction.type === 'REFUNDED') sum.refunded += transaction.amountPaise;
+          if (transaction.type === 'DEDUCTED') sum.deducted += transaction.amountPaise;
+          return sum;
+        }, { received: 0, refunded: 0, deducted: 0 });
+        const heldPaise = totals.received - totals.refunded - totals.deducted;
+        if (totals.refunded > 0 || totals.deducted > 0 || heldPaise < source.amountPaise) {
+          const error = new Error('The deposit ledger contains a refund or deduction, so this receipt cannot be safely isolated for reclassification.');
+          error.statusCode = 409;
+          error.details = { code: 'SOURCE_FUNDS_ALREADY_DISPOSED', heldPaise, sourceAmountPaise: source.amountPaise };
+          throw error;
+        }
+
+        await claimExternalPaymentReference({
+          reference: source.reference,
+          ledger: 'HOSTEL_DEPOSIT',
+          documentId: source.depositTransactionId,
+          memberId: source.memberId,
+          session,
+        });
+        const duplicate = await this.findDuplicatePaymentReference({
+          reference: source.reference,
+          memberId: source.memberId,
+          sourceDepositTransactionId,
+        }, { session });
+        if (duplicate) {
+          const error = new Error('The source payment reference already exists in another active ledger.');
+          error.statusCode = 409;
+          error.details = { code: 'DUPLICATE_PAYMENT_REFERENCE', duplicate };
+          throw error;
+        }
+
+        const reclassificationId = randomUUID();
+        const completedAt = new Date();
+        const destinationAllocations = allocations.map((allocation) => {
+          const allocationId = randomUUID();
+          return {
+            ...allocation,
+            allocationId,
+            destinationRecordId: randomUUID(),
+          };
+        });
+        const [journal] = await PaymentReclassification.create([{
+          reclassificationId,
+          sourceDepositTransactionId,
+          sourceDepositAccountId: source.depositAccountId,
+          sourceStayId: stayId,
+          memberId: source.memberId,
+          amountPaise: source.amountPaise,
+          paymentDate: source.recordedAt,
+          paymentMethod: source.method,
+          reference: source.reference || null,
+          allocations: destinationAllocations,
+          reason,
+          idempotencyKey,
+          requestFingerprint,
+          completedAt,
+          completedByRole: actorRole,
+        }], { session });
+
+        const creditDocuments = destinationAllocations.map((allocation) => ({
+          creditId: allocation.destinationRecordId,
+          reclassificationId,
+          allocationId: allocation.allocationId,
+          sourceDepositTransactionId,
+          memberId: allocation.memberId,
+          targetAccount: allocation.targetAccount,
+          amountPaise: allocation.amountPaise,
+          remainingAmountPaise: allocation.amountPaise,
+          paymentDate: source.recordedAt,
+          paymentMethod: source.method,
+          reference: source.reference || null,
+          status: 'OPEN',
+          history: [{
+            event: 'CREDIT_CREATED_FROM_RECLASSIFICATION',
+            timestamp: completedAt,
+            actorRole,
+            note: reason,
+          }],
+        }));
+        const credits = await UnallocatedCredit.insertMany(creditDocuments, { session });
+
+        source.status = 'reclassified';
+        source.reclassificationId = reclassificationId;
+        source.reclassifiedAt = completedAt;
+        source.reclassifiedByRole = actorRole;
+        source.reclassificationReason = reason;
+        await source.save({ session });
+
+        const otherActiveTransactions = activeTransactions.filter(
+          (transaction) => transaction.depositTransactionId !== sourceDepositTransactionId,
+        );
+        const previousStatus = account.status;
+        if (account.expectedDepositPaise === 0 && otherActiveTransactions.length === 0) {
+          account.status = 'NOT_REQUIRED';
+        }
+        account.revision += 1;
+        account.history.push({
+          event: 'PAYMENT_RECLASSIFIED_FROM_DEPOSIT',
+          timestamp: completedAt,
+          actorRole,
+          note: reason,
+          details: {
+            reclassificationId,
+            sourceDepositTransactionId,
+            amountPaise: source.amountPaise,
+            previousStatus,
+            status: account.status,
+          },
+        });
+        await account.save({ session });
+
+        await HostelClearance.updateMany(
+          { stayId, validityStatus: { $in: [null, CLEARANCE_VALIDITY_STATUSES.ACTIVE] } },
+          {
+            $set: {
+              validityStatus: CLEARANCE_VALIDITY_STATUSES.REVOKED,
+              revokedAt: completedAt,
+              revokedByRole: actorRole,
+              revocationReason: reason,
+              reconciliationId: reclassificationId,
+            },
+          },
+          { session },
+        );
+
+        return {
+          reclassificationId,
+          journal: journal.toObject(),
+          credits: credits.map((credit) => credit.toObject()),
+          depositAccount: account.toObject(),
+        };
+      }, { retryOnDuplicateKey: true });
+    } catch (error) {
+      if (error.code === 11000) {
+        const isReferenceConflict = Boolean(error.keyPattern?.normalizedReference || error.keyValue?.normalizedReference);
+        const conflict = new Error(isReferenceConflict
+          ? 'This external payment reference is already claimed by another ledger record.'
+          : 'This source receipt has already been reclassified.');
+        conflict.statusCode = 409;
+        conflict.details = { code: isReferenceConflict ? 'DUPLICATE_PAYMENT_REFERENCE' : 'SOURCE_ALREADY_RECLASSIFIED' };
+        throw conflict;
+      }
+      throw error;
+    }
+  },
+
   async voidDepositTransaction(depositTransactionId, { voidReason, voidedByRole, voidedAt = new Date() }, { session } = {}) {
     const options = { returnDocument: 'after' };
     if (session) options.session = session;
@@ -481,6 +883,14 @@ export const stayRepository = {
         throw err;
       }
 
+      await claimExternalPaymentReference({
+        reference: transactionData.reference,
+        ledger: 'HOSTEL_DEPOSIT',
+        documentId: transactionData.depositTransactionId,
+        memberId: transactionData.memberId,
+        session,
+      });
+
       account.revision += 1;
       account.history.push({
         event: `DEPOSIT_${type}`,
@@ -521,9 +931,10 @@ export const stayRepository = {
           throw err;
         }
 
-        if (tx.status === 'voided') {
-          const err = new Error('Deposit transaction is already voided.');
-          err.statusCode = 400;
+        if (tx.status !== 'recorded') {
+          const err = new Error('Only an active recorded deposit transaction can be voided.');
+          err.statusCode = 409;
+          err.details = { code: 'DEPOSIT_TRANSACTION_NOT_ACTIVE', status: tx.status };
           throw err;
         }
 
@@ -623,7 +1034,7 @@ export const stayRepository = {
 
   async revokeActiveClearances(
     stayId,
-    { reason, actorRole, revokedAt, restorationId },
+    { reason, actorRole, revokedAt, restorationId = null, reconciliationId = null },
     { session } = {},
   ) {
     const filter = {
@@ -644,6 +1055,7 @@ export const stayRepository = {
           revokedByRole: actorRole,
           revocationReason: reason,
           restorationId,
+          reconciliationId,
         },
       },
       session ? { session } : {},

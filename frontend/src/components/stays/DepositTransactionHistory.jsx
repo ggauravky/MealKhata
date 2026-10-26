@@ -32,6 +32,8 @@ const TYPE_CONFIG = {
 
 export function DepositTransactionHistory({
   transactions = [],
+  reclassifications = [],
+  unallocatedCredits = [],
   isSuperAdmin = false,
   onVoidTransaction = null,
 }) {
@@ -85,7 +87,10 @@ export function DepositTransactionHistory({
                 </TableHeader>
                 <TableBody className="text-xs divide-y divide-slate-100 dark:divide-slate-800">
                   {transactions.map((tx) => {
-                    const isVoid = tx.status === 'VOIDED';
+                    const normalizedStatus = String(tx.status || '').toLowerCase();
+                    const isVoid = normalizedStatus === 'voided';
+                    const isReclassified = normalizedStatus === 'reclassified';
+                    const isActive = normalizedStatus === 'recorded';
                     const typeCfg = TYPE_CONFIG[tx.type] || {
                       label: tx.type,
                       className: 'text-slate-600 bg-slate-50',
@@ -126,6 +131,10 @@ export function DepositTransactionHistory({
                             <span className="text-[11px] font-medium text-red-600 dark:text-red-400">
                               Voided
                             </span>
+                          ) : isReclassified ? (
+                            <span className="text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                              Reclassified
+                            </span>
                           ) : (
                             <span className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
                               Valid
@@ -134,7 +143,7 @@ export function DepositTransactionHistory({
                         </TableCell>
                         {isSuperAdmin && onVoidTransaction && (
                           <TableCell className="text-right">
-                            {!isVoid && (
+                            {isActive && (
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -160,6 +169,40 @@ export function DepositTransactionHistory({
           )}
         </CardContent>
       </Card>
+
+      {(reclassifications.length > 0 || unallocatedCredits.length > 0) && (
+        <Card className="border-amber-200 dark:border-amber-900">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2 text-slate-900 dark:text-slate-100">
+              <History className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+              Payment Reclassification Audit
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-xs">
+            {reclassifications.map((journal) => (
+              <div key={journal.reclassificationId} className="rounded-md border border-slate-200 dark:border-slate-800 p-3">
+                <div className="font-semibold text-slate-900 dark:text-slate-100">
+                  {formatPaise(journal.amountPaise)} reclassified to unallocated credit
+                </div>
+                <div className="mt-1 text-slate-500 dark:text-slate-400 font-mono break-all">
+                  Reconciliation {journal.reclassificationId} · Source {journal.sourceDepositTransactionId}
+                </div>
+                <div className="mt-1 text-slate-600 dark:text-slate-300">{journal.reason}</div>
+              </div>
+            ))}
+            {unallocatedCredits.map((credit) => (
+              <div key={credit.creditId} className="rounded-md bg-amber-50 dark:bg-amber-950/30 p-3">
+                <div className="font-semibold text-amber-800 dark:text-amber-200">
+                  Unallocated credit: {formatPaise(credit.remainingAmountPaise)} remaining
+                </div>
+                <div className="mt-1 text-amber-700/80 dark:text-amber-300/80">
+                  {credit.targetAccount} · {credit.status} · Credit {credit.creditId}
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Super Admin Void Confirmation Dialog */}
       <Dialog open={Boolean(voidTarget)} onOpenChange={(open) => !open && setVoidTarget(null)}>

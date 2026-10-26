@@ -26,7 +26,7 @@ export function parseMyStayResponse(payload) {
 export function getMyStayLifecycleState({ stay = null, currentAssignment = null } = {}) {
   if (!stay) return currentAssignment ? 'assignment_only' : 'empty';
   if (stay.status === 'CHECKOUT_REQUESTED' || stay.status === 'CHECKOUT_PENDING') return 'pending_checkout';
-  if (stay.status === 'CHECKED_OUT') return 'completed';
+  if (stay.status === 'CHECKED_OUT' || stay.status === 'SUPERSEDED') return 'completed';
   if (stay.status === 'CANCELLED') return currentAssignment ? 'assignment_only' : 'empty';
   return 'active';
 }
@@ -44,6 +44,8 @@ export function mapDepositSummary(payload) {
     depositRefundedPaise: summary.refundedPaise ?? 0,
     depositHeldPaise: summary.heldPaise ?? 0,
     transactions: asArray(deposit.transactions),
+    reclassifications: asArray(deposit.reclassifications),
+    unallocatedCredits: asArray(deposit.unallocatedCredits),
   };
 }
 

@@ -447,6 +447,80 @@ export function createStayRouter({
     }
   });
 
+  router.post('/:stayId/room-repair-preview', requireSuperAdmin, assertStayAccess, async (req, res, next) => {
+    try {
+      const preview = await service.previewRoomAssignmentRepair({
+        stayId: req.stay.stayId,
+        roomId: req.body?.roomId,
+        occupancyFromDate: req.body?.occupancyFromDate || null,
+        assignmentAction: req.body?.assignmentAction,
+        assignmentId: req.body?.assignmentId || null,
+        expectedRevision: req.body?.expectedRevision,
+        reason: req.body?.reason,
+        actorRole: req.auth.role,
+      });
+      return res.json({ success: true, data: preview });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post('/:stayId/room-repair', requireSuperAdmin, assertStayAccess, async (req, res, next) => {
+    try {
+      const repaired = await service.repairRoomAssignment({
+        stayId: req.stay.stayId,
+        roomId: req.body?.roomId,
+        occupancyFromDate: req.body?.occupancyFromDate || null,
+        assignmentAction: req.body?.assignmentAction,
+        assignmentId: req.body?.assignmentId || null,
+        expectedRevision: req.body?.expectedRevision,
+        reason: req.body?.reason,
+        previewToken: req.body?.previewToken,
+        actorRole: req.auth.role,
+      });
+      notifyStayChange();
+      notifyAccommodationChange({ memberId: req.stay.memberId });
+      return res.json({ success: true, data: repaired });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post('/:stayId/historical-reconciliation-preview', requireSuperAdmin, assertStayAccess, async (req, res, next) => {
+    try {
+      const preview = await service.previewHistoricalStayReconciliation({
+        stayId: req.stay.stayId,
+        supersededByStayId: req.body?.supersededByStayId,
+        expectedRevision: req.body?.expectedRevision,
+        reason: req.body?.reason,
+        confirmFinancialAttribution: req.body?.confirmFinancialAttribution === true,
+        actorRole: req.auth.role,
+      });
+      return res.json({ success: true, data: preview });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post('/:stayId/historical-reconcile', requireSuperAdmin, assertStayAccess, async (req, res, next) => {
+    try {
+      const reconciled = await service.reconcileHistoricalStay({
+        stayId: req.stay.stayId,
+        supersededByStayId: req.body?.supersededByStayId,
+        expectedRevision: req.body?.expectedRevision,
+        reason: req.body?.reason,
+        confirmFinancialAttribution: req.body?.confirmFinancialAttribution === true,
+        previewToken: req.body?.previewToken,
+        actorRole: req.auth.role,
+      });
+      notifyStayChange();
+      notifyClearanceChange();
+      return res.json({ success: true, data: reconciled });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   router.post('/:stayId/cancel', requireSuperAdmin, assertStayAccess, async (req, res, next) => {
     try {
       const cancelled = await service.cancelIncorrectStay({
@@ -601,6 +675,43 @@ export function createStayRouter({
       });
       notifyDepositChange();
       return res.json({ success: true, data: configured });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post('/:stayId/deposit/reclassification-preview', requireSuperAdmin, assertStayAccess, async (req, res, next) => {
+    try {
+      const preview = await deposits.previewPaymentReclassification({
+        stayId: req.stay.stayId,
+        sourceDepositTransactionId: req.body?.sourceDepositTransactionId,
+        expectedAccountRevision: req.body?.expectedAccountRevision,
+        allocations: req.body?.allocations,
+        reason: req.body?.reason,
+        idempotencyKey: req.body?.idempotencyKey,
+        actorRole: req.auth.role,
+      });
+      return res.json({ success: true, data: preview });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post('/:stayId/deposit/reclassify', requireSuperAdmin, assertStayAccess, async (req, res, next) => {
+    try {
+      const result = await deposits.reclassifyPayment({
+        stayId: req.stay.stayId,
+        sourceDepositTransactionId: req.body?.sourceDepositTransactionId,
+        expectedAccountRevision: req.body?.expectedAccountRevision,
+        allocations: req.body?.allocations,
+        reason: req.body?.reason,
+        idempotencyKey: req.body?.idempotencyKey,
+        previewToken: req.body?.previewToken,
+        actorRole: req.auth.role,
+      });
+      notifyDepositChange();
+      notifyClearanceChange();
+      return res.json({ success: true, data: result });
     } catch (error) {
       return next(error);
     }

@@ -1,6 +1,7 @@
 import { Payment } from './payment.model.js';
 import { guardFinancialMutation } from '../finance/financialMutationGuard.js';
 import { runFinancialTransaction } from '../finance/financialTransaction.js';
+import { claimExternalPaymentReference } from '../finance/paymentReference.service.js';
 
 function toPlainObject(document) {
   return document?.toObject ? document.toObject() : document;
@@ -54,6 +55,13 @@ export const paymentRepository = Object.freeze({
         memberId: payment.memberId,
         effectiveMonth: payment.month,
         actorRole: payment.recordedByRole,
+        session,
+      });
+      await claimExternalPaymentReference({
+        reference: payment.upiReference,
+        ledger: 'MESS_PAYMENT',
+        documentId: payment.paymentId,
+        memberId: payment.memberId,
         session,
       });
       const [document] = await Payment.create([payment], { session });

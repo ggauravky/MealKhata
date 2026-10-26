@@ -181,6 +181,8 @@ describe('member lifecycle frontend contracts', () => {
       depositRefundedPaise: 5000,
       depositHeldPaise: 85000,
       transactions: [{ depositTransactionId: 'dep-1' }],
+      reclassifications: [],
+      unallocatedCredits: [],
     });
   });
 

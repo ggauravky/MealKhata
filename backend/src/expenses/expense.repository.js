@@ -3,6 +3,7 @@ import { Expense } from './expense.model.js';
 import { ExpenseReimbursement } from './expenseReimbursement.model.js';
 import { guardFinancialMutation } from '../finance/financialMutationGuard.js';
 import { runFinancialTransaction } from '../finance/financialTransaction.js';
+import { claimExternalPaymentReference } from '../finance/paymentReference.service.js';
 
 function expenseMemberIds(expense) {
   return [
@@ -223,6 +224,14 @@ export class ExpenseRepository {
             err.statusCode = 409;
             throw err;
           }
+
+          await claimExternalPaymentReference({
+            reference: reimbursementData.reference,
+            ledger: 'EXPENSE_REIMBURSEMENT',
+            documentId: reimbursementData.reimbursementId,
+            memberId: fromMemberId,
+            session,
+          });
 
           const created = await ExpenseReimbursement.create([reimbursementData], { session });
           await session.commitTransaction();

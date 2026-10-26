@@ -219,6 +219,9 @@ export function createPaymentService({
         }
       } catch (error) {
         if (error instanceof HttpError) throw error;
+        if (error?.statusCode) {
+          throw new HttpError(error.statusCode, error.message, error.details || {});
+        }
         throw new HttpError(503, 'Unable to record the payment. Please try again.', { cause: error });
       }
     },

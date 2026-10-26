@@ -84,6 +84,89 @@ describe('resident repair administration routes', () => {
     assert.equal(calls[1][1].previewToken, 'a'.repeat(64));
   });
 
+  test('targeted room, historical, and payment correction routes require Super Admin and forward preview tokens', async () => {
+    const calls = [];
+    const stay = { stayId: 'stay-1', memberId: 'gaurav', revision: 3 };
+    const service = {
+      getStayById: async () => stay,
+      previewRoomAssignmentRepair: async (payload) => {
+        calls.push(['room-preview', payload]);
+        return { previewToken: 'c'.repeat(64), canApply: true };
+      },
+      repairRoomAssignment: async (payload) => {
+        calls.push(['room-apply', payload]);
+        return { stay };
+      },
+      previewHistoricalStayReconciliation: async (payload) => {
+        calls.push(['history-preview', payload]);
+        return { previewToken: 'd'.repeat(64), canApply: true };
+      },
+      reconcileHistoricalStay: async (payload) => {
+        calls.push(['history-apply', payload]);
+        return { stay: { ...stay, status: 'SUPERSEDED' } };
+      },
+    };
+    const deposits = {
+      previewPaymentReclassification: async (payload) => {
+        calls.push(['payment-preview', payload]);
+        return { previewToken: 'e'.repeat(64), canApply: true };
+      },
+      reclassifyPayment: async (payload) => {
+        calls.push(['payment-apply', payload]);
+        return { reclassificationId: 'reclass-1' };
+      },
+    };
+    const app = createApp({
+      stays: createStayRouter({
+        service,
+        deposits,
+        broadcastStay: () => {},
+        broadcastDeposit: () => {},
+        broadcastClearance: () => {},
+        broadcastRoomFees: () => {},
+      }),
+    });
+    const headers = async (role) => ({ Origin: ORIGIN, Cookie: await cookieFor(role) });
+    const roomPayload = {
+      roomId: 'room-lower',
+      assignmentAction: 'EXTEND_EXISTING_ASSIGNMENT',
+      assignmentId: 'assignment-2',
+      expectedRevision: 3,
+      reason: 'Verified continuous occupancy',
+    };
+    await request(app).post('/api/stays/stay-1/room-repair-preview').set(await headers(ROLES.ADMIN)).send(roomPayload).expect(403);
+    await request(app).post('/api/stays/stay-1/room-repair-preview').set(await headers(ROLES.SUPERADMIN)).send(roomPayload).expect(200);
+    await request(app).post('/api/stays/stay-1/room-repair').set(await headers(ROLES.SUPERADMIN)).send({ ...roomPayload, previewToken: 'c'.repeat(64) }).expect(200);
+
+    const historyPayload = {
+      supersededByStayId: 'stay-active',
+      expectedRevision: 3,
+      reason: 'Incorrect checkout superseded by continuous active Stay',
+    };
+    await request(app).post('/api/stays/stay-1/historical-reconciliation-preview').set(await headers(ROLES.SUPERADMIN)).send(historyPayload).expect(200);
+    await request(app).post('/api/stays/stay-1/historical-reconcile').set(await headers(ROLES.SUPERADMIN)).send({ ...historyPayload, previewToken: 'd'.repeat(64) }).expect(200);
+
+    const paymentPayload = {
+      sourceDepositTransactionId: 'receipt-1',
+      expectedAccountRevision: 0,
+      allocations: [{ category: 'UNALLOCATED_CREDIT', memberId: 'gaurav', targetAccount: 'PENDING_CLASSIFICATION', amountPaise: 4_800_000 }],
+      reason: 'Real receipt pending verified classification',
+      idempotencyKey: 'idempotency-1',
+    };
+    await request(app).post('/api/stays/stay-1/deposit/reclassification-preview').set(await headers(ROLES.SUPERADMIN)).send(paymentPayload).expect(200);
+    await request(app).post('/api/stays/stay-1/deposit/reclassify').set(await headers(ROLES.SUPERADMIN)).send({ ...paymentPayload, previewToken: 'e'.repeat(64) }).expect(200);
+
+    assert.deepEqual(calls.map(([name]) => name), [
+      'room-preview',
+      'room-apply',
+      'history-preview',
+      'history-apply',
+      'payment-preview',
+      'payment-apply',
+    ]);
+    assert.ok(calls.every(([, payload]) => payload.actorRole === ROLES.SUPERADMIN));
+  });
+
   test('Fee Plan reconciliation preview and confirm are Super Admin only', async () => {
     const calls = [];
     const service = {

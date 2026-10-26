@@ -31,6 +31,7 @@ import { Payment } from '../src/payments/payment.model.js';
 import { UserAccount } from '../src/auth/userAccount.model.js';
 import { MemberAccount } from '../src/auth/memberAccount.model.js';
 import { MemberAccountAudit } from '../src/members/memberAccountAudit.model.js';
+import { PaymentReclassification, UnallocatedCredit } from '../src/stays/paymentReclassification.model.js';
 
 import { createStayService, stayService } from '../src/stays/stay.service.js';
 import { defaultStayAttributionService } from '../src/stays/stayAttribution.service.js';
@@ -190,6 +191,8 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
       UserAccount.init(),
       MemberAccount.init(),
       MemberAccountAudit.init(),
+      PaymentReclassification.init(),
+      UnallocatedCredit.init(),
     ]);
   });
 
@@ -1234,6 +1237,804 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
       const restorationEvent = persistedStay.history.find((entry) => entry.event === 'RESIDENT_RESTORED');
       assert.equal(restorationEvent.details.previousActualLeftOn, '2026-10-20');
       assert.equal(restorationEvent.details.revokedClearanceIds[0], checkout.clearance.clearanceId);
+    });
+  });
+
+  describe('Current active residence repair', () => {
+    async function createActualShapedActiveRepairFixture({ includeOtherResidents = true } = {}) {
+      const room = await ensureRoom('lower-repair', 1);
+      const firstAssignmentId = randomUUID();
+      const currentAssignmentId = randomUUID();
+      await RoomAssignment.insertMany([
+        {
+          assignmentId: firstAssignmentId,
+          roomId: room.roomId,
+          memberId: 'gaurav',
+          effectiveFromMonth: '2026-10',
+          effectiveFromDate: '2026-10-01',
+          effectiveUntilMonth: '2026-10',
+          effectiveUntilDate: '2026-10-19',
+          assignedAt: new Date('2026-10-01T00:00:00.000Z'),
+          assignedByRole: 'superadmin',
+        },
+        {
+          assignmentId: currentAssignmentId,
+          roomId: room.roomId,
+          memberId: 'gaurav',
+          effectiveFromMonth: '2026-10',
+          effectiveFromDate: '2026-10-20',
+          effectiveUntilMonth: '2026-10',
+          effectiveUntilDate: '2026-10-21',
+          assignedAt: new Date('2026-10-20T00:00:00.000Z'),
+          assignedByRole: 'superadmin',
+        },
+      ]);
+      const stay = await HostelStay.create({
+        stayId: randomUUID(),
+        memberId: 'gaurav',
+        joinedOn: '2026-10-01',
+        status: 'ACTIVE',
+        initialRoomId: room.roomId,
+        currentRoomId: room.roomId,
+        admissionAssignmentId: firstAssignmentId,
+        admissionAssignmentOwned: false,
+        revision: 0,
+        financialRevision: 2,
+      });
+      const feePlanId = randomUUID();
+      const chargeId = randomUUID();
+      const roomPaymentId = randomUUID();
+      await RoomFeePlan.create({
+        feePlanId,
+        memberId: 'gaurav',
+        amountPaise: 480_000,
+        effectiveFromMonth: '2026-10',
+        effectiveUntilMonth: null,
+        dueDay: 5,
+        reason: 'Verified current fee plan',
+        createdByRole: 'superadmin',
+      });
+      await RoomCharge.create({
+        chargeId,
+        memberId: 'gaurav',
+        roomId: room.roomId,
+        roomNumber: room.roomNumber,
+        month: '2026-10',
+        feePlanId,
+        baseAmountPaise: 480_000,
+        dueDate: '2026-10-05',
+        status: 'issued',
+        issuedAt: new Date('2026-10-01T00:00:00.000Z'),
+        issuedByRole: 'superadmin',
+      });
+      await RoomPayment.create({
+        roomPaymentId,
+        chargeId,
+        memberId: 'gaurav',
+        month: '2026-10',
+        amountPaise: 480_000,
+        method: 'upi',
+        recipientSnapshot: {
+          recipientMode: 'admin_collector',
+          recipientName: 'MealKhata',
+        },
+        idempotencyKey: randomUUID(),
+        status: 'verified',
+        recordedAt: new Date('2026-10-05T00:00:00.000Z'),
+        recordedByRole: 'superadmin',
+      });
+
+      const protectedResidentIds = [];
+      if (includeOtherResidents) {
+        for (const memberId of ['nikhil', 'devansh']) {
+          const protectedRoom = await ensureRoom(`${memberId}-repair`, 1);
+          const assignmentId = randomUUID();
+          const protectedStayId = randomUUID();
+          await RoomAssignment.create({
+            assignmentId,
+            roomId: protectedRoom.roomId,
+            memberId,
+            effectiveFromMonth: '2026-10',
+            effectiveFromDate: '2026-10-01',
+            effectiveUntilMonth: null,
+            effectiveUntilDate: null,
+            assignedAt: new Date('2026-10-01T00:00:00.000Z'),
+            assignedByRole: 'superadmin',
+          });
+          await HostelStay.create({
+            stayId: protectedStayId,
+            memberId,
+            joinedOn: '2026-10-01',
+            status: 'ACTIVE',
+            initialRoomId: protectedRoom.roomId,
+            currentRoomId: protectedRoom.roomId,
+            admissionAssignmentId: assignmentId,
+            currentAssignmentId: assignmentId,
+            revision: 0,
+            financialRevision: 0,
+          });
+          protectedResidentIds.push({ memberId, assignmentId, stayId: protectedStayId, roomId: protectedRoom.roomId });
+        }
+      }
+      return {
+        room,
+        stay: stay.toObject(),
+        firstAssignmentId,
+        currentAssignmentId,
+        feePlanId,
+        chargeId,
+        roomPaymentId,
+        protectedResidentIds,
+      };
+    }
+
+    it('extends the later historical assignment without rewriting its original start or creating another Stay', async () => {
+      const fixture = await createActualShapedActiveRepairFixture();
+      const request = {
+        stayId: fixture.stay.stayId,
+        roomId: fixture.room.roomId,
+        assignmentAction: 'EXTEND_EXISTING_ASSIGNMENT',
+        assignmentId: fixture.currentAssignmentId,
+        expectedRevision: fixture.stay.revision,
+        reason: 'Verified continuous occupancy in Room lower',
+        actorRole: 'superadmin',
+      };
+
+      const preview = await stayService.previewRoomAssignmentRepair(request);
+      assert.equal(preview.canApply, true);
+      assert.equal(preview.proposedAssignment.effectiveFromDate, '2026-10-20');
+      assert.equal(preview.proposedAssignment.effectiveUntilDate, null);
+
+      const result = await stayService.repairRoomAssignment({
+        ...request,
+        previewToken: preview.previewToken,
+      });
+
+      assert.equal(result.stay.stayId, fixture.stay.stayId);
+      assert.equal(result.stay.joinedOn, '2026-10-01');
+      assert.equal(result.stay.currentAssignmentId, fixture.currentAssignmentId);
+      assert.equal(await HostelStay.countDocuments({ memberId: 'gaurav' }), 1);
+      assert.equal(await RoomAssignment.countDocuments({ memberId: 'gaurav' }), 2);
+      assert.equal(await RoomCharge.countDocuments({ chargeId: fixture.chargeId, baseAmountPaise: 480_000 }), 1);
+      assert.equal(await RoomPayment.countDocuments({ roomPaymentId: fixture.roomPaymentId, amountPaise: 480_000 }), 1);
+      assert.equal(await RoomFeePlan.countDocuments({ feePlanId: fixture.feePlanId, amountPaise: 480_000 }), 1);
+
+      const first = await RoomAssignment.findOne({ assignmentId: fixture.firstAssignmentId }).lean();
+      const repaired = await RoomAssignment.findOne({ assignmentId: fixture.currentAssignmentId }).lean();
+      assert.equal(first.effectiveUntilDate, '2026-10-19');
+      assert.equal(repaired.effectiveFromDate, '2026-10-20');
+      assert.equal(repaired.effectiveUntilDate, null);
+      assert.equal(result.stay.history.at(-1).event, 'ROOM_ASSIGNMENT_REPAIRED');
+      for (const protectedResident of fixture.protectedResidentIds) {
+        const protectedStay = await HostelStay.findOne({ stayId: protectedResident.stayId }).lean();
+        const protectedAssignment = await RoomAssignment.findOne({ assignmentId: protectedResident.assignmentId }).lean();
+        assert.equal(protectedStay.status, 'ACTIVE');
+        assert.equal(protectedStay.currentRoomId, protectedResident.roomId);
+        assert.equal(protectedStay.revision, 0);
+        assert.equal(protectedAssignment.effectiveUntilDate, null);
+      }
+    });
+
+    it('blocks repair when opening the assignment would exceed room capacity', async () => {
+      const fixture = await createActualShapedActiveRepairFixture({ includeOtherResidents: false });
+      await RoomAssignment.create({
+        assignmentId: randomUUID(),
+        roomId: fixture.room.roomId,
+        memberId: 'nikhil',
+        effectiveFromMonth: '2026-10',
+        effectiveFromDate: '2026-10-22',
+        effectiveUntilMonth: null,
+        effectiveUntilDate: null,
+        assignedAt: new Date(),
+        assignedByRole: 'superadmin',
+      });
+
+      const preview = await stayService.previewRoomAssignmentRepair({
+        stayId: fixture.stay.stayId,
+        roomId: fixture.room.roomId,
+        assignmentAction: 'EXTEND_EXISTING_ASSIGNMENT',
+        assignmentId: fixture.currentAssignmentId,
+        expectedRevision: fixture.stay.revision,
+        reason: 'Verified continuous occupancy in Room lower',
+        actorRole: 'superadmin',
+      });
+
+      assert.equal(preview.canApply, false);
+      assert.ok(preview.conflicts.some((conflict) => conflict.code === 'ROOM_CAPACITY_CONFLICT'));
+    });
+
+    it('rolls back the assignment extension if the Stay update fails later in the transaction', async () => {
+      const fixture = await createActualShapedActiveRepairFixture({ includeOtherResidents: false });
+      const failingRoomFees = {
+        ...roomFeeService,
+        async repairActiveStayAssignment(args) {
+          await roomFeeService.repairActiveStayAssignment(args);
+          throw new Error('Injected Stay update failure');
+        },
+      };
+      const failingService = createStayService({
+        roomFees: failingRoomFees,
+        stayAttribution: defaultStayAttributionService,
+      });
+      const request = {
+        stayId: fixture.stay.stayId,
+        roomId: fixture.room.roomId,
+        assignmentAction: 'EXTEND_EXISTING_ASSIGNMENT',
+        assignmentId: fixture.currentAssignmentId,
+        expectedRevision: fixture.stay.revision,
+        reason: 'Verified continuous occupancy in Room lower',
+        actorRole: 'superadmin',
+      };
+      const preview = await failingService.previewRoomAssignmentRepair(request);
+
+      await assert.rejects(
+        failingService.repairRoomAssignment({ ...request, previewToken: preview.previewToken }),
+        /Injected Stay update failure/,
+      );
+
+      const assignment = await RoomAssignment.findOne({ assignmentId: fixture.currentAssignmentId }).lean();
+      const stay = await HostelStay.findOne({ stayId: fixture.stay.stayId }).lean();
+      assert.equal(assignment.effectiveUntilDate, '2026-10-21');
+      assert.equal(stay.currentAssignmentId, null);
+      assert.equal(stay.revision, 0);
+      assert.equal(stay.history.some((entry) => entry.event === 'ROOM_ASSIGNMENT_REPAIRED'), false);
+    });
+  });
+
+  describe('Erroneous historical Stay reconciliation', () => {
+    async function createHistoricalReconciliationFixture({ heldDepositPaise = 0 } = {}) {
+      const room = await ensureRoom('historical-reconcile', 1);
+      const historicalStayId = randomUUID();
+      const activeStayId = randomUUID();
+      await HostelStay.insertMany([
+        {
+          stayId: historicalStayId,
+          memberId: 'gaurav',
+          joinedOn: '2026-10-20',
+          actualLeftOn: '2026-10-21',
+          status: 'CHECKED_OUT',
+          initialRoomId: room.roomId,
+          currentRoomId: room.roomId,
+          checkoutFinalizedAt: new Date('2026-10-20T18:38:33.427Z'),
+          checkoutFinalizedByRole: 'superadmin',
+          revision: 1,
+          clearanceSequence: 1,
+        },
+        {
+          stayId: activeStayId,
+          memberId: 'gaurav',
+          joinedOn: '2026-10-01',
+          status: 'ACTIVE',
+          initialRoomId: room.roomId,
+          currentRoomId: room.roomId,
+          revision: 0,
+          financialRevision: 0,
+        },
+      ]);
+      const account = await HostelDepositAccount.create({
+        depositAccountId: randomUUID(),
+        stayId: historicalStayId,
+        memberId: 'gaurav',
+        expectedDepositPaise: 0,
+        status: heldDepositPaise > 0 ? 'OPEN' : 'NOT_REQUIRED',
+      });
+      if (heldDepositPaise > 0) {
+        await HostelDepositTransaction.create({
+          depositTransactionId: randomUUID(),
+          depositAccountId: account.depositAccountId,
+          stayId: historicalStayId,
+          memberId: 'gaurav',
+          type: 'RECEIVED',
+          amountPaise: heldDepositPaise,
+          method: 'upi',
+          idempotencyKey: randomUUID(),
+          recordedAt: new Date('2026-10-20T17:51:08.171Z'),
+          recordedByRole: 'superadmin',
+        });
+      }
+      const clearance = await HostelClearance.create({
+        clearanceId: randomUUID(),
+        stayId: historicalStayId,
+        memberId: 'gaurav',
+        sequence: 1,
+        joinedOn: '2026-10-20',
+        actualLeftOn: '2026-10-21',
+        lastRoomId: room.roomId,
+        financialAsOf: new Date('2026-10-20T18:38:33.487Z'),
+        messSummary: {},
+        roomFeeSummary: {},
+        expenseSummary: {},
+        depositSummary: { heldPaise: heldDepositPaise },
+        outstandingObligations: heldDepositPaise > 0
+          ? [{ domain: 'SECURITY_DEPOSIT', amountPaise: heldDepositPaise }]
+          : [],
+        clearanceStatus: heldDepositPaise > 0 ? 'OUTSTANDING_DUES' : 'NO_DUES',
+        finalizedAt: new Date('2026-10-20T18:38:33.487Z'),
+        finalizedByRole: 'superadmin',
+      });
+      return {
+        historicalStayId,
+        activeStayId,
+        clearanceId: clearance.clearanceId,
+      };
+    }
+
+    it('supersedes the erroneous checked-out record without activating it and preserves the clearance snapshot', async () => {
+      const fixture = await createHistoricalReconciliationFixture();
+      const request = {
+        stayId: fixture.historicalStayId,
+        supersededByStayId: fixture.activeStayId,
+        expectedRevision: 1,
+        reason: 'Verified uninterrupted residence represented by the active Stay',
+        actorRole: 'superadmin',
+      };
+      const preview = await stayService.previewHistoricalStayReconciliation(request);
+      assert.equal(preview.canApply, true);
+      assert.ok(preview.affectedRecords.some((record) => record.documentId === fixture.clearanceId));
+
+      const result = await stayService.reconcileHistoricalStay({
+        ...request,
+        previewToken: preview.previewToken,
+      });
+      assert.equal(result.stay.status, 'SUPERSEDED');
+      assert.equal(result.stay.supersededByStayId, fixture.activeStayId);
+      assert.equal(result.stay.currentRoomId, (await HostelStay.findOne({ stayId: fixture.activeStayId }).lean()).currentRoomId);
+      const replacement = await HostelStay.findOne({ stayId: fixture.activeStayId }).lean();
+      assert.equal(replacement.status, 'ACTIVE');
+      assert.equal(replacement.revision, 1);
+      assert.ok(replacement.history.some((entry) => (
+        entry.event === 'HISTORICAL_STAY_LINKED'
+        && entry.details?.historicalStayId === fixture.historicalStayId
+      )));
+      assert.equal(await HostelStay.countDocuments({ memberId: 'gaurav', status: 'ACTIVE' }), 1);
+
+      const clearance = await HostelClearance.findOne({ clearanceId: fixture.clearanceId }).lean();
+      assert.equal(clearance.validityStatus, 'REVOKED');
+      assert.equal(clearance.reconciliationId, result.reconciliationId);
+      assert.equal(clearance.joinedOn, '2026-10-20');
+      assert.equal(clearance.actualLeftOn, '2026-10-21');
+
+      await assert.rejects(
+        depositService.configureRequirement({
+          stayId: fixture.historicalStayId,
+          required: false,
+          expectedDepositPaise: 0,
+          expectedRevision: 0,
+          reason: 'Superseded history must remain immutable',
+          actorRole: 'superadmin',
+        }),
+        (error) => error.statusCode === 409 && error.details?.code === 'HISTORICAL_STAY_SUPERSEDED',
+      );
+
+      const insertedTransactionId = randomUUID();
+      const account = await HostelDepositAccount.findOne({ stayId: fixture.historicalStayId }).lean();
+      await HostelDepositTransaction.create({
+        depositTransactionId: insertedTransactionId,
+        depositAccountId: account.depositAccountId,
+        stayId: fixture.historicalStayId,
+        memberId: 'gaurav',
+        type: 'RECEIVED',
+        amountPaise: 1_000,
+        method: 'cash',
+        idempotencyKey: randomUUID(),
+        recordedAt: new Date(),
+        recordedByRole: 'superadmin',
+      });
+      await assert.rejects(
+        depositService.voidTransaction({
+          stayId: fixture.historicalStayId,
+          depositTransactionId: insertedTransactionId,
+          reason: 'Superseded history must remain immutable',
+          actorRole: 'superadmin',
+        }),
+        (error) => error.statusCode === 409 && error.details?.code === 'HISTORICAL_STAY_SUPERSEDED',
+      );
+      assert.equal((await HostelDepositTransaction.findOne({ depositTransactionId: insertedTransactionId }).lean()).status, 'recorded');
+    });
+
+    it('fails the replacement Stay CAS when its lifecycle revision changes', async () => {
+      const fixture = await createHistoricalReconciliationFixture();
+      await HostelStay.updateOne({ stayId: fixture.activeStayId }, { $inc: { revision: 1 } });
+      const locked = await stayRepository.lockHistoricalReplacementStay(
+        fixture.activeStayId,
+        {
+          memberId: 'gaurav',
+          expectedRevision: 0,
+          historicalStayId: fixture.historicalStayId,
+          reconciliationId: randomUUID(),
+          reason: 'Concurrency regression check',
+          actorRole: 'superadmin',
+          reconciledAt: new Date(),
+        },
+      );
+      assert.equal(locked, null);
+    });
+
+    it('rejects reconciliation while the historical Stay still holds real deposit money', async () => {
+      const fixture = await createHistoricalReconciliationFixture({ heldDepositPaise: 4_800_000 });
+      const preview = await stayService.previewHistoricalStayReconciliation({
+        stayId: fixture.historicalStayId,
+        supersededByStayId: fixture.activeStayId,
+        expectedRevision: 1,
+        reason: 'Verified uninterrupted residence represented by the active Stay',
+        actorRole: 'superadmin',
+      });
+      assert.equal(preview.canApply, false);
+      assert.ok(preview.conflicts.some((conflict) => conflict.code === 'DEPOSIT_BALANCE_REMAINS'));
+    });
+  });
+
+  describe('Real-money deposit reclassification', () => {
+    async function createMisclassifiedReceiptFixture({
+      refundedPaise = 0,
+      secondReceiptPaise = 0,
+      reference = null,
+    } = {}) {
+      const room = await ensureRoom('pay-reclass', 1);
+      const stayId = randomUUID();
+      const depositAccountId = randomUUID();
+      const depositTransactionId = randomUUID();
+      await HostelStay.create({
+        stayId,
+        memberId: 'gaurav',
+        joinedOn: '2026-10-20',
+        actualLeftOn: '2026-10-21',
+        status: 'CHECKED_OUT',
+        initialRoomId: room.roomId,
+        currentRoomId: room.roomId,
+        checkoutFinalizedAt: new Date('2026-10-20T18:38:33.427Z'),
+        checkoutFinalizedByRole: 'superadmin',
+        clearanceReviewOpenedAt: new Date('2026-10-25T00:00:00.000Z'),
+        clearanceReviewOpenedByRole: 'superadmin',
+        clearanceReviewReason: 'Review misclassified real-money receipt',
+        revision: 1,
+        financialRevision: 0,
+        clearanceSequence: 1,
+      });
+      await HostelDepositAccount.create({
+        depositAccountId,
+        stayId,
+        memberId: 'gaurav',
+        expectedDepositPaise: 0,
+        status: 'OPEN',
+        revision: 0,
+      });
+      await HostelDepositTransaction.create({
+        depositTransactionId,
+        depositAccountId,
+        stayId,
+        memberId: 'gaurav',
+        type: 'RECEIVED',
+        amountPaise: 4_800_000,
+        method: 'upi',
+        reference,
+        idempotencyKey: randomUUID(),
+        recordedAt: new Date('2026-10-20T17:51:08.171Z'),
+        recordedByRole: 'superadmin',
+      });
+      if (secondReceiptPaise > 0) {
+        await HostelDepositTransaction.create({
+          depositTransactionId: randomUUID(),
+          depositAccountId,
+          stayId,
+          memberId: 'gaurav',
+          type: 'RECEIVED',
+          amountPaise: secondReceiptPaise,
+          method: 'upi',
+          idempotencyKey: randomUUID(),
+          recordedAt: new Date('2026-10-20T18:00:00.000Z'),
+          recordedByRole: 'superadmin',
+        });
+      }
+      if (refundedPaise > 0) {
+        await HostelDepositTransaction.create({
+          depositTransactionId: randomUUID(),
+          depositAccountId,
+          stayId,
+          memberId: 'gaurav',
+          type: 'REFUNDED',
+          amountPaise: refundedPaise,
+          method: 'upi',
+          idempotencyKey: randomUUID(),
+          recordedAt: new Date('2026-10-21T00:00:00.000Z'),
+          recordedByRole: 'superadmin',
+        });
+      }
+      const clearance = await HostelClearance.create({
+        clearanceId: randomUUID(),
+        stayId,
+        memberId: 'gaurav',
+        sequence: 1,
+        joinedOn: '2026-10-20',
+        actualLeftOn: '2026-10-21',
+        lastRoomId: room.roomId,
+        financialAsOf: new Date('2026-10-20T18:38:33.487Z'),
+        messSummary: {},
+        roomFeeSummary: {},
+        expenseSummary: {},
+        depositSummary: { heldPaise: 4_800_000 },
+        outstandingObligations: [{ domain: 'SECURITY_DEPOSIT', amountPaise: 4_800_000 }],
+        clearanceStatus: 'OUTSTANDING_DUES',
+        finalizedAt: new Date('2026-10-20T18:38:33.487Z'),
+        finalizedByRole: 'superadmin',
+      });
+      return { stayId, depositAccountId, depositTransactionId, clearanceId: clearance.clearanceId };
+    }
+
+    function reclassificationRequest(fixture, overrides = {}) {
+      return {
+        stayId: fixture.stayId,
+        sourceDepositTransactionId: fixture.depositTransactionId,
+        expectedAccountRevision: 0,
+        allocations: [{
+          category: 'UNALLOCATED_CREDIT',
+          memberId: 'gaurav',
+          targetAccount: 'PENDING_CLASSIFICATION',
+          amountPaise: 4_800_000,
+        }],
+        reason: 'Receipt is real money but its final business purpose is not yet verified',
+        idempotencyKey: randomUUID(),
+        actorRole: 'superadmin',
+        ...overrides,
+      };
+    }
+
+    it('moves the full receipt effect to one auditable unallocated credit and marks the zero account not required', async () => {
+      const fixture = await createMisclassifiedReceiptFixture();
+      const request = reclassificationRequest(fixture);
+      const preview = await depositService.previewPaymentReclassification(request);
+      assert.equal(preview.canApply, true);
+      assert.equal(preview.moneyConservation.sourceAmountPaise, 4_800_000);
+      assert.equal(preview.moneyConservation.allocatedAmountPaise, 4_800_000);
+
+      const result = await depositService.reclassifyPayment({
+        ...request,
+        previewToken: preview.previewToken,
+      });
+      const source = await HostelDepositTransaction.findOne({
+        depositTransactionId: fixture.depositTransactionId,
+      }).lean();
+      assert.equal(source.status, 'reclassified');
+      assert.equal(source.reclassificationId, result.reclassificationId);
+      assert.equal((await HostelDepositAccount.findOne({ depositAccountId: fixture.depositAccountId }).lean()).status, 'NOT_REQUIRED');
+      const persistedSummary = await depositService.getDepositSummary(fixture.stayId);
+      assert.equal(persistedSummary.summary.heldPaise, 0);
+      assert.equal(persistedSummary.transactions.length, 1);
+      assert.equal(persistedSummary.transactions[0].status, 'reclassified');
+      assert.equal(persistedSummary.reclassifications.length, 1);
+      assert.equal(persistedSummary.unallocatedCredits.length, 1);
+      assert.equal(persistedSummary.unallocatedCredits[0].amountPaise, 4_800_000);
+      assert.equal(await mongoose.connection.collection('payment_reclassifications').countDocuments({}), 1);
+      assert.equal(await mongoose.connection.collection('unallocated_credits').countDocuments({}), 1);
+
+      const credit = await mongoose.connection.collection('unallocated_credits').findOne({
+        reclassificationId: result.reclassificationId,
+      });
+      assert.equal(credit.amountPaise, 4_800_000);
+      assert.equal(credit.sourceDepositTransactionId, fixture.depositTransactionId);
+      const clearance = await HostelClearance.findOne({ clearanceId: fixture.clearanceId }).lean();
+      assert.equal(clearance.validityStatus, 'REVOKED');
+      assert.equal(clearance.reconciliationId, result.reclassificationId);
+
+      const retry = await depositService.reclassifyPayment({
+        ...request,
+        previewToken: preview.previewToken,
+      });
+      assert.equal(retry.reclassificationId, result.reclassificationId);
+      assert.equal(await mongoose.connection.collection('unallocated_credits').countDocuments({}), 1);
+    });
+
+    it('rejects unsupported destinations and any allocation that does not conserve the exact source amount', async () => {
+      const fixture = await createMisclassifiedReceiptFixture();
+      const invalidTarget = await depositService.previewPaymentReclassification(reclassificationRequest(fixture, {
+        allocations: [{
+          category: 'ROOM_PAYMENT',
+          memberId: 'gaurav',
+          targetAccount: 'already-paid-charge',
+          amountPaise: 4_800_000,
+        }],
+      }));
+      assert.equal(invalidTarget.canApply, false);
+      assert.ok(invalidTarget.conflicts.some((conflict) => conflict.code === 'UNSUPPORTED_DESTINATION'));
+
+      const shortAllocation = await depositService.previewPaymentReclassification(reclassificationRequest(fixture, {
+        allocations: [{
+          category: 'UNALLOCATED_CREDIT',
+          memberId: 'gaurav',
+          targetAccount: 'PENDING_CLASSIFICATION',
+          amountPaise: 4_700_000,
+        }],
+      }));
+      assert.equal(shortAllocation.canApply, false);
+      assert.ok(shortAllocation.conflicts.some((conflict) => conflict.code === 'MONEY_CONSERVATION_FAILED'));
+    });
+
+    it('revalidates allocation invariants against the source loaded inside the transaction', async () => {
+      const fixture = await createMisclassifiedReceiptFixture();
+      await assert.rejects(
+        stayRepository.executeAtomicPaymentReclassification({
+          stayId: fixture.stayId,
+          sourceDepositTransactionId: fixture.depositTransactionId,
+          expectedAccountRevision: 0,
+          allocations: [{
+            category: 'UNALLOCATED_CREDIT',
+            memberId: 'gaurav',
+            targetAccount: 'PENDING_CLASSIFICATION',
+            amountPaise: 4_700_000,
+          }],
+          reason: 'Direct repository call must preserve money exactly',
+          idempotencyKey: randomUUID(),
+          requestFingerprint: 'transactional-invariant-regression',
+          actorRole: 'superadmin',
+        }),
+        (error) => error.statusCode === 409 && error.details?.code === 'MONEY_CONSERVATION_FAILED',
+      );
+      assert.equal(await PaymentReclassification.countDocuments({}), 0);
+      assert.equal(await UnallocatedCredit.countDocuments({}), 0);
+      assert.equal((await HostelDepositTransaction.findOne({
+        depositTransactionId: fixture.depositTransactionId,
+      }).lean()).status, 'recorded');
+    });
+
+    it('rejects reclassification after any refund or deduction consumed part of the receipt', async () => {
+      const fixture = await createMisclassifiedReceiptFixture({
+        secondReceiptPaise: 200_000,
+        refundedPaise: 100_000,
+      });
+      const preview = await depositService.previewPaymentReclassification(reclassificationRequest(fixture));
+      assert.equal(preview.canApply, false);
+      assert.ok(preview.conflicts.some((conflict) => conflict.code === 'SOURCE_FUNDS_ALREADY_DISPOSED'));
+    });
+
+    it('rejects a receipt reference that is already active in another payment ledger', async () => {
+      const reference = 'UPI-GAURAV-48000';
+      const fixture = await createMisclassifiedReceiptFixture({ reference });
+      await Payment.create({
+        paymentId: randomUUID(),
+        month: '2026-10',
+        memberId: 'gaurav',
+        amountPaise: 4_800_000,
+        method: 'upi',
+        upiReference: reference,
+        billAmountAtPaymentPaise: 4_800_000,
+        periodTypeAtPayment: 'current',
+        payeeSnapshot: { receiverName: 'MealKhata' },
+        recordedAt: new Date('2026-10-20T17:51:08.171Z'),
+        recordedByRole: 'superadmin',
+        idempotencyKey: randomUUID(),
+      });
+
+      const preview = await depositService.previewPaymentReclassification(reclassificationRequest(fixture));
+      assert.equal(preview.canApply, false);
+      assert.ok(preview.conflicts.some((conflict) => conflict.code === 'DUPLICATE_PAYMENT_REFERENCE'));
+    });
+
+    it('detects the same external reference in an expense reimbursement for another member', async () => {
+      const reference = ' UPI-CROSS-MEMBER-48000 ';
+      const fixture = await createMisclassifiedReceiptFixture({ reference });
+      await ExpenseReimbursement.create({
+        reimbursementId: randomUUID(),
+        expenseId: randomUUID(),
+        expenseMonth: '2026-10',
+        fromMemberId: 'nikhil',
+        toMemberId: 'devansh',
+        amountPaise: 10_000,
+        method: 'upi',
+        reference: 'upi-cross-member-48000',
+        idempotencyKey: randomUUID(),
+        status: 'recorded',
+        recordedAt: new Date('2026-10-20T17:51:08.171Z'),
+        recordedByRole: 'superadmin',
+      });
+
+      const preview = await depositService.previewPaymentReclassification(reclassificationRequest(fixture));
+      assert.equal(preview.canApply, false);
+      assert.ok(preview.conflicts.some((conflict) => (
+        conflict.code === 'DUPLICATE_PAYMENT_REFERENCE'
+        && conflict.duplicate?.collection === 'expense_reimbursements'
+      )));
+    });
+
+    it('serializes a concurrent reclassification and cross-ledger write using one external reference claim', async () => {
+      const reference = 'UPI-CONCURRENT-CROSS-LEDGER';
+      const fixture = await createMisclassifiedReceiptFixture({ reference });
+      const request = reclassificationRequest(fixture);
+      const preview = await depositService.previewPaymentReclassification(request);
+      const messPayment = {
+        paymentId: randomUUID(),
+        month: '2026-10',
+        memberId: 'gaurav',
+        amountPaise: 10_000,
+        method: 'upi',
+        upiReference: reference,
+        billAmountAtPaymentPaise: 10_000,
+        periodTypeAtPayment: 'current',
+        payeeSnapshot: { receiverName: 'MealKhata' },
+        recordedAt: new Date('2026-10-20T17:51:09.171Z'),
+        recordedByRole: 'superadmin',
+        idempotencyKey: randomUUID(),
+      };
+
+      const outcomes = await Promise.allSettled([
+        depositService.reclassifyPayment({ ...request, previewToken: preview.previewToken }),
+        paymentRepository.create(messPayment),
+      ]);
+      assert.equal(outcomes.filter((outcome) => outcome.status === 'fulfilled').length, 1);
+      assert.equal(await Payment.countDocuments({ upiReference: reference }), 0);
+      assert.equal(await PaymentReclassification.countDocuments({}), 1);
+    });
+
+    it('never allows a reclassified source receipt to enter the ordinary void path', async () => {
+      const fixture = await createMisclassifiedReceiptFixture({ secondReceiptPaise: 4_800_000 });
+      const request = reclassificationRequest(fixture);
+      const preview = await depositService.previewPaymentReclassification(request);
+      const result = await depositService.reclassifyPayment({ ...request, previewToken: preview.previewToken });
+
+      await assert.rejects(
+        depositService.voidTransaction({
+          stayId: fixture.stayId,
+          depositTransactionId: fixture.depositTransactionId,
+          reason: 'Must not break the correction journal link',
+          actorRole: 'superadmin',
+        }),
+        (error) => error.statusCode === 409 && error.details?.code === 'DEPOSIT_TRANSACTION_NOT_ACTIVE',
+      );
+      const source = await HostelDepositTransaction.findOne({
+        depositTransactionId: fixture.depositTransactionId,
+      }).lean();
+      assert.equal(source.status, 'reclassified');
+      assert.equal(source.reclassificationId, result.reclassificationId);
+      assert.equal(await PaymentReclassification.countDocuments({ reclassificationId: result.reclassificationId }), 1);
+      assert.equal(await UnallocatedCredit.countDocuments({ reclassificationId: result.reclassificationId }), 1);
+    });
+
+    it('rolls back the correction journal when destination credit creation fails', async () => {
+      const fixture = await createMisclassifiedReceiptFixture();
+      const request = reclassificationRequest(fixture);
+      const preview = await depositService.previewPaymentReclassification(request);
+      const originalInsertMany = UnallocatedCredit.insertMany;
+      UnallocatedCredit.insertMany = async () => {
+        throw new Error('Injected destination write failure');
+      };
+
+      try {
+        await assert.rejects(
+          depositService.reclassifyPayment({ ...request, previewToken: preview.previewToken }),
+          /Injected destination write failure/,
+        );
+      } finally {
+        UnallocatedCredit.insertMany = originalInsertMany;
+      }
+
+      const source = await HostelDepositTransaction.findOne({
+        depositTransactionId: fixture.depositTransactionId,
+      }).lean();
+      const account = await HostelDepositAccount.findOne({
+        depositAccountId: fixture.depositAccountId,
+      }).lean();
+      assert.equal(source.status, 'recorded');
+      assert.equal(source.reclassificationId, null);
+      assert.equal(account.status, 'OPEN');
+      assert.equal(account.revision, 0);
+      assert.equal(await PaymentReclassification.countDocuments({}), 0);
+      assert.equal(await UnallocatedCredit.countDocuments({}), 0);
+    });
+
+    it('allows only one of two concurrent corrections for the same source receipt', async () => {
+      const fixture = await createMisclassifiedReceiptFixture();
+      const first = reclassificationRequest(fixture);
+      const second = reclassificationRequest(fixture);
+      const [firstPreview, secondPreview] = await Promise.all([
+        depositService.previewPaymentReclassification(first),
+        depositService.previewPaymentReclassification(second),
+      ]);
+      const outcomes = await Promise.allSettled([
+        depositService.reclassifyPayment({ ...first, previewToken: firstPreview.previewToken }),
+        depositService.reclassifyPayment({ ...second, previewToken: secondPreview.previewToken }),
+      ]);
+      assert.equal(outcomes.filter((outcome) => outcome.status === 'fulfilled').length, 1);
+      assert.equal(await mongoose.connection.collection('payment_reclassifications').countDocuments({}), 1);
+      assert.equal(await mongoose.connection.collection('unallocated_credits').countDocuments({}), 1);
     });
   });
 

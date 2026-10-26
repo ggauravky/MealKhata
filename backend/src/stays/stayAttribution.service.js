@@ -67,7 +67,8 @@ export function createStayAttributionService({
       // Check if this member has other stays that overlap with any of these months
       const allMemberStays = await stayRepo.findStaysByMember(memberId, { session });
       const otherStays = (allMemberStays || []).filter(
-        (s) => s.stayId !== stayId && s.status !== STAY_STATUSES.CANCELLED,
+        (s) => s.stayId !== stayId
+          && ![STAY_STATUSES.CANCELLED, STAY_STATUSES.SUPERSEDED].includes(s.status),
       );
 
       // Check if any month in the range intersects another stay of the same member

@@ -27,6 +27,9 @@ export const BACKUP_COLLECTIONS = Object.freeze([
   'hostel_deposit_accounts',
   'hostel_deposit_transactions',
   'hostel_clearances',
+  'payment_reclassifications',
+  'unallocated_credits',
+  'payment_reference_claims',
 ]);
 
 /**

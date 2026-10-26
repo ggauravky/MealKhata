@@ -86,6 +86,11 @@ export const hostelStaySchema = new mongoose.Schema(
       default: null,
       trim: true,
     },
+    currentAssignmentId: {
+      type: String,
+      default: null,
+      trim: true,
+    },
     admissionAssignmentOwned: {
       type: Boolean,
       default: true,
@@ -108,6 +113,30 @@ export const hostelStaySchema = new mongoose.Schema(
       default: null,
     },
     cancelReason: {
+      type: String,
+      default: null,
+      trim: true,
+      maxlength: MAX_NOTE_LENGTH,
+    },
+    supersededByStayId: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    reconciliationId: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    reconciledAt: {
+      type: Date,
+      default: null,
+    },
+    reconciledByRole: {
+      type: String,
+      default: null,
+    },
+    reconciliationReason: {
       type: String,
       default: null,
       trim: true,
@@ -343,8 +372,27 @@ export const hostelDepositTransactionSchema = new mongoose.Schema(
     status: {
       type: String,
       required: true,
-      enum: ['recorded', 'voided'],
+      enum: ['recorded', 'voided', 'reclassified'],
       default: 'recorded',
+    },
+    reclassificationId: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    reclassifiedAt: {
+      type: Date,
+      default: null,
+    },
+    reclassifiedByRole: {
+      type: String,
+      default: null,
+    },
+    reclassificationReason: {
+      type: String,
+      default: null,
+      trim: true,
+      maxlength: MAX_NOTE_LENGTH,
     },
     voidedAt: {
       type: Date,
@@ -472,6 +520,11 @@ export const hostelClearanceSchema = new mongoose.Schema(
       maxlength: MAX_NOTE_LENGTH,
     },
     restorationId: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    reconciliationId: {
       type: String,
       default: null,
       trim: true,

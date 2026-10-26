@@ -38,9 +38,15 @@ export async function guardFinancialMutation({
   const affectedMemberIds = [...new Set([memberId, ...memberIds].filter(Boolean))];
   const query = stayId ? { stayId } : { memberId: { $in: affectedMemberIds } };
   const stays = await HostelStay.find(query).session(session).lean();
+  if (stayId && stays.some((stay) => stay.status === STAY_STATUSES.SUPERSEDED)) {
+    const error = new Error('This Stay has been superseded and its financial history is immutable.');
+    error.statusCode = 409;
+    error.details = { code: 'HISTORICAL_STAY_SUPERSEDED' };
+    throw error;
+  }
   const range = dateRange({ effectiveDate, effectiveMonth });
   const matching = stays.filter((stay) => {
-    if (stay.status === STAY_STATUSES.CANCELLED) return false;
+    if ([STAY_STATUSES.CANCELLED, STAY_STATUSES.SUPERSEDED].includes(stay.status)) return false;
     if (!range) return true;
     const end = stay.actualLeftOn || '9999-12-31';
     return stay.joinedOn <= range.end && end >= range.start;

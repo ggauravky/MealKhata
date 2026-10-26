@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,15 +11,37 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server';
 
 const backendDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const workspaceDirectory = path.resolve(backendDirectory, '..');
-const frontendOrigin = 'http://localhost:5173';
-const backendOrigin = 'http://localhost:5100';
 const testPassword = 'E2E-Strong-Pass-2026!';
 
 let replSet;
 let backendProcess;
 let frontendProcess;
 let mongoDataDirectory;
+let frontendOrigin;
+let backendOrigin;
 let shuttingDown = false;
+
+function findAvailablePort(preferredPort) {
+  return new Promise((resolve, reject) => {
+    const probe = (port) => {
+      const server = createServer();
+      server.unref();
+      server.once('error', (error) => {
+        server.close();
+        if (port === preferredPort && error.code === 'EADDRINUSE') {
+          probe(0);
+          return;
+        }
+        reject(error);
+      });
+      server.listen(port, '127.0.0.1', () => {
+        const address = server.address();
+        server.close(() => resolve(address.port));
+      });
+    };
+    probe(preferredPort);
+  });
+}
 
 function startChild(command, args, options, label) {
   const child = spawn(command, args, {
@@ -51,10 +74,10 @@ async function waitForUrl(url, timeoutMs = 30_000) {
   throw new Error(`Timed out waiting for ${url}: ${lastError?.message || 'no response'}`);
 }
 
-async function seedDatabase(uri) {
+async function seedDatabase(uri, backendPort) {
   process.env.NODE_ENV = 'test';
   process.env.MONGODB_URI = uri;
-  process.env.PORT = '5100';
+  process.env.PORT = String(backendPort);
   process.env.APP_ORIGIN = frontendOrigin;
   process.env.APP_TIMEZONE = 'Asia/Kolkata';
   process.env.AUTH_JWT_SECRET = 'isolated-e2e-jwt-secret-at-least-thirty-two-bytes';
@@ -199,19 +222,26 @@ async function shutdown(exitCode = 0) {
 }
 
 async function main() {
+  const [frontendPort, backendPort] = await Promise.all([
+    findAvailablePort(5173),
+    findAvailablePort(5100),
+  ]);
+  frontendOrigin = `http://localhost:${frontendPort}`;
+  backendOrigin = `http://localhost:${backendPort}`;
+
   mongoDataDirectory = await mkdtemp(path.join(tmpdir(), 'mealkhata-e2e-'));
   replSet = await MongoMemoryReplSet.create({
     instanceOpts: [{ dbPath: mongoDataDirectory }],
     replSet: { count: 1, storageEngine: 'wiredTiger' },
   });
   const mongoUri = replSet.getUri('mealkhata_e2e');
-  await seedDatabase(mongoUri);
+  await seedDatabase(mongoUri, backendPort);
 
   const sharedEnvironment = {
     ...process.env,
     NODE_ENV: 'test',
     MONGODB_URI: mongoUri,
-    PORT: '5100',
+    PORT: String(backendPort),
     APP_ORIGIN: frontendOrigin,
     APP_TIMEZONE: 'Asia/Kolkata',
     AUTH_JWT_SECRET: 'isolated-e2e-jwt-secret-at-least-thirty-two-bytes',
@@ -227,7 +257,14 @@ async function main() {
   );
   frontendProcess = startChild(
     process.execPath,
-    [path.join(workspaceDirectory, 'node_modules', 'vite', 'bin', 'vite.js'), '--host', '127.0.0.1'],
+    [
+      path.join(workspaceDirectory, 'node_modules', 'vite', 'bin', 'vite.js'),
+      '--host',
+      '127.0.0.1',
+      '--port',
+      String(frontendPort),
+      '--strictPort',
+    ],
     { cwd: path.join(workspaceDirectory, 'frontend'), env: sharedEnvironment },
     'frontend',
   );

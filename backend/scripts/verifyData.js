@@ -948,6 +948,10 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         issues.push(`[hostel_stays] Checked out stay ${s.stayId} missing actualLeftOn`);
         stayIssues++;
       }
+      if (s.status === 'SUPERSEDED' && (!s.supersededByStayId || !s.reconciliationId || !s.reconciledAt || !s.reconciliationReason)) {
+        issues.push(`[hostel_stays] Superseded stay ${s.stayId} is missing reconciliation audit metadata`);
+        stayIssues++;
+      }
 
       if (s.initialRoomId && !roomIds.has(s.initialRoomId)) {
         issues.push(`[hostel_stays] Stay ${s.stayId} initialRoomId references missing room ${s.initialRoomId}`);
@@ -980,6 +984,9 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         if (currentAssignments.length !== 1) {
           issues.push(`[hostel_stays] Active or pending stay ${s.stayId} has no uncancelled current Room Assignment matching member ${s.memberId} and room ${s.currentRoomId}`);
           stayIssues++;
+        } else if (s.currentAssignmentId !== currentAssignments[0].assignmentId) {
+          issues.push(`[hostel_stays] Active or pending stay ${s.stayId} currentAssignmentId does not reference its current Room Assignment ${currentAssignments[0].assignmentId}`);
+          stayIssues++;
         }
       }
     }
@@ -1000,9 +1007,17 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
     const transactions = await db.collection('hostel_deposit_transactions').find({}).toArray();
     const clearances = await db.collection('hostel_clearances').find({}).toArray();
     const stays = await db.collection('hostel_stays').find({}).toArray();
+    const reclassifications = await db.collection('payment_reclassifications').find({}).toArray();
+    const unallocatedCredits = await db.collection('unallocated_credits').find({}).toArray();
     let depositIssues = 0;
 
     const stayMap = new Map(stays.map((stay) => [stay.stayId, stay]));
+    const transactionMap = new Map(
+      transactions.map((transaction) => [transaction.depositTransactionId, transaction]),
+    );
+    const reclassificationMap = new Map(
+      reclassifications.map((reclassification) => [reclassification.reclassificationId, reclassification]),
+    );
     const recordedTransactionsByAccount = new Map();
     for (const transaction of transactions) {
       if (transaction.status !== 'recorded') continue;
@@ -1059,6 +1074,20 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         issues.push(`[hostel_deposit_transactions] Non-positive or non-integer amount in tx ${tx.depositTransactionId}`);
         depositIssues++;
       }
+      if (!['recorded', 'voided', 'reclassified'].includes(tx.status)) {
+        issues.push(`[hostel_deposit_transactions] Invalid status ${tx.status} in tx ${tx.depositTransactionId}`);
+        depositIssues++;
+      }
+      if (tx.status === 'reclassified') {
+        const journal = reclassificationMap.get(tx.reclassificationId);
+        if (!tx.reclassifiedAt || !tx.reclassifiedByRole || !tx.reclassificationReason || !journal) {
+          issues.push(`[hostel_deposit_transactions] Reclassified tx ${tx.depositTransactionId} is missing linked audit metadata`);
+          depositIssues++;
+        } else if (journal.sourceDepositTransactionId !== tx.depositTransactionId) {
+          issues.push(`[payment_reclassifications] Journal ${journal.reclassificationId} has a mismatched source receipt`);
+          depositIssues++;
+        }
+      }
 
       const referencedStay = stayMap.get(tx.stayId);
       if (!referencedStay) {
@@ -1083,6 +1112,77 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         else if (tx.type === 'REFUNDED') current.refunded += tx.amountPaise;
         else if (tx.type === 'DEDUCTED') current.deducted += tx.amountPaise;
         totalsByStay.set(tx.stayId, current);
+      }
+    }
+
+    const creditsByReclassification = new Map();
+    const creditById = new Map(unallocatedCredits.map((credit) => [credit.creditId, credit]));
+    for (const credit of unallocatedCredits) {
+      const journal = reclassificationMap.get(credit.reclassificationId);
+      if (!journal || journal.sourceDepositTransactionId !== credit.sourceDepositTransactionId) {
+        issues.push(`[unallocated_credits] Credit ${credit.creditId} has no valid source reclassification`);
+        depositIssues++;
+      }
+      creditsByReclassification.set(
+        credit.reclassificationId,
+        (creditsByReclassification.get(credit.reclassificationId) || 0) + credit.amountPaise,
+      );
+      if (
+        !Number.isSafeInteger(credit.amountPaise)
+        || !Number.isSafeInteger(credit.remainingAmountPaise)
+        || credit.remainingAmountPaise < 0
+        || credit.remainingAmountPaise > credit.amountPaise
+        || (credit.status === 'OPEN' && credit.remainingAmountPaise === 0)
+        || (credit.status === 'ALLOCATED' && credit.remainingAmountPaise !== 0)
+      ) {
+        issues.push(`[unallocated_credits] Credit ${credit.creditId} has an invalid remaining amount or status`);
+        depositIssues++;
+      }
+    }
+    for (const journal of reclassifications) {
+      const source = transactionMap.get(journal.sourceDepositTransactionId);
+      if (!source || source.status !== 'reclassified' || source.reclassificationId !== journal.reclassificationId) {
+        issues.push(`[payment_reclassifications] Journal ${journal.reclassificationId} has no matching reclassified source receipt`);
+        depositIssues++;
+      }
+      if (
+        source
+        && (
+          journal.amountPaise !== source.amountPaise
+          || journal.memberId !== source.memberId
+          || journal.sourceStayId !== source.stayId
+          || journal.sourceDepositAccountId !== source.depositAccountId
+          || journal.paymentMethod !== source.method
+          || new Date(journal.paymentDate).getTime() !== new Date(source.recordedAt).getTime()
+        )
+      ) {
+        issues.push(`[payment_reclassifications] Journal ${journal.reclassificationId} does not preserve source receipt identity`);
+        depositIssues++;
+      }
+      for (const allocation of journal.allocations || []) {
+        const credit = creditById.get(allocation.destinationRecordId);
+        if (
+          !credit
+          || credit.reclassificationId !== journal.reclassificationId
+          || credit.allocationId !== allocation.allocationId
+          || credit.memberId !== allocation.memberId
+          || credit.targetAccount !== allocation.targetAccount
+          || credit.amountPaise !== allocation.amountPaise
+          || credit.paymentMethod !== journal.paymentMethod
+          || (credit.reference || null) !== (journal.reference || null)
+          || new Date(credit.paymentDate).getTime() !== new Date(journal.paymentDate).getTime()
+        ) {
+          issues.push(`[payment_reclassifications] Allocation ${allocation.allocationId} does not map one-to-one to its destination credit`);
+          depositIssues++;
+        }
+      }
+      const allocated = (journal.allocations || []).reduce(
+        (total, allocation) => total + (allocation.amountPaise || 0),
+        0,
+      );
+      if (allocated !== journal.amountPaise || creditsByReclassification.get(journal.reclassificationId) !== journal.amountPaise) {
+        issues.push(`[payment_reclassifications] Journal ${journal.reclassificationId} does not conserve ${journal.amountPaise} paise`);
+        depositIssues++;
       }
     }
 
@@ -1122,7 +1222,7 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         issues.push(`[hostel_clearances] Clearance ${c.clearanceId} has invalid validityStatus ${c.validityStatus}`);
         depositIssues++;
       }
-      if (validityStatus === 'REVOKED' && (!c.revokedAt || !c.revokedByRole || !c.revocationReason || !c.restorationId)) {
+      if (validityStatus === 'REVOKED' && (!c.revokedAt || !c.revokedByRole || !c.revocationReason || (!c.restorationId && !c.reconciliationId))) {
         issues.push(`[hostel_clearances] Revoked clearance ${c.clearanceId} is missing revocation audit metadata`);
         depositIssues++;
       }
@@ -1164,7 +1264,7 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
 
     checks.push({
       name: 'Security Deposits & Clearances',
-      recordsChecked: accounts.length + transactions.length + clearances.length,
+      recordsChecked: accounts.length + transactions.length + clearances.length + reclassifications.length + unallocatedCredits.length,
       status: depositIssues === 0 ? 'PASS' : 'FAIL',
       issues: depositIssues,
     });

@@ -34,6 +34,11 @@ import { JoinStayDialog } from '../components/stays/JoinStayDialog.jsx';
 import { RoomHistoryTimeline } from '../components/stays/RoomHistoryTimeline.jsx';
 import { RoomTransferDialog } from '../components/stays/RoomTransferDialog.jsx';
 import { RestoreResidentDialog } from '../components/stays/RestoreResidentDialog.jsx';
+import {
+  HistoricalStayReconciliationDialog,
+  PaymentReclassificationDialog,
+  RoomAssignmentRepairDialog,
+} from '../components/stays/TargetedReconciliationDialogs.jsx';
 import { StayStatusBadge } from '../components/stays/StayStatusBadge.jsx';
 import { Button } from '../components/ui/button.jsx';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card.jsx';
@@ -66,6 +71,13 @@ export function AdminStaysPage() {
     createStay,
     cancelStay,
     correctAdmission,
+    previewRoomAssignmentRepair,
+    repairRoomAssignment,
+    previewHistoricalStayReconciliation,
+    reconcileHistoricalStay,
+    previewPaymentReclassification,
+    reclassifyPayment,
+    openClearanceReview,
     transferRoom,
     recordDepositTransaction,
     voidDepositTransaction,
@@ -83,6 +95,9 @@ export function AdminStaysPage() {
   const [depositActionType, setDepositActionType] = useState('RECEIVED');
   const [depositConfigTargetStay, setDepositConfigTargetStay] = useState(null);
   const [restoreTargetStay, setRestoreTargetStay] = useState(null);
+  const [roomRepairTargetStay, setRoomRepairTargetStay] = useState(null);
+  const [historicalReconciliationTargetStay, setHistoricalReconciliationTargetStay] = useState(null);
+  const [paymentReclassificationTargetStay, setPaymentReclassificationTargetStay] = useState(null);
   const [reviewingStayId, setReviewingStayId] = useState(null);
   const [selectedStayIdForDetails, setSelectedStayIdForDetails] = useState(null);
 
@@ -98,6 +113,7 @@ export function AdminStaysPage() {
   const checkoutRequestedStays = stays.filter((s) => s.status === 'CHECKOUT_REQUESTED' || s.status === 'CHECKOUT_PENDING');
   const checkedOutStays = stays.filter((s) => s.status === 'CHECKED_OUT');
   const rosterMetrics = getMemberRosterMetrics(memberRoster.data);
+  const rosterByMemberId = new Map(memberRoster.data.map((member) => [member.memberId, member]));
 
   const handleOpenDepositModal = (stay, type) => {
     setDepositTargetStay(stay);
@@ -336,6 +352,17 @@ export function AdminStaysPage() {
                         {isSuperAdmin && (
                           <>
                             <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setSelectedStayIdForDetails(member.stay.stayId);
+                                setActiveTab('residents');
+                              }}
+                              className="h-7 text-xs border-amber-200 text-amber-700 dark:border-amber-800 dark:text-amber-300"
+                            >
+                              Review ledger
+                            </Button>
+                            <Button
                               variant="ghost"
                               size="sm"
                               onClick={() => setDepositConfigTargetStay(member.stay)}
@@ -491,8 +518,24 @@ export function AdminStaysPage() {
                 onOpenRecordDialog={(type) => handleOpenDepositModal(detailedStay.stay, type)}
               />
 
+              {isSuperAdmin && detailedStay.deposit?.transactions?.some((transaction) => (
+                transaction.type === 'RECEIVED' && transaction.status === 'recorded'
+              )) && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPaymentReclassificationTargetStay(detailedStay.stay)}
+                  className="h-8 text-xs border-amber-300 text-amber-700 dark:border-amber-800 dark:text-amber-300"
+                >
+                  <Receipt className="h-3.5 w-3.5 mr-1" />
+                  Correct Payment Category
+                </Button>
+              )}
+
               <DepositTransactionHistory
                 transactions={detailedStay.deposit?.transactions || []}
+                reclassifications={detailedStay.deposit?.reclassifications || []}
+                unallocatedCredits={detailedStay.deposit?.unallocatedCredits || []}
                 isSuperAdmin={isSuperAdmin}
                 onVoidTransaction={async (txId, payload) => {
                   await voidDepositTransaction(detailedStay.stay.stayId, txId, payload);
@@ -533,15 +576,28 @@ export function AdminStaysPage() {
                         </div>
                       </div>
 
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setTransferTargetStay(s)}
-                        className="h-7 text-xs border-teal-200 dark:border-teal-800 text-teal-700 dark:text-teal-400"
-                      >
-                        <ArrowLeftRight className="h-3 w-3 mr-1" />
-                        Transfer Room
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        {isSuperAdmin && (!rosterByMemberId.get(s.memberId)?.assignment
+                          || rosterByMemberId.get(s.memberId)?.assignment?.roomId !== s.currentRoomId) && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setRoomRepairTargetStay(s)}
+                            className="h-7 text-xs border-amber-300 text-amber-700 dark:border-amber-800 dark:text-amber-300"
+                          >
+                            Repair Room Assignment
+                          </Button>
+                        )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setTransferTargetStay(s)}
+                          className="h-7 text-xs border-teal-200 dark:border-teal-800 text-teal-700 dark:text-teal-400"
+                        >
+                          <ArrowLeftRight className="h-3 w-3 mr-1" />
+                          Transfer Room
+                        </Button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -705,6 +761,20 @@ export function AdminStaysPage() {
                         — Left on {s.actualLeftOn} (Joined {s.joinedOn})
                       </div>
                       <div className="flex items-center gap-1">
+                        {isSuperAdmin && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setSelectedStayIdForDetails(s.stayId);
+                              setActiveTab('residents');
+                            }}
+                            className="h-7 text-xs text-amber-700 dark:text-amber-300"
+                          >
+                            <Receipt className="h-3 w-3 mr-1" />
+                            Review ledger
+                          </Button>
+                        )}
                         <Button
                           variant="ghost"
                           size="sm"
@@ -715,14 +785,26 @@ export function AdminStaysPage() {
                           Lifetime PDF
                         </Button>
                         {isSuperAdmin && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setRestoreTargetStay(s)}
-                            className="h-7 text-xs border-amber-300 text-amber-700 dark:border-amber-800 dark:text-amber-300"
-                          >
-                            Restore resident
-                          </Button>
+                          <>
+                            {activeStays.some((activeStay) => activeStay.memberId === s.memberId) && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setHistoricalReconciliationTargetStay(s)}
+                                className="h-7 text-xs border-rose-300 text-rose-700 dark:border-rose-800 dark:text-rose-300"
+                              >
+                                Reconcile incorrect history
+                              </Button>
+                            )}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setRestoreTargetStay(s)}
+                              className="h-7 text-xs border-amber-300 text-amber-700 dark:border-amber-800 dark:text-amber-300"
+                            >
+                              Restore resident
+                            </Button>
+                          </>
                         )}
                       </div>
                     </div>
@@ -843,6 +925,45 @@ export function AdminStaysPage() {
         onRestored={() => {
           refresh();
           memberRoster.refresh();
+        }}
+      />
+
+      <RoomAssignmentRepairDialog
+        open={Boolean(roomRepairTargetStay)}
+        onOpenChange={(open) => !open && setRoomRepairTargetStay(null)}
+        stay={roomRepairTargetStay}
+        onPreview={previewRoomAssignmentRepair}
+        onApply={repairRoomAssignment}
+        onCompleted={() => {
+          refresh();
+          memberRoster.refresh();
+        }}
+      />
+
+      <HistoricalStayReconciliationDialog
+        open={Boolean(historicalReconciliationTargetStay)}
+        onOpenChange={(open) => !open && setHistoricalReconciliationTargetStay(null)}
+        stay={historicalReconciliationTargetStay}
+        activeStays={activeStays}
+        onPreview={previewHistoricalStayReconciliation}
+        onApply={reconcileHistoricalStay}
+        onCompleted={() => {
+          refresh();
+          detailedStay.refresh();
+        }}
+      />
+
+      <PaymentReclassificationDialog
+        open={Boolean(paymentReclassificationTargetStay)}
+        onOpenChange={(open) => !open && setPaymentReclassificationTargetStay(null)}
+        stay={paymentReclassificationTargetStay}
+        deposit={detailedStay.deposit}
+        onPreview={previewPaymentReclassification}
+        onApply={reclassifyPayment}
+        onOpenClearanceReview={openClearanceReview}
+        onCompleted={() => {
+          refresh();
+          detailedStay.refresh();
         }}
       />
     </div>
