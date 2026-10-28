@@ -299,12 +299,16 @@ export function createStayService({
     occupancyFromDate = null,
     assignmentAction,
     assignmentId = null,
+    correctionMode = 'ASSIGNMENT_ONLY',
     expectedRevision,
     reason,
     actorRole,
   }, { session = null } = {}) => {
     if (actorRole !== ROLES.SUPERADMIN) {
       throw new StayDomainError('Only Super Admin can repair a Room Assignment.', 403);
+    }
+    if (!['ASSIGNMENT_ONLY', 'CORRECT_STAY_ROOM_REFERENCE'].includes(correctionMode)) {
+      throw new StayDomainError('A valid room repair correctionMode is required.', 400);
     }
     if (!roomId || !roomId.trim()) throw new StayDomainError('Room is required.', 400);
     if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
@@ -341,7 +345,7 @@ export function createStayService({
     if (stay.revision !== expectedRevision) {
       conflicts.push({ code: 'STAY_REVISION_CONFLICT', message: 'Stay changed since it was loaded.' });
     }
-    if (stay.currentRoomId !== assignmentPreview.room.roomId) {
+    if (stay.currentRoomId !== assignmentPreview.room.roomId && correctionMode !== 'CORRECT_STAY_ROOM_REFERENCE') {
       conflicts.push({
         code: 'STAY_ROOM_MISMATCH',
         stayRoomId: stay.currentRoomId,
@@ -349,6 +353,11 @@ export function createStayService({
         message: 'The repair room does not match the active Stay current room.',
       });
     }
+    const targetMonth = (occupancyFromDate || currentDate).slice(0, 7);
+    const roomFinancialOverview = await roomFees.getMemberOverview({
+      memberId: stay.memberId,
+      targetMonth,
+    });
 
     const fingerprint = {
       request: {
@@ -357,6 +366,7 @@ export function createStayService({
         occupancyFromDate: occupancyFromDate || null,
         assignmentAction,
         assignmentId,
+        correctionMode,
         expectedRevision,
         reason: normalizedReason,
       },
@@ -402,6 +412,27 @@ export function createStayService({
       ],
       currentAssignment: assignmentPreview.currentAssignment,
       proposedAssignment: assignmentPreview.proposedAssignment,
+      currentRoom: {
+        roomId: stay.currentRoomId,
+      },
+      proposedRoom: {
+        roomId: assignmentPreview.room.roomId,
+        roomNumber: assignmentPreview.room.roomNumber,
+      },
+      correctionMode,
+      capacityValidation: {
+        valid: !assignmentPreview.conflicts.some((conflict) => conflict.code === 'ROOM_CAPACITY_EXCEEDED'),
+        roomCapacity: assignmentPreview.room.capacity,
+      },
+      overlappingAssignments: assignmentPreview.conflicts.filter(
+        (conflict) => conflict.code?.includes('ASSIGNMENT') || conflict.code?.includes('OVERLAP'),
+      ),
+      financialRecordsPreserved: {
+        policy: 'Issued Room Charges and Room Payments are not modified by this reference correction.',
+        chargeId: roomFinancialOverview.currentMonthCharge?.chargeId || null,
+        chargeAmountPaise: roomFinancialOverview.currentMonthCharge?.finalBillAmountPaise || 0,
+        paidAmountPaise: roomFinancialOverview.currentMonthCharge?.paidAmountPaise || 0,
+      },
       previewToken: createHash('sha256').update(JSON.stringify(fingerprint)).digest('hex'),
     };
   };
@@ -484,6 +515,28 @@ export function createStayService({
     const activeClearances = clearances.filter(
       (clearance) => !clearance.validityStatus || clearance.validityStatus === 'ACTIVE',
     );
+    const affectedFinancialDomains = [
+      finances.totalMessBilledPaise || finances.totalMessPaidPaise ? 'MESS' : null,
+      finances.totalRoomBilledPaise || finances.totalRoomPaidPaise ? 'ROOM_FEES' : null,
+      finances.totalExpenseSharePaise || finances.totalExpenseOwedPaise || finances.totalExpenseReceivablePaise
+        ? 'OTHER_EXPENSES'
+        : null,
+      (transactions || []).length > 0 ? 'SECURITY_DEPOSIT' : null,
+      finances.unallocatedCreditPaise > 0 ? 'UNALLOCATED_CREDIT' : null,
+    ].filter(Boolean);
+    const beforeState = {
+      historicalStay: { status: stay.status, revision: stay.revision },
+      replacementStay: { status: replacement.status, revision: replacement.revision },
+      activeClearanceIds: activeClearances.map((clearance) => clearance.clearanceId),
+    };
+    const afterState = {
+      historicalStay: { status: STAY_STATUSES.SUPERSEDED, supersededByStayId },
+      replacementStay: { status: replacement.status },
+      clearanceValidityStatus: activeClearances.length > 0 ? 'REVOKED' : 'UNCHANGED',
+      attributionStatus: (finances.attributionWarnings || []).length > 0
+        ? 'AMBIGUOUS_REVIEWED'
+        : 'ATTRIBUTED_BY_EVIDENCE',
+    };
     const fingerprint = {
       request: {
         stayId,
@@ -522,6 +575,23 @@ export function createStayService({
       canApply: conflicts.length === 0,
       conflicts,
       warnings: finances.attributionWarnings || [],
+      confirmationProvided: Boolean(confirmFinancialAttribution),
+      affectedMonths: finances.months || [],
+      attributionWarnings: finances.attributionWarnings || [],
+      affectedFinancialDomains,
+      beforeState,
+      afterState,
+      obligationMappings: (finances.outstandingObligations || []).map((obligation) => ({
+        domain: obligation.domain,
+        month: obligation.month || null,
+        amountPaise: obligation.amountPaise,
+        stayId: (finances.attributionWarnings || []).some(
+          (warning) => warning.domain === obligation.domain && warning.month === obligation.month,
+        ) ? null : stayId,
+        attributionStatus: (finances.attributionWarnings || []).some(
+          (warning) => warning.domain === obligation.domain && warning.month === obligation.month,
+        ) ? 'AMBIGUOUS' : 'SUPPORTED',
+      })),
       affectedRecords: [
         { collection: 'hostel_stays', documentId: stayId, revision: stay.revision },
         { collection: 'hostel_stays', documentId: supersededByStayId, revision: replacement.revision },
@@ -924,9 +994,13 @@ export function createStayService({
           actorRole: params.actorRole,
           session,
         });
+        const isReferenceCorrection = params.correctionMode === 'CORRECT_STAY_ROOM_REFERENCE';
         const updated = await repository.updateStay(
           stay.stayId,
-          { currentAssignmentId: assignment.assignmentId },
+          {
+            currentAssignmentId: assignment.assignmentId,
+            ...(isReferenceCorrection ? { currentRoomId: assignment.roomId } : {}),
+          },
           params.expectedRevision,
           { session },
         );
@@ -934,13 +1008,16 @@ export function createStayService({
           throw new StayDomainError('Stay changed while the repair was being applied. Refresh and retry.', 409);
         }
         const withHistory = await repository.addStayHistory(stay.stayId, {
-          event: 'ROOM_ASSIGNMENT_REPAIRED',
+          event: isReferenceCorrection ? 'STAY_ROOM_REFERENCE_CORRECTED' : 'ROOM_ASSIGNMENT_REPAIRED',
           timestamp: repairedAt,
           actorRole: params.actorRole,
           note: params.reason.trim().slice(0, 500),
           details: {
             previousCurrentAssignmentId: stay.currentAssignmentId || null,
             currentAssignmentId: assignment.assignmentId,
+            previousCurrentRoomId: stay.currentRoomId || null,
+            currentRoomId: isReferenceCorrection ? assignment.roomId : stay.currentRoomId,
+            correctionMode: params.correctionMode || 'ASSIGNMENT_ONLY',
             assignmentAction: params.assignmentAction,
             previousAssignment: preview.currentAssignment,
             repairedAssignment: assignment,
@@ -1023,6 +1100,13 @@ export function createStayService({
             expectedRevision: params.expectedRevision,
             reconciledAt,
             revokedClearanceIds,
+            confirmationProvided: preview.confirmationProvided,
+            affectedMonths: preview.affectedMonths,
+            attributionWarnings: preview.attributionWarnings,
+            affectedFinancialDomains: preview.affectedFinancialDomains,
+            beforeState: preview.beforeState,
+            afterState: preview.afterState,
+            obligationMappings: preview.obligationMappings,
           },
           { session },
         );
@@ -1716,6 +1800,9 @@ export function createStayService({
           },
           combined: {
             outstandingPayablePaise: attr.totalOutstandingPayablePaise,
+            receivablePaise: attr.memberReceivablePaise,
+            depositHeldPaise: attr.depositHeldPaise,
+            unallocatedCreditPaise: attr.unallocatedCreditPaise,
           },
         },
         monthlyOverviews: attr.monthlySummaries,
@@ -1732,6 +1819,8 @@ export function createStayService({
         outstandingObligations: attr.outstandingObligations,
         totalOutstandingPayablePaise: attr.totalOutstandingPayablePaise,
         depositHeldPaise: attr.depositHeldPaise,
+        unallocatedCreditPaise: attr.unallocatedCreditPaise,
+        unresolvedFinancialItems: attr.unresolvedFinancialItems || [],
         attributionWarnings: attr.attributionWarnings || [],
         isAttributionComplete: attr.isAttributionComplete !== false,
         isEligibleForNoDues: attr.isEligibleForNoDues,
@@ -1879,6 +1968,10 @@ export function createStayService({
             owedToMePaise: review.totalExpenseReceivablePaise ?? review.financialOverview.expenses.owedToMePaise,
           },
           depositSummary: review.depositOverview.summary,
+          unallocatedCreditSummary: {
+            remainingPaise: review.unallocatedCreditPaise || 0,
+            unresolvedItems: review.unresolvedFinancialItems || [],
+          },
           outstandingObligations: review.outstandingObligations,
           clearanceStatus,
           exceptionReason: exceptionReason?.trim() || null,
@@ -2049,6 +2142,10 @@ export function createStayService({
               owedToMePaise: review.totalExpenseReceivablePaise ?? review.financialOverview.expenses.owedToMePaise,
             },
             depositSummary: review.depositOverview.summary,
+            unallocatedCreditSummary: {
+              remainingPaise: review.unallocatedCreditPaise || 0,
+              unresolvedItems: review.unresolvedFinancialItems || [],
+            },
             outstandingObligations: review.outstandingObligations,
             clearanceStatus,
             exceptionReason: reissueReason.trim(),

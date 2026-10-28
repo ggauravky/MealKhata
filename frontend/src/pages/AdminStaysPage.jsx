@@ -35,6 +35,7 @@ import { RoomHistoryTimeline } from '../components/stays/RoomHistoryTimeline.jsx
 import { RoomTransferDialog } from '../components/stays/RoomTransferDialog.jsx';
 import { RestoreResidentDialog } from '../components/stays/RestoreResidentDialog.jsx';
 import {
+  CreditAllocationDialog,
   HistoricalStayReconciliationDialog,
   PaymentReclassificationDialog,
   RoomAssignmentRepairDialog,
@@ -77,6 +78,8 @@ export function AdminStaysPage() {
     reconcileHistoricalStay,
     previewPaymentReclassification,
     reclassifyPayment,
+    previewCreditAllocation,
+    allocateCredit,
     openClearanceReview,
     transferRoom,
     recordDepositTransaction,
@@ -98,6 +101,7 @@ export function AdminStaysPage() {
   const [roomRepairTargetStay, setRoomRepairTargetStay] = useState(null);
   const [historicalReconciliationTargetStay, setHistoricalReconciliationTargetStay] = useState(null);
   const [paymentReclassificationTargetStay, setPaymentReclassificationTargetStay] = useState(null);
+  const [creditAllocationTarget, setCreditAllocationTarget] = useState(null);
   const [reviewingStayId, setReviewingStayId] = useState(null);
   const [selectedStayIdForDetails, setSelectedStayIdForDetails] = useState(null);
 
@@ -515,6 +519,7 @@ export function AdminStaysPage() {
                 depositSummary={detailedStay.deposit}
                 canManage={true}
                 isSuperAdmin={isSuperAdmin}
+                onAllocateCredit={setCreditAllocationTarget}
                 onOpenRecordDialog={(type) => handleOpenDepositModal(detailedStay.stay, type)}
               />
 
@@ -961,6 +966,18 @@ export function AdminStaysPage() {
         onPreview={previewPaymentReclassification}
         onApply={reclassifyPayment}
         onOpenClearanceReview={openClearanceReview}
+        onCompleted={() => {
+          refresh();
+          detailedStay.refresh();
+        }}
+      />
+
+      <CreditAllocationDialog
+        open={Boolean(creditAllocationTarget)}
+        onOpenChange={(open) => !open && setCreditAllocationTarget(null)}
+        credit={creditAllocationTarget}
+        onPreview={previewCreditAllocation}
+        onApply={allocateCredit}
         onCompleted={() => {
           refresh();
           detailedStay.refresh();

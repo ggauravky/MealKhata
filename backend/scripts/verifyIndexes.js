@@ -26,8 +26,9 @@ import {
   HostelDepositTransaction,
   HostelClearance,
 } from '../src/stays/stay.model.js';
-import { PaymentReclassification, UnallocatedCredit } from '../src/stays/paymentReclassification.model.js';
+import { CreditAllocation, PaymentReclassification, UnallocatedCredit } from '../src/stays/paymentReclassification.model.js';
 import { PaymentReferenceClaim } from '../src/finance/paymentReference.model.js';
+import { CreditObligationState } from '../src/finance/creditObligationState.model.js';
 
 export const MONITORED_MODELS = [
   MealDay,
@@ -55,6 +56,8 @@ export const MONITORED_MODELS = [
   HostelClearance,
   PaymentReclassification,
   UnallocatedCredit,
+  CreditAllocation,
+  CreditObligationState,
   PaymentReferenceClaim,
 ];
 

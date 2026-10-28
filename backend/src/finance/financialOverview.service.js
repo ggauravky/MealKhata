@@ -17,6 +17,13 @@ import { reportService as defaultReportService } from '../reports/report.service
 import { settlementService as defaultSettlementService } from '../settlement/settlement.service.js';
 import { roomFeeService as defaultRoomFeeService } from '../roomFees/roomFee.service.js';
 import { defaultExpenseService } from '../expenses/expense.service.js';
+import { UnallocatedCredit } from '../stays/paymentReclassification.model.js';
+
+const databaseCreditReader = Object.freeze({
+  listOpenForMember(memberId) {
+    return UnallocatedCredit.find({ memberId, status: 'OPEN' }).sort({ paymentDate: 1 }).lean();
+  },
+});
 
 export function createFinancialOverviewService({
   paymentSummaries = defaultPaymentSummaryService,
@@ -24,6 +31,7 @@ export function createFinancialOverviewService({
   settlements = defaultSettlementService,
   roomFees = defaultRoomFeeService,
   expenses = defaultExpenseService,
+  creditReader = { listOpenForMember: async () => [] },
   now = () => new Date(),
   timezone = FINANCIAL_TIMEZONE,
 } = {}) {
@@ -49,7 +57,7 @@ export function createFinancialOverviewService({
       const periodType = getPeriodType(month);
 
       // Concurrently query the 3 authoritative domain services
-      const [isMessClosed, activeSettlement, messSummary, roomOverview, expenseSummary, expenseList] =
+      const [isMessClosed, activeSettlement, messSummary, roomOverview, expenseSummary, expenseList, credits] =
         await Promise.all([
           settlements.isMonthClosed(month),
           settlements.getActiveSettlement(month),
@@ -57,6 +65,7 @@ export function createFinancialOverviewService({
           roomFees.getMemberOverview({ memberId, targetMonth: month }),
           expenses.getMemberExpenseSummary(month, memberId),
           expenses.listExpensesByMonth(month, { actorRole: ROLES.ADMIN, actorMemberId: memberId }),
+          creditReader.listOpenForMember(memberId),
         ]);
 
       // 1. Mess Domain
@@ -160,6 +169,10 @@ export function createFinancialOverviewService({
       const outstandingPayablePaise = messRemainingPaise + roomRemainingPaise + owedToOthersPaise;
       const receivablePaise = owedToMePaise;
       const personalTrackedCostPaise = messBillPaise + roomIssuedChargePaise + spendingSharePaise;
+      const unallocatedCreditPaise = credits.reduce(
+        (sum, credit) => sum + (credit.remainingAmountPaise || 0),
+        0,
+      );
 
       let overallStatus = OVERALL_PAYMENT_STATUSES.PENDING;
       if (outstandingPayablePaise === 0) {
@@ -206,6 +219,17 @@ export function createFinancialOverviewService({
           receivablePaise,
           personalTrackedCostPaise,
           overallStatus,
+          unallocatedCreditPaise,
+          financialRelationshipSettled: outstandingPayablePaise === 0 && unallocatedCreditPaise === 0,
+        },
+        credits: {
+          unallocatedCreditPaise,
+          unresolvedItems: credits.map((credit) => ({
+            code: 'UNALLOCATED_CREDIT_PENDING',
+            creditId: credit.creditId,
+            amountPaise: credit.remainingAmountPaise,
+            sourceDepositTransactionId: credit.sourceDepositTransactionId,
+          })),
         },
       };
 
@@ -265,6 +289,10 @@ export function createFinancialOverviewService({
       // 4. Combined Household Totals (Section 10)
       const totalTrackedCostPaise = messCostPaise + roomFeesCostPaise + otherExpensesCostPaise;
       const totalManagedDuesPaise = messOutstandingPaise + roomFeesOutstandingPaise;
+      const unallocatedCreditPaise = memberOverviews.reduce(
+        (sum, member) => sum + (member.credits?.unallocatedCreditPaise || 0),
+        0,
+      );
 
       // Member summaries keyed by memberId
       const memberSummaries = {};
@@ -299,6 +327,13 @@ export function createFinancialOverviewService({
           message: `${owingMembers.length} member(s) have Mess dues totaling ₹${(messOutstandingPaise / 100).toFixed(2)}.`,
         });
       }
+      if (unallocatedCreditPaise > 0) {
+        actionableAttention.push({
+          type: 'unallocated_credit_pending',
+          amountPaise: unallocatedCreditPaise,
+          message: `₹${(unallocatedCreditPaise / 100).toFixed(2)} in resident credit remains unapplied.`,
+        });
+      }
 
       // Category breakdown for expenses
       const expenseCategories = Object.entries(expenseSummary?.categoryBreakdown || {}).map(
@@ -331,6 +366,7 @@ export function createFinancialOverviewService({
           pendingReimbursementsPaise,
           settledReimbursementsPaise,
         },
+        credits: { unallocatedCreditPaise },
         memberSummaries,
         expenseCategories,
         actionableAttention,
@@ -344,4 +380,4 @@ export function createFinancialOverviewService({
   });
 }
 
-export const financialOverviewService = createFinancialOverviewService();
+export const financialOverviewService = createFinancialOverviewService({ creditReader: databaseCreditReader });

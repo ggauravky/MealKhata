@@ -1009,6 +1009,10 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
     const stays = await db.collection('hostel_stays').find({}).toArray();
     const reclassifications = await db.collection('payment_reclassifications').find({}).toArray();
     const unallocatedCredits = await db.collection('unallocated_credits').find({}).toArray();
+    const creditAllocations = await db.collection('credit_allocations').find({}).toArray();
+    const roomPayments = await db.collection('room_payments').find({}).toArray();
+    const messPayments = await db.collection('payments').find({}).toArray();
+    const expenseReimbursements = await db.collection('expense_reimbursements').find({}).toArray();
     let depositIssues = 0;
 
     const stayMap = new Map(stays.map((stay) => [stay.stayId, stay]));
@@ -1117,6 +1121,46 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
 
     const creditsByReclassification = new Map();
     const creditById = new Map(unallocatedCredits.map((credit) => [credit.creditId, credit]));
+    const allocationsByCredit = new Map();
+    for (const allocation of creditAllocations) {
+      if (!allocationsByCredit.has(allocation.creditId)) allocationsByCredit.set(allocation.creditId, []);
+      allocationsByCredit.get(allocation.creditId).push(allocation);
+      const credit = creditById.get(allocation.creditId);
+      if (
+        !credit
+        || allocation.memberId !== credit.memberId
+        || allocation.reclassificationId !== credit.reclassificationId
+        || allocation.sourceDepositTransactionId !== credit.sourceDepositTransactionId
+      ) {
+        issues.push(`[credit_allocations] Allocation ${allocation.creditAllocationId} has no valid source credit chain`);
+        depositIssues++;
+      }
+      let destination = null;
+      if (allocation.destinationType === 'ROOM_FEE') {
+        destination = roomPayments.find((payment) => payment.roomPaymentId === allocation.targetLedgerRecordId);
+      } else if (allocation.destinationType === 'MESS') {
+        destination = messPayments.find((payment) => payment.paymentId === allocation.targetLedgerRecordId);
+      } else if (allocation.destinationType === 'EXPENSE_REIMBURSEMENT') {
+        destination = expenseReimbursements.find(
+          (payment) => payment.reimbursementId === allocation.targetLedgerRecordId,
+        );
+      } else if (allocation.destinationType === 'EXTERNAL_SETTLEMENT') {
+        if (!allocation.settlementReference || !allocation.settledAt) {
+          issues.push(`[credit_allocations] External settlement ${allocation.creditAllocationId} lacks evidence`);
+          depositIssues++;
+        }
+        continue;
+      }
+      if (
+        !destination
+        || destination.fundingSource !== 'UNALLOCATED_CREDIT'
+        || destination.sourceCreditAllocationId !== allocation.creditAllocationId
+        || destination.amountPaise !== allocation.amountPaise
+      ) {
+        issues.push(`[credit_allocations] Allocation ${allocation.creditAllocationId} has no matching funded destination entry`);
+        depositIssues++;
+      }
+    }
     for (const credit of unallocatedCredits) {
       const journal = reclassificationMap.get(credit.reclassificationId);
       if (!journal || journal.sourceDepositTransactionId !== credit.sourceDepositTransactionId) {
@@ -1136,6 +1180,21 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         || (credit.status === 'ALLOCATED' && credit.remainingAmountPaise !== 0)
       ) {
         issues.push(`[unallocated_credits] Credit ${credit.creditId} has an invalid remaining amount or status`);
+        depositIssues++;
+      }
+      const allocations = allocationsByCredit.get(credit.creditId) || [];
+      const appliedPaise = allocations
+        .filter((allocation) => allocation.destinationType !== 'EXTERNAL_SETTLEMENT')
+        .reduce((sum, allocation) => sum + allocation.amountPaise, 0);
+      const settledPaise = allocations
+        .filter((allocation) => allocation.destinationType === 'EXTERNAL_SETTLEMENT')
+        .reduce((sum, allocation) => sum + allocation.amountPaise, 0);
+      if (
+        appliedPaise !== (credit.allocatedAmountPaise || 0)
+        || settledPaise !== (credit.settledAmountPaise || 0)
+        || credit.amountPaise !== appliedPaise + settledPaise + credit.remainingAmountPaise
+      ) {
+        issues.push(`[unallocated_credits] Credit ${credit.creditId} violates allocation conservation`);
         depositIssues++;
       }
     }
@@ -1247,6 +1306,10 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
 
       if (c.clearanceStatus === 'NO_DUES' && c.depositSummary?.heldPaise > 0) {
         issues.push(`[hostel_clearances] No-Dues clearance ${c.clearanceId} has unrefunded deposit (${c.depositSummary.heldPaise})`);
+        depositIssues++;
+      }
+      if (c.clearanceStatus === 'NO_DUES' && c.unallocatedCreditSummary?.remainingPaise > 0) {
+        issues.push(`[hostel_clearances] No-Dues clearance ${c.clearanceId} has unresolved unallocated credit (${c.unallocatedCreditSummary.remainingPaise})`);
         depositIssues++;
       }
     }

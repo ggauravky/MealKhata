@@ -36,6 +36,7 @@ export function DepositTransactionHistory({
   unallocatedCredits = [],
   isSuperAdmin = false,
   onVoidTransaction = null,
+  onAllocateCredit = null,
 }) {
   const [voidTarget, setVoidTarget] = useState(null);
   const [voidReason, setVoidReason] = useState('');
@@ -192,12 +193,24 @@ export function DepositTransactionHistory({
             ))}
             {unallocatedCredits.map((credit) => (
               <div key={credit.creditId} className="rounded-md bg-amber-50 dark:bg-amber-950/30 p-3">
-                <div className="font-semibold text-amber-800 dark:text-amber-200">
-                  Unallocated credit: {formatPaise(credit.remainingAmountPaise)} remaining
+                <div className="flex items-start justify-between gap-3">
+                  <div className="font-semibold text-amber-800 dark:text-amber-200">
+                    Unallocated credit: {formatPaise(credit.remainingAmountPaise)} remaining
+                  </div>
+                  {isSuperAdmin && credit.status === 'OPEN' && credit.remainingAmountPaise > 0 && onAllocateCredit && (
+                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => onAllocateCredit(credit)}>
+                      Allocate / settle
+                    </Button>
+                  )}
                 </div>
                 <div className="mt-1 text-amber-700/80 dark:text-amber-300/80">
                   {credit.targetAccount} · {credit.status} · Credit {credit.creditId}
                 </div>
+                {(credit.allocations || []).map((allocation) => (
+                  <div key={allocation.creditAllocationId} className="mt-2 rounded border border-amber-200 p-2 dark:border-amber-900">
+                    {formatPaise(allocation.amountPaise)} → {allocation.destinationType} ({allocation.targetRecordId})
+                  </div>
+                ))}
               </div>
             ))}
           </CardContent>

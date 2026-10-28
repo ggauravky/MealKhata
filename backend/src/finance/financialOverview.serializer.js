@@ -55,6 +55,12 @@ export function serializeMemberOverview(overview) {
       receivablePaise: overview.combined.receivablePaise,
       personalTrackedCostPaise: overview.combined.personalTrackedCostPaise,
       overallStatus: overview.combined.overallStatus,
+      unallocatedCreditPaise: overview.combined.unallocatedCreditPaise || 0,
+      financialRelationshipSettled: overview.combined.financialRelationshipSettled !== false,
+    },
+    credits: {
+      unallocatedCreditPaise: overview.credits?.unallocatedCreditPaise || 0,
+      unresolvedItems: overview.credits?.unresolvedItems || [],
     },
   };
 }
@@ -88,6 +94,9 @@ export function serializeHouseholdOverview(overview) {
     roommateReimbursements: {
       pendingReimbursementsPaise: overview.roommateReimbursements.pendingReimbursementsPaise,
       settledReimbursementsPaise: overview.roommateReimbursements.settledReimbursementsPaise,
+    },
+    credits: {
+      unallocatedCreditPaise: overview.credits?.unallocatedCreditPaise || 0,
     },
     memberSummaries: serializedMemberSummaries,
     expenseCategories: overview.expenseCategories || [],

@@ -489,6 +489,10 @@ export const hostelClearanceSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       required: true,
     },
+    unallocatedCreditSummary: {
+      type: mongoose.Schema.Types.Mixed,
+      default: () => ({ remainingPaise: 0, unresolvedItems: [] }),
+    },
     outstandingObligations: {
       type: [mongoose.Schema.Types.Mixed],
       default: [],

@@ -17,7 +17,10 @@ export function PayablesReceivables({ debtsOwed = [], receivables = [] }) {
           </div>
           <div className="space-y-1.5">
             {debtsOwed.map((debt, idx) => (
-              <div key={debt.expenseId || idx} className="flex items-center justify-between text-xs">
+              <div
+                key={`${debt.expenseId || 'expense'}:${debt.toMemberId || idx}`}
+                className="flex items-center justify-between text-xs"
+              >
                 <span className="text-slate-600 dark:text-slate-400 truncate max-w-[170px]">
                   Pay to <strong className="capitalize text-slate-800 dark:text-slate-200">{debt.toMemberId}</strong>: {debt.title}
                 </span>
@@ -39,7 +42,10 @@ export function PayablesReceivables({ debtsOwed = [], receivables = [] }) {
           </div>
           <div className="space-y-1.5">
             {receivables.map((recv, idx) => (
-              <div key={recv.expenseId || idx} className="flex items-center justify-between text-xs">
+              <div
+                key={`${recv.expenseId || 'expense'}:${recv.fromMemberId || idx}`}
+                className="flex items-center justify-between text-xs"
+              >
                 <span className="text-slate-600 dark:text-slate-400 truncate max-w-[170px]">
                   From <strong className="capitalize text-slate-800 dark:text-slate-200">{recv.fromMemberId}</strong>: {recv.title}
                 </span>

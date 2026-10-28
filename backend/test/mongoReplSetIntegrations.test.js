@@ -28,10 +28,12 @@ import { ExpenseReimbursement } from '../src/expenses/expenseReimbursement.model
 import { MealDay } from '../src/meals/meal.model.js';
 import { MonthlyMealRate } from '../src/billing/monthlyRate.model.js';
 import { Payment } from '../src/payments/payment.model.js';
+import { PaymentSettings } from '../src/payments/paymentSettings.model.js';
 import { UserAccount } from '../src/auth/userAccount.model.js';
 import { MemberAccount } from '../src/auth/memberAccount.model.js';
 import { MemberAccountAudit } from '../src/members/memberAccountAudit.model.js';
-import { PaymentReclassification, UnallocatedCredit } from '../src/stays/paymentReclassification.model.js';
+import { CreditAllocation, PaymentReclassification, UnallocatedCredit } from '../src/stays/paymentReclassification.model.js';
+import { CreditObligationState } from '../src/finance/creditObligationState.model.js';
 
 import { createStayService, stayService } from '../src/stays/stay.service.js';
 import { defaultStayAttributionService } from '../src/stays/stayAttribution.service.js';
@@ -43,6 +45,7 @@ import { roomRepository } from '../src/roomFees/room.repository.js';
 import { defaultExpenseRepository } from '../src/expenses/expense.repository.js';
 import { computeChargeFinancials } from '../src/roomFees/roomFee.serializer.js';
 import { paymentRepository } from '../src/payments/payment.repository.js';
+import { creditAllocationService } from '../src/finance/creditAllocation.service.js';
 import { mealService } from '../src/meals/meal.service.js';
 import { createMemberAccountService } from '../src/members/memberAccount.service.js';
 import { createMemberService } from '../src/members/member.service.js';
@@ -188,11 +191,14 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
       MealDay.init(),
       MonthlyMealRate.init(),
       Payment.init(),
+      PaymentSettings.init(),
       UserAccount.init(),
       MemberAccount.init(),
       MemberAccountAudit.init(),
       PaymentReclassification.init(),
       UnallocatedCredit.init(),
+      CreditAllocation.init(),
+      CreditObligationState.init(),
     ]);
   });
 
@@ -1479,6 +1485,39 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
       assert.equal(stay.revision, 0);
       assert.equal(stay.history.some((entry) => entry.event === 'ROOM_ASSIGNMENT_REPAIRED'), false);
     });
+
+    it('corrects an incorrect Stay room reference with a distinct audited operation', async () => {
+      const fixture = await createActualShapedActiveRepairFixture({ includeOtherResidents: false });
+      const wrongRoom = await ensureRoom('wrong-reference', 1);
+      await HostelStay.updateOne(
+        { stayId: fixture.stay.stayId },
+        { $set: { currentRoomId: wrongRoom.roomId } },
+      );
+      const baseRequest = {
+        stayId: fixture.stay.stayId,
+        roomId: fixture.room.roomId,
+        assignmentAction: 'EXTEND_EXISTING_ASSIGNMENT',
+        assignmentId: fixture.currentAssignmentId,
+        expectedRevision: fixture.stay.revision,
+        reason: 'Correct the saved room reference to verified Room lower occupancy',
+        actorRole: 'superadmin',
+      };
+      const assignmentOnly = await stayService.previewRoomAssignmentRepair(baseRequest);
+      assert.equal(assignmentOnly.canApply, false);
+      assert.ok(assignmentOnly.conflicts.some((conflict) => conflict.code === 'STAY_ROOM_MISMATCH'));
+
+      const request = { ...baseRequest, correctionMode: 'CORRECT_STAY_ROOM_REFERENCE' };
+      const preview = await stayService.previewRoomAssignmentRepair(request);
+      assert.equal(preview.canApply, true);
+      assert.equal(preview.currentRoom.roomId, wrongRoom.roomId);
+      assert.equal(preview.proposedRoom.roomId, fixture.room.roomId);
+      assert.equal(preview.financialRecordsPreserved.chargeId, fixture.chargeId);
+      const result = await stayService.repairRoomAssignment({ ...request, previewToken: preview.previewToken });
+      assert.equal(result.stay.currentRoomId, fixture.room.roomId);
+      assert.equal(result.stay.history.at(-1).event, 'STAY_ROOM_REFERENCE_CORRECTED');
+      assert.equal(await RoomCharge.countDocuments({ chargeId: fixture.chargeId, baseAmountPaise: 480_000 }), 1);
+      assert.equal(await RoomPayment.countDocuments({ roomPaymentId: fixture.roomPaymentId, amountPaise: 480_000 }), 1);
+    });
   });
 
   describe('Erroneous historical Stay reconciliation', () => {
@@ -1570,6 +1609,9 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
       };
       const preview = await stayService.previewHistoricalStayReconciliation(request);
       assert.equal(preview.canApply, true);
+      assert.ok(preview.affectedMonths.includes('2026-10'));
+      assert.equal(preview.beforeState.historicalStay.status, 'CHECKED_OUT');
+      assert.equal(preview.afterState.historicalStay.status, 'SUPERSEDED');
       assert.ok(preview.affectedRecords.some((record) => record.documentId === fixture.clearanceId));
 
       const result = await stayService.reconcileHistoricalStay({
@@ -1579,6 +1621,13 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
       assert.equal(result.stay.status, 'SUPERSEDED');
       assert.equal(result.stay.supersededByStayId, fixture.activeStayId);
       assert.equal(result.stay.currentRoomId, (await HostelStay.findOne({ stayId: fixture.activeStayId }).lean()).currentRoomId);
+      const audit = result.stay.history.find((entry) => entry.event === 'HISTORICAL_STAY_RECONCILED');
+      assert.equal(audit.details.historicalStayId, fixture.historicalStayId);
+      assert.equal(audit.details.replacementStayId, fixture.activeStayId);
+      assert.deepEqual(audit.details.affectedMonths, ['2026-10']);
+      assert.ok(Array.isArray(audit.details.affectedFinancialDomains));
+      assert.ok(audit.details.beforeState);
+      assert.ok(audit.details.afterState);
       const replacement = await HostelStay.findOne({ stayId: fixture.activeStayId }).lean();
       assert.equal(replacement.status, 'ACTIVE');
       assert.equal(replacement.revision, 1);
@@ -1821,6 +1870,8 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
         previewToken: preview.previewToken,
       });
       assert.equal(retry.reclassificationId, result.reclassificationId);
+      assert.equal(retry.credits.length, 1);
+      assert.equal(retry.credits[0].creditId, result.credits[0].creditId);
       assert.equal(await mongoose.connection.collection('unallocated_credits').countDocuments({}), 1);
     });
 
@@ -1918,7 +1969,7 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
         expenseMonth: '2026-10',
         fromMemberId: 'nikhil',
         toMemberId: 'devansh',
-        amountPaise: 10_000,
+        amountPaise: 5_000,
         method: 'upi',
         reference: 'upi-cross-member-48000',
         idempotencyKey: randomUUID(),
@@ -2036,6 +2087,487 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
       assert.equal(await mongoose.connection.collection('payment_reclassifications').countDocuments({}), 1);
       assert.equal(await mongoose.connection.collection('unallocated_credits').countDocuments({}), 1);
     });
+
+    it('partially allocates existing credit to a verified Room Fee without counting cash twice', async () => {
+      const fixture = await createMisclassifiedReceiptFixture();
+      const request = reclassificationRequest(fixture);
+      const reclassificationPreview = await depositService.previewPaymentReclassification(request);
+      await depositService.reclassifyPayment({ ...request, previewToken: reclassificationPreview.previewToken });
+      const credit = await UnallocatedCredit.findOne({ sourceDepositTransactionId: fixture.depositTransactionId }).lean();
+      const pendingReview = await defaultStayAttributionService.getStayAttributedFinances({
+        stayId: fixture.stayId,
+        actorRole: 'superadmin',
+      });
+      assert.equal(pendingReview.unallocatedCreditPaise, 4_800_000);
+      assert.equal(pendingReview.totalOutstandingPayablePaise, 0);
+      assert.equal(pendingReview.isEligibleForNoDues, false);
+      assert.ok(pendingReview.unresolvedFinancialItems.some(
+        (item) => item.code === 'UNALLOCATED_CREDIT_PENDING',
+      ));
+      const room = await ensureRoom('credit-allocation', 1);
+      const chargeId = randomUUID();
+      await RoomCharge.create({
+        chargeId,
+        memberId: 'gaurav',
+        roomId: room.roomId,
+        roomNumber: room.roomNumber,
+        feePlanId: randomUUID(),
+        month: '2026-11',
+        baseAmountPaise: 400_000,
+        dueDate: '2026-11-05',
+        status: 'issued',
+        issuedByRole: 'superadmin',
+      });
+      const allocationRequest = {
+        creditId: credit.creditId,
+        expectedRevision: 0,
+        destinationType: 'ROOM_FEE',
+        targetRecordId: chargeId,
+        amountPaise: 400_000,
+        reason: 'Verified November Room Fee obligation',
+        idempotencyKey: randomUUID(),
+        actorRole: 'superadmin',
+      };
+      const preview = await creditAllocationService.previewAllocation(allocationRequest);
+      assert.equal(preview.canApply, true);
+      assert.equal(preview.creditRemainingAfterPaise, 4_400_000);
+      assert.equal(preview.cashReceiptCountBefore, preview.cashReceiptCountAfter);
+      const result = await creditAllocationService.allocate({
+        ...allocationRequest,
+        previewToken: preview.previewToken,
+      });
+      assert.equal(result.credit.remainingAmountPaise, 4_400_000);
+      assert.equal(result.credit.allocatedAmountPaise, 400_000);
+      const payment = await RoomPayment.findOne({ chargeId }).lean();
+      assert.equal(payment.amountPaise, 400_000);
+      assert.equal(payment.fundingSource, 'UNALLOCATED_CREDIT');
+      assert.equal(payment.sourceCreditAllocationId, result.allocation.creditAllocationId);
+      assert.equal(await HostelDepositTransaction.countDocuments({
+        depositTransactionId: fixture.depositTransactionId,
+      }), 1);
+
+      const replay = await creditAllocationService.allocate({
+        ...allocationRequest,
+        previewToken: preview.previewToken,
+      });
+      assert.equal(replay.allocation.creditAllocationId, result.allocation.creditAllocationId);
+      assert.equal(await CreditAllocation.countDocuments({ creditId: credit.creditId }), 1);
+      assert.equal(await RoomPayment.countDocuments({ chargeId }), 1);
+      await assert.rejects(
+        creditAllocationService.allocate({
+          ...allocationRequest,
+          amountPaise: 300_000,
+          previewToken: preview.previewToken,
+        }),
+        (error) => error.statusCode === 409,
+      );
+    });
+
+    it('supports verified Mess, Expense, and evidenced external settlements without new cash receipts', async () => {
+      const fixture = await createMisclassifiedReceiptFixture();
+      const reclassification = reclassificationRequest(fixture);
+      const reclassificationPreview = await depositService.previewPaymentReclassification(reclassification);
+      await depositService.reclassifyPayment({
+        ...reclassification,
+        previewToken: reclassificationPreview.previewToken,
+      });
+      const credit = await UnallocatedCredit.findOne({
+        sourceDepositTransactionId: fixture.depositTransactionId,
+      }).lean();
+
+      const missingTarget = await creditAllocationService.previewAllocation({
+        creditId: credit.creditId,
+        expectedRevision: 0,
+        destinationType: 'ROOM_FEE',
+        targetRecordId: randomUUID(),
+        amountPaise: 10_000,
+        reason: 'Negative regression for a missing obligation',
+        idempotencyKey: randomUUID(),
+        actorRole: 'superadmin',
+      });
+      assert.equal(missingTarget.canApply, false);
+      assert.ok(missingTarget.conflicts.some(
+        (conflict) => conflict.code === 'TARGET_OBLIGATION_NOT_FOUND',
+      ));
+
+      await MonthlyMealRate.create({
+        month: '2026-10',
+        morningPricePaise: 10_000,
+        nightPricePaise: 0,
+      });
+      await MealDay.create({
+        date: '2026-10-10',
+        meals: {
+          morning: { gaurav: 'taking', nikhil: 'skip', devansh: 'skip' },
+          night: { gaurav: 'skip', nikhil: 'skip', devansh: 'skip' },
+        },
+      });
+      await PaymentSettings.create({
+        key: 'primary',
+        receiverName: 'Hostel Admin',
+      });
+      const messRequest = {
+        creditId: credit.creditId,
+        expectedRevision: 0,
+        destinationType: 'MESS',
+        targetRecordId: '2026-10',
+        amountPaise: 5_000,
+        reason: 'Verified October Mess obligation',
+        idempotencyKey: randomUUID(),
+        actorRole: 'superadmin',
+      };
+      const messPreview = await creditAllocationService.previewAllocation(messRequest);
+      assert.equal(messPreview.canApply, true, JSON.stringify(messPreview.conflicts));
+      const messResult = await creditAllocationService.allocate({
+        ...messRequest,
+        previewToken: messPreview.previewToken,
+      });
+      assert.equal(messResult.credit.remainingAmountPaise, 4_795_000);
+      const messPayment = await Payment.findOne({
+        sourceCreditAllocationId: messResult.allocation.creditAllocationId,
+      }).lean();
+      assert.equal(messPayment.amountPaise, 5_000);
+      assert.equal(messPayment.fundingSource, 'UNALLOCATED_CREDIT');
+      assert.equal(messPayment.upiReference, null);
+
+      const expense = await expenseService.createExpense({
+        month: '2026-10',
+        date: '2026-10-11',
+        title: 'Verified shared groceries',
+        category: 'groceries',
+        amountPaise: 30_000,
+        paidByMemberId: 'nikhil',
+        splitType: 'equal',
+        participants: ['gaurav', 'nikhil', 'devansh'],
+        actorRole: 'admin',
+        actorMemberId: 'nikhil',
+      });
+      const expenseRequest = {
+        creditId: credit.creditId,
+        expectedRevision: 1,
+        destinationType: 'EXPENSE_REIMBURSEMENT',
+        targetRecordId: expense.expenseId,
+        amountPaise: 10_000,
+        reason: 'Verified Gaurav share of shared groceries',
+        idempotencyKey: randomUUID(),
+        actorRole: 'superadmin',
+      };
+      const expensePreview = await creditAllocationService.previewAllocation(expenseRequest);
+      assert.equal(expensePreview.canApply, true);
+      const expenseResult = await creditAllocationService.allocate({
+        ...expenseRequest,
+        previewToken: expensePreview.previewToken,
+      });
+      assert.equal(expenseResult.credit.remainingAmountPaise, 4_785_000);
+      const reimbursement = await ExpenseReimbursement.findOne({
+        sourceCreditAllocationId: expenseResult.allocation.creditAllocationId,
+      }).lean();
+      assert.equal(reimbursement.amountPaise, 10_000);
+      assert.equal(reimbursement.fundingSource, 'UNALLOCATED_CREDIT');
+      assert.equal(reimbursement.reference, null);
+
+      const settlementRequest = {
+        creditId: credit.creditId,
+        expectedRevision: 2,
+        destinationType: 'EXTERNAL_SETTLEMENT',
+        targetRecordId: 'refund-evidence-2026-10-28',
+        amountPaise: 5_000,
+        reason: 'Documented partial refund verified by Super Admin',
+        settlementReference: 'BANK-REFUND-EVIDENCE-001',
+        settledAt: '2026-10-28T06:30:00.000Z',
+        idempotencyKey: randomUUID(),
+        actorRole: 'superadmin',
+      };
+      const settlementPreview = await creditAllocationService.previewAllocation(settlementRequest);
+      assert.equal(settlementPreview.canApply, true);
+      const settlementResult = await creditAllocationService.allocate({
+        ...settlementRequest,
+        previewToken: settlementPreview.previewToken,
+      });
+      assert.equal(settlementResult.credit.remainingAmountPaise, 4_780_000);
+      assert.equal(settlementResult.credit.allocatedAmountPaise, 15_000);
+      assert.equal(settlementResult.credit.settledAmountPaise, 5_000);
+      assert.equal(settlementResult.allocation.targetLedgerRecordId, null);
+      assert.equal(settlementResult.allocation.settlementReference, 'BANK-REFUND-EVIDENCE-001');
+      assert.equal(await HostelDepositTransaction.countDocuments({
+        depositTransactionId: fixture.depositTransactionId,
+      }), 1);
+      assert.equal(await CreditAllocation.countDocuments({ creditId: credit.creditId }), 3);
+    });
+
+    it('completes the combined Gaurav residence, history, receipt, and partial-credit workflow', async () => {
+      const historical = await createMisclassifiedReceiptFixture({
+        reference: 'UPI-GAURAV-48000-COMBINED',
+      });
+      const lower = await ensureRoom('lower-combined', 1);
+      const firstAssignmentId = randomUUID();
+      const currentAssignmentId = randomUUID();
+      await RoomAssignment.insertMany([
+        {
+          assignmentId: firstAssignmentId,
+          roomId: lower.roomId,
+          memberId: 'gaurav',
+          effectiveFromMonth: '2026-10',
+          effectiveFromDate: '2026-10-01',
+          effectiveUntilMonth: '2026-10',
+          effectiveUntilDate: '2026-10-19',
+          assignedAt: new Date('2026-10-01T00:00:00.000Z'),
+          assignedByRole: 'superadmin',
+        },
+        {
+          assignmentId: currentAssignmentId,
+          roomId: lower.roomId,
+          memberId: 'gaurav',
+          effectiveFromMonth: '2026-10',
+          effectiveFromDate: '2026-10-20',
+          effectiveUntilMonth: '2026-10',
+          effectiveUntilDate: '2026-10-21',
+          assignedAt: new Date('2026-10-20T00:00:00.000Z'),
+          assignedByRole: 'superadmin',
+        },
+      ]);
+      const activeStay = await HostelStay.create({
+        stayId: randomUUID(),
+        memberId: 'gaurav',
+        joinedOn: '2026-10-01',
+        status: 'ACTIVE',
+        initialRoomId: lower.roomId,
+        currentRoomId: lower.roomId,
+        admissionAssignmentId: firstAssignmentId,
+        admissionAssignmentOwned: false,
+        revision: 0,
+        financialRevision: 0,
+      });
+      const feePlanId = randomUUID();
+      const octoberChargeId = randomUUID();
+      const octoberPaymentId = randomUUID();
+      await RoomFeePlan.create({
+        feePlanId,
+        memberId: 'gaurav',
+        amountPaise: 480_000,
+        effectiveFromMonth: '2026-10',
+        effectiveUntilMonth: null,
+        dueDay: 5,
+        reason: 'Verified current monthly rent',
+        createdByRole: 'superadmin',
+      });
+      await RoomCharge.create({
+        chargeId: octoberChargeId,
+        memberId: 'gaurav',
+        roomId: lower.roomId,
+        roomNumber: lower.roomNumber,
+        month: '2026-10',
+        feePlanId,
+        baseAmountPaise: 480_000,
+        dueDate: '2026-10-05',
+        status: 'issued',
+        issuedAt: new Date('2026-10-01T00:00:00.000Z'),
+        issuedByRole: 'superadmin',
+      });
+      await RoomPayment.create({
+        roomPaymentId: octoberPaymentId,
+        chargeId: octoberChargeId,
+        memberId: 'gaurav',
+        month: '2026-10',
+        amountPaise: 480_000,
+        method: 'upi',
+        recipientSnapshot: { recipientMode: 'admin_collector', recipientName: 'MealKhata' },
+        idempotencyKey: randomUUID(),
+        status: 'verified',
+        recordedAt: new Date('2026-10-05T00:00:00.000Z'),
+        recordedByRole: 'superadmin',
+      });
+
+      const protectedResidents = [];
+      for (const memberId of ['nikhil', 'devansh']) {
+        const room = await ensureRoom(`${memberId}-combined`, 1);
+        const assignmentId = randomUUID();
+        const stayId = randomUUID();
+        await RoomAssignment.create({
+          assignmentId,
+          roomId: room.roomId,
+          memberId,
+          effectiveFromMonth: '2026-10',
+          effectiveFromDate: '2026-10-01',
+          effectiveUntilMonth: null,
+          effectiveUntilDate: null,
+          assignedAt: new Date('2026-10-01T00:00:00.000Z'),
+          assignedByRole: 'superadmin',
+        });
+        await HostelStay.create({
+          stayId,
+          memberId,
+          joinedOn: '2026-10-01',
+          status: 'ACTIVE',
+          initialRoomId: room.roomId,
+          currentRoomId: room.roomId,
+          admissionAssignmentId: assignmentId,
+          currentAssignmentId: assignmentId,
+          revision: 0,
+          financialRevision: 0,
+        });
+        protectedResidents.push({ memberId, stayId, assignmentId, roomId: room.roomId });
+      }
+
+      const repairRequest = {
+        stayId: activeStay.stayId,
+        roomId: lower.roomId,
+        assignmentAction: 'EXTEND_EXISTING_ASSIGNMENT',
+        assignmentId: currentAssignmentId,
+        expectedRevision: 0,
+        reason: 'Verified continuous occupancy in Room lower',
+        actorRole: 'superadmin',
+      };
+      const repairPreview = await stayService.previewRoomAssignmentRepair(repairRequest);
+      assert.equal(repairPreview.canApply, true);
+      await stayService.repairRoomAssignment({
+        ...repairRequest,
+        previewToken: repairPreview.previewToken,
+      });
+
+      const reclassification = reclassificationRequest(historical);
+      const reclassificationPreview = await depositService.previewPaymentReclassification(reclassification);
+      assert.equal(reclassificationPreview.canApply, true);
+      const reclassified = await depositService.reclassifyPayment({
+        ...reclassification,
+        previewToken: reclassificationPreview.previewToken,
+      });
+      const credit = await UnallocatedCredit.findOne({
+        reclassificationId: reclassified.reclassificationId,
+      }).lean();
+      assert.equal(credit.remainingAmountPaise, 4_800_000);
+
+      const historicalRequest = {
+        stayId: historical.stayId,
+        supersededByStayId: activeStay.stayId,
+        expectedRevision: 1,
+        confirmFinancialAttribution: true,
+        reason: 'Verified one continuous residence and reviewed the historical financial attribution',
+        actorRole: 'superadmin',
+      };
+      const historicalPreview = await stayService.previewHistoricalStayReconciliation(historicalRequest);
+      assert.equal(historicalPreview.canApply, true);
+      const reconciled = await stayService.reconcileHistoricalStay({
+        ...historicalRequest,
+        previewToken: historicalPreview.previewToken,
+      });
+      assert.equal(reconciled.stay.status, 'SUPERSEDED');
+
+      const pendingReview = await defaultStayAttributionService.getStayAttributedFinances({
+        stayId: activeStay.stayId,
+        actorRole: 'superadmin',
+      });
+      assert.equal(pendingReview.depositHeldPaise, 0);
+      assert.equal(pendingReview.unallocatedCreditPaise, 4_800_000);
+      assert.equal(pendingReview.isEligibleForNoDues, false);
+      assert.ok(pendingReview.unresolvedFinancialItems.some(
+        (item) => item.code === 'UNALLOCATED_CREDIT_PENDING',
+      ));
+
+      const novemberChargeId = randomUUID();
+      await RoomCharge.create({
+        chargeId: novemberChargeId,
+        memberId: 'gaurav',
+        roomId: lower.roomId,
+        roomNumber: lower.roomNumber,
+        feePlanId,
+        month: '2026-11',
+        baseAmountPaise: 400_000,
+        dueDate: '2026-11-05',
+        status: 'issued',
+        issuedByRole: 'superadmin',
+      });
+      const allocationRequest = {
+        creditId: credit.creditId,
+        expectedRevision: 0,
+        destinationType: 'ROOM_FEE',
+        targetRecordId: novemberChargeId,
+        amountPaise: 400_000,
+        reason: 'Verified November Room Fee obligation for regression fixture',
+        idempotencyKey: randomUUID(),
+        actorRole: 'superadmin',
+      };
+      const allocationPreview = await creditAllocationService.previewAllocation(allocationRequest);
+      assert.equal(allocationPreview.canApply, true);
+      const allocated = await creditAllocationService.allocate({
+        ...allocationRequest,
+        previewToken: allocationPreview.previewToken,
+      });
+      assert.equal(allocated.credit.remainingAmountPaise, 4_400_000);
+
+      assert.equal(await HostelStay.countDocuments({ memberId: 'gaurav', status: 'ACTIVE' }), 1);
+      assert.equal(await RoomAssignment.countDocuments({ memberId: 'gaurav', effectiveUntilDate: null }), 1);
+      assert.equal(await RoomCharge.countDocuments({ chargeId: octoberChargeId, baseAmountPaise: 480_000 }), 1);
+      assert.equal(await RoomPayment.countDocuments({ roomPaymentId: octoberPaymentId, amountPaise: 480_000 }), 1);
+      assert.equal(await HostelDepositTransaction.countDocuments({
+        depositTransactionId: historical.depositTransactionId,
+        status: 'reclassified',
+      }), 1);
+      assert.equal(await UnallocatedCredit.countDocuments({ creditId: credit.creditId }), 1);
+      assert.equal(await CreditAllocation.countDocuments({ creditId: credit.creditId }), 1);
+      assert.equal(await RoomPayment.countDocuments({
+        chargeId: novemberChargeId,
+        fundingSource: 'UNALLOCATED_CREDIT',
+      }), 1);
+      const clearance = await HostelClearance.findOne({ clearanceId: historical.clearanceId }).lean();
+      assert.equal(clearance.validityStatus, 'REVOKED');
+      const historicalStay = await HostelStay.findOne({ stayId: historical.stayId }).lean();
+      const reconciliationEvent = historicalStay.history.find(
+        (entry) => entry.event === 'HISTORICAL_STAY_RECONCILED',
+      );
+      assert.equal(reconciliationEvent.details.confirmationProvided, true);
+      assert.equal(reconciliationEvent.details.replacementStayId, activeStay.stayId);
+      for (const protectedResident of protectedResidents) {
+        const protectedStay = await HostelStay.findOne({ stayId: protectedResident.stayId }).lean();
+        const protectedAssignment = await RoomAssignment.findOne({
+          assignmentId: protectedResident.assignmentId,
+        }).lean();
+        assert.equal(protectedStay.currentRoomId, protectedResident.roomId);
+        assert.equal(protectedStay.revision, 0);
+        assert.equal(protectedAssignment.effectiveUntilDate, null);
+      }
+    });
+
+    it('allows at most one concurrent allocation when requests would overspend one credit', async () => {
+      const fixture = await createMisclassifiedReceiptFixture();
+      const request = reclassificationRequest(fixture);
+      const reclassificationPreview = await depositService.previewPaymentReclassification(request);
+      await depositService.reclassifyPayment({ ...request, previewToken: reclassificationPreview.previewToken });
+      const credit = await UnallocatedCredit.findOne({ sourceDepositTransactionId: fixture.depositTransactionId }).lean();
+      const room = await ensureRoom('credit-concurrency', 1);
+      const chargeId = randomUUID();
+      await RoomCharge.create({
+        chargeId,
+        memberId: 'gaurav',
+        roomId: room.roomId,
+        roomNumber: room.roomNumber,
+        feePlanId: randomUUID(),
+        month: '2026-12',
+        baseAmountPaise: 6_000_000,
+        dueDate: '2026-12-05',
+        status: 'issued',
+        issuedByRole: 'superadmin',
+      });
+      const requests = [randomUUID(), randomUUID()].map((idempotencyKey) => ({
+        creditId: credit.creditId,
+        expectedRevision: 0,
+        destinationType: 'ROOM_FEE',
+        targetRecordId: chargeId,
+        amountPaise: 3_000_000,
+        reason: 'Concurrent allocation safety verification',
+        idempotencyKey,
+        actorRole: 'superadmin',
+      }));
+      const previews = await Promise.all(requests.map((item) => creditAllocationService.previewAllocation(item)));
+      const outcomes = await Promise.allSettled(requests.map((item, index) => creditAllocationService.allocate({
+        ...item,
+        previewToken: previews[index].previewToken,
+      })));
+      assert.equal(outcomes.filter((outcome) => outcome.status === 'fulfilled').length, 1);
+      assert.equal((await UnallocatedCredit.findOne({ creditId: credit.creditId }).lean()).remainingAmountPaise, 1_800_000);
+      assert.equal(await CreditAllocation.countDocuments({ creditId: credit.creditId }), 1);
+      assert.equal(await RoomPayment.countDocuments({ chargeId }), 1);
+    });
   });
 
   describe('Fee Plan reconciliation', () => {
@@ -2131,6 +2663,90 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
       assert.equal(changes.filter((change) => change.status === 'rejected').length, 1);
       assert.equal(changes.find((change) => change.status === 'rejected').reason.statusCode, 409);
       assert.equal(await RoomFeePlan.countDocuments({ memberId: 'gaurav', supersededAt: null }), 1);
+    });
+
+    it('rejects bounded and backdated Fee Plan overlaps while allowing adjacent history', async () => {
+      const existingId = randomUUID();
+      await RoomFeePlan.create({
+        feePlanId: existingId,
+        memberId: 'gaurav',
+        amountPaise: 480_000,
+        effectiveFromMonth: '2026-10',
+        effectiveUntilMonth: '2026-12',
+        dueDay: 5,
+        createdByRole: 'superadmin',
+      });
+      await assert.rejects(
+        roomFeeService.createFeePlan({
+          memberId: 'gaurav',
+          amountPaise: 500_000,
+          effectiveFromMonth: '2026-11',
+          effectiveUntilMonth: null,
+          reason: 'Must reject bounded overlap',
+          actorRole: 'superadmin',
+        }),
+        (error) => error.statusCode === 409 && error.details?.code === 'FEE_PLAN_OVERLAP',
+      );
+      const adjacent = await roomFeeService.createFeePlan({
+        memberId: 'gaurav',
+        amountPaise: 450_000,
+        effectiveFromMonth: '2026-08',
+        effectiveUntilMonth: '2026-09',
+        reason: 'Verified adjacent backdated period',
+        actorRole: 'superadmin',
+      });
+      assert.equal(adjacent.effectiveUntilMonth, '2026-09');
+      assert.equal(await RoomFeePlan.countDocuments({ memberId: 'gaurav', supersededAt: null }), 2);
+    });
+
+    it('fails closed when transaction startup fails and rolls back a failure after the first write', async () => {
+      const originalStartSession = mongoose.startSession;
+      mongoose.startSession = async () => { throw new Error('Injected session startup failure'); };
+      try {
+        await assert.rejects(
+          roomFeeService.createFeePlan({
+            memberId: 'gaurav',
+            amountPaise: 480_000,
+            effectiveFromMonth: '2026-10',
+            reason: 'Transaction startup failure regression',
+            actorRole: 'superadmin',
+          }),
+          (error) => error.statusCode === 503,
+        );
+      } finally {
+        mongoose.startSession = originalStartSession;
+      }
+      assert.equal(await RoomFeePlan.countDocuments({}), 0);
+
+      const originalId = randomUUID();
+      await RoomFeePlan.create({
+        feePlanId: originalId,
+        memberId: 'gaurav',
+        amountPaise: 480_000,
+        effectiveFromMonth: '2026-10',
+        effectiveUntilMonth: null,
+        dueDay: 5,
+        createdByRole: 'superadmin',
+      });
+      const originalCreateFeePlan = roomRepository.createFeePlan;
+      roomRepository.createFeePlan = async () => { throw new Error('Injected post-cap write failure'); };
+      try {
+        await assert.rejects(
+          roomFeeService.createFeePlan({
+            memberId: 'gaurav',
+            amountPaise: 500_000,
+            effectiveFromMonth: '2026-11',
+            reason: 'Rollback after first write',
+            actorRole: 'superadmin',
+          }),
+          /Injected post-cap write failure/,
+        );
+      } finally {
+        roomRepository.createFeePlan = originalCreateFeePlan;
+      }
+      const preserved = await RoomFeePlan.findOne({ feePlanId: originalId }).lean();
+      assert.equal(preserved.effectiveUntilMonth, null);
+      assert.equal(await RoomFeePlan.countDocuments({ memberId: 'gaurav' }), 1);
     });
   });
 

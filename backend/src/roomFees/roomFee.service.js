@@ -53,6 +53,29 @@ export function calculateMaxSimultaneousOccupancy({
 
   return maxOccupancy;
 }
+
+export function findFeePlanScheduleConflicts(existingPlans, proposedPlan) {
+  const proposedUntil = proposedPlan.effectiveUntilMonth || '9999-12';
+  return existingPlans
+    .filter((plan) => !plan.supersededAt)
+    .filter((plan) => {
+      const existingUntil = plan.effectiveUntilMonth || '9999-12';
+      return plan.effectiveFromMonth <= proposedUntil
+        && proposedPlan.effectiveFromMonth <= existingUntil;
+    })
+    .map((plan) => {
+      const existingUntil = plan.effectiveUntilMonth || '9999-12';
+      return {
+        feePlanId: plan.feePlanId,
+        existingFromMonth: plan.effectiveFromMonth,
+        existingUntilMonth: plan.effectiveUntilMonth,
+        conflictFromMonth: plan.effectiveFromMonth > proposedPlan.effectiveFromMonth
+          ? plan.effectiveFromMonth
+          : proposedPlan.effectiveFromMonth,
+        conflictUntilMonth: existingUntil < proposedUntil ? existingUntil : proposedUntil,
+      };
+    });
+}
 import {
   DEFAULT_DUE_DAY,
   isValidRoomFeeAmount,
@@ -453,24 +476,7 @@ export function createRoomFeeService({
         throw new HttpError(400, 'effectiveUntilDate cannot be earlier than effectiveFromDate.');
       }
 
-      let localSession = null;
-      if (!session && mongoose.connection && mongoose.connection.readyState === 1) {
-        try {
-          localSession = await mongoose.startSession();
-          localSession.startTransaction();
-        } catch (_err) {
-          if (process.env.NODE_ENV === 'production') {
-            throw new HttpError(503, 'Database transaction support is required.');
-          }
-          localSession = null;
-        }
-      } else if (!session && process.env.NODE_ENV === 'production') {
-        throw new HttpError(503, 'Database transaction support is required.');
-      }
-
-      const activeSession = session || localSession;
-
-      try {
+      const execute = async (activeSession) => {
         const room =
           (await repository.findRoomById(roomId, { session: activeSession })) ||
           (await repository.findRoomByNumber(roomId, { session: activeSession }));
@@ -561,22 +567,15 @@ export function createRoomFeeService({
           { session: activeSession },
         );
 
-        if (localSession) {
-          await localSession.commitTransaction();
-        }
-
         const roomMap = new Map([[room.roomId, room]]);
         return serializeRoomAssignment(assignment, roomMap);
-      } catch (err) {
-        if (localSession && localSession.inTransaction()) {
-          await localSession.abortTransaction();
-        }
-        throw err;
-      } finally {
-        if (localSession) {
-          await localSession.endSession();
-        }
+      };
+
+      if (session) return execute(session);
+      if (repository.requiresTransactions) {
+        return runFinancialTransaction(execute, { retryOnDuplicateKey: true });
       }
+      return execute(null);
     },
 
     async getAllAssignments() {
@@ -1060,24 +1059,7 @@ export function createRoomFeeService({
 
       const normalizedReason = typeof reason === 'string' && reason.trim() ? reason.trim().slice(0, MAX_REASON_LENGTH) : null;
 
-      let localSession = null;
-      if (!session && mongoose.connection && mongoose.connection.readyState === 1) {
-        try {
-          localSession = await mongoose.startSession();
-          localSession.startTransaction();
-        } catch (_err) {
-          if (process.env.NODE_ENV === 'production') {
-            throw new HttpError(503, 'Database transaction support is required.');
-          }
-          localSession = null;
-        }
-      } else if (!session && process.env.NODE_ENV === 'production') {
-        throw new HttpError(503, 'Database transaction support is required.');
-      }
-
-      const activeSession = session || localSession;
-
-      try {
+      const execute = async (activeSession) => {
         if (typeof repository.lockFeeSchedule === 'function') {
           const scheduleState = await repository.getFeeScheduleState(memberId, { session: activeSession });
           const lockedState = await repository.lockFeeSchedule(
@@ -1091,31 +1073,36 @@ export function createRoomFeeService({
           }
         }
 
-        // Handle existing open-ended plans for this member starting before the new effective month
         const existingPlans = await repository.findFeePlansForMember(memberId, { session: activeSession });
-        for (const p of existingPlans) {
-          if (!p.supersededAt) {
-            if (!p.effectiveUntilMonth && compareLogicalMonths(p.effectiveFromMonth, effectiveFromMonth) < 0) {
-              const cappedUntil = getPreviousLogicalMonth(effectiveFromMonth);
-              await repository.updateFeePlan(
-                p.feePlanId,
-                {
-                  effectiveUntilMonth: cappedUntil,
-                },
-                { session: activeSession },
-              );
-            } else if (compareLogicalMonths(p.effectiveFromMonth, effectiveFromMonth) >= 0) {
-              // Supersede any conflicting future plans
-              await repository.updateFeePlan(
-                p.feePlanId,
-                {
-                  supersededAt: now(),
-                  supersededBy: actorRole,
-                },
-                { session: activeSession },
-              );
-            }
-          }
+        const proposedPlan = { effectiveFromMonth, effectiveUntilMonth };
+        const conflicts = findFeePlanScheduleConflicts(existingPlans, proposedPlan);
+        const autoCapCandidate = conflicts.length === 1
+          ? existingPlans.find((plan) => (
+            plan.feePlanId === conflicts[0].feePlanId
+            && !plan.effectiveUntilMonth
+            && compareLogicalMonths(plan.effectiveFromMonth, effectiveFromMonth) < 0
+          ))
+          : null;
+
+        if (conflicts.length > 0 && !autoCapCandidate) {
+          const conflict = new HttpError(
+            409,
+            'Fee Plan overlaps an existing effective plan. Review or reconcile the existing schedule before creating this plan.',
+          );
+          conflict.details = {
+            code: 'FEE_PLAN_OVERLAP',
+            memberId,
+            conflicts,
+          };
+          throw conflict;
+        }
+
+        if (autoCapCandidate) {
+          await repository.updateFeePlan(
+            autoCapCandidate.feePlanId,
+            { effectiveUntilMonth: getPreviousLogicalMonth(effectiveFromMonth) },
+            { session: activeSession },
+          );
         }
 
         const feePlanId = randomUUID();
@@ -1133,25 +1120,22 @@ export function createRoomFeeService({
           { session: activeSession },
         );
 
-        if (localSession) {
-          await localSession.commitTransaction();
-        }
-
         return serializeFeePlan(plan);
-      } catch (err) {
-        if (localSession && localSession.inTransaction()) {
-          await localSession.abortTransaction();
+      };
+
+      try {
+        if (session) return await execute(session);
+        if (repository.requiresTransactions) {
+          return await runFinancialTransaction(execute, { retryOnDuplicateKey: true });
         }
+        return await execute(null);
+      } catch (err) {
         if (err.code === 11000 || err.code === 112 || err.message?.includes('WriteConflict')) {
           const conflict = new HttpError(409, 'The Fee Plan schedule changed concurrently. Please retry.');
           conflict.details = { code: 'FEE_PLAN_SCHEDULE_CONFLICT' };
           throw conflict;
         }
         throw err;
-      } finally {
-        if (localSession) {
-          await localSession.endSession();
-        }
       }
     },
 

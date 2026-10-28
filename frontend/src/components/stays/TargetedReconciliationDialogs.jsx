@@ -29,6 +29,42 @@ function PreviewPanel({ preview }) {
           {preview.conflicts.map((conflict, index) => <li key={`${conflict.code}-${index}`}>{conflict.message}</li>)}
         </ul>
       )}
+      {(preview.currentRoom || preview.proposedRoom) && (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          <div><span className="font-medium">Current room:</span> {preview.currentRoom?.roomId || 'Missing'}</div>
+          <div><span className="font-medium">Proposed room:</span> {preview.proposedRoom?.roomNumber || preview.proposedRoom?.roomId}</div>
+          <div><span className="font-medium">Current assignment:</span> {preview.currentAssignment?.effectiveFromDate || preview.currentAssignment?.effectiveFromMonth || 'Missing'} to {preview.currentAssignment?.effectiveUntilDate || preview.currentAssignment?.effectiveUntilMonth || 'present'}</div>
+          <div><span className="font-medium">Proposed assignment:</span> {preview.proposedAssignment?.effectiveFromDate || preview.proposedAssignment?.effectiveFromMonth} to {preview.proposedAssignment?.effectiveUntilDate || preview.proposedAssignment?.effectiveUntilMonth || 'present'}</div>
+          <div><span className="font-medium">Capacity:</span> {preview.capacityValidation?.valid ? 'Validated' : 'Conflict'}</div>
+          <div><span className="font-medium">Financial history:</span> {preview.financialRecordsPreserved?.policy || 'Preserved'}</div>
+        </div>
+      )}
+      {preview.beforeState && preview.afterState && (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          <div><span className="font-medium">Stay status:</span> {preview.beforeState.historicalStay?.status} â†’ {preview.afterState.historicalStay?.status}</div>
+          <div><span className="font-medium">Clearance validity:</span> {preview.beforeState.activeClearanceIds?.length ? 'ACTIVE' : 'None'} â†’ {preview.afterState.clearanceValidityStatus}</div>
+          <div><span className="font-medium">Attribution:</span> {preview.afterState.attributionStatus}</div>
+          <div><span className="font-medium">Months:</span> {preview.affectedMonths?.join(', ') || 'None'}</div>
+        </div>
+      )}
+      {preview.sourceReceipt && (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          <div><span className="font-medium">Original receipt:</span> {formatPaise(preview.sourceReceipt.amountPaise)}</div>
+          <div><span className="font-medium">Category:</span> {preview.originalCategory} â†’ {preview.proposedCategory}</div>
+          <div><span className="font-medium">Deposit held:</span> {formatPaise(preview.securityDepositBeforePaise)} â†’ {formatPaise(preview.securityDepositAfterPaise)}</div>
+          <div><span className="font-medium">Unallocated credit:</span> {formatPaise(preview.unallocatedCreditBeforePaise)} â†’ {formatPaise(preview.unallocatedCreditAfterPaise)}</div>
+          <div><span className="font-medium">Cash receipts:</span> {preview.cashReceiptCountBefore} â†’ {preview.cashReceiptCountAfter}</div>
+          <div><span className="font-medium">Reference check:</span> {preview.duplicateReferenceCheck?.passed ? 'Passed' : 'Conflict'}</div>
+        </div>
+      )}
+      {preview.credit && preview.target && (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          <div><span className="font-medium">Available credit:</span> {formatPaise(preview.creditRemainingBeforePaise)}</div>
+          <div><span className="font-medium">Allocation:</span> {formatPaise(preview.allocationAmountPaise)}</div>
+          <div><span className="font-medium">Target outstanding:</span> {preview.target.outstandingBeforePaise === null ? 'External settlement' : `${formatPaise(preview.target.outstandingBeforePaise)} â†’ ${formatPaise(preview.target.outstandingAfterPaise)}`}</div>
+          <div><span className="font-medium">Credit remaining:</span> {formatPaise(preview.creditRemainingBeforePaise)} â†’ {formatPaise(preview.creditRemainingAfterPaise)}</div>
+        </div>
+      )}
       {preview.affectedRecords?.length > 0 && (
         <div className="mt-2 text-slate-500">
           <p className="font-medium text-slate-700 dark:text-slate-300">Affected records</p>
@@ -45,6 +81,7 @@ function AuditResult({ result }) {
   if (!result) return null;
   const auditId = result.reclassificationId
     || result.reconciliationId
+    || result.allocation?.creditAllocationId
     || result.assignment?.assignmentId
     || result.stay?.stayId;
   return (
@@ -64,6 +101,7 @@ export function RoomAssignmentRepairDialog({ open, onOpenChange, stay, onPreview
   const [roomId, setRoomId] = useState('');
   const [assignmentAction, setAssignmentAction] = useState('EXTEND_EXISTING_ASSIGNMENT');
   const [assignmentId, setAssignmentId] = useState('');
+  const [correctionMode, setCorrectionMode] = useState('ASSIGNMENT_ONLY');
   const [occupancyFromDate, setOccupancyFromDate] = useState('');
   const [reason, setReason] = useState('');
   const [preview, setPreview] = useState(null);
@@ -75,6 +113,7 @@ export function RoomAssignmentRepairDialog({ open, onOpenChange, stay, onPreview
     if (!open || !stay) return;
     setRoomId(stay.currentRoomId || stay.initialRoomId || '');
     setReason('');
+    setCorrectionMode('ASSIGNMENT_ONLY');
     setPreview(null);
     setResult(null);
     setError('');
@@ -99,6 +138,7 @@ export function RoomAssignmentRepairDialog({ open, onOpenChange, stay, onPreview
     roomId,
     assignmentAction,
     assignmentId: assignmentAction === 'CREATE_NEW_ASSIGNMENT' ? null : assignmentId,
+    correctionMode,
     occupancyFromDate: assignmentAction === 'CREATE_NEW_ASSIGNMENT' ? occupancyFromDate : null,
     expectedRevision: stay?.revision,
     reason: reason.trim(),
@@ -155,6 +195,13 @@ export function RoomAssignmentRepairDialog({ open, onOpenChange, stay, onPreview
                 <option value="CREATE_NEW_ASSIGNMENT">Create new assignment</option>
               </select>
             </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="repairMode">Correction type</Label>
+            <select id="repairMode" value={correctionMode} onChange={(event) => { setCorrectionMode(event.target.value); setPreview(null); }} className="h-9 w-full rounded-md border bg-background px-3 text-sm">
+              <option value="ASSIGNMENT_ONLY">Repair missing or ended assignment</option>
+              <option value="CORRECT_STAY_ROOM_REFERENCE">Correct an incorrect Stay room reference</option>
+            </select>
           </div>
           {assignmentAction !== 'CREATE_NEW_ASSIGNMENT' ? (
             <div className="space-y-1.5">
@@ -271,6 +318,66 @@ export function PaymentReclassificationDialog({ open, onOpenChange, stay, deposi
           {result ? <AuditResult result={result} /> : <PreviewPanel preview={preview} />}
           {requiresReview && <Button variant="outline" onClick={async () => { await onOpenClearanceReview(stay.stayId, reason); setPreview(null); }}>Open required clearance review</Button>}
           <DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>{result ? 'Close' : 'Cancel'}</Button>{!result && (!preview ? <Button onClick={() => execute(false)} disabled={busy || !source || reason.trim().length < 3}>Preview</Button> : <Button onClick={() => execute(true)} disabled={busy || !preview.canApply}>Confirm category correction</Button>)}</DialogFooter>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function CreditAllocationDialog({ open, onOpenChange, credit, onPreview, onApply, onCompleted }) {
+  const [destinationType, setDestinationType] = useState('ROOM_FEE');
+  const [targetRecordId, setTargetRecordId] = useState('');
+  const [amountRupees, setAmountRupees] = useState('');
+  const [reason, setReason] = useState('');
+  const [settlementReference, setSettlementReference] = useState('');
+  const [settledAt, setSettledAt] = useState('');
+  const [idempotencyKey, setIdempotencyKey] = useState('');
+  const [preview, setPreview] = useState(null);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    setDestinationType('ROOM_FEE'); setTargetRecordId(''); setAmountRupees(''); setReason('');
+    setSettlementReference(''); setSettledAt(''); setPreview(null); setResult(null); setError('');
+    setIdempotencyKey(globalThis.crypto?.randomUUID?.() || `${Date.now()}-credit-allocation`);
+  }, [open, credit]);
+  const amountPaise = Math.round(Number(amountRupees || 0) * 100);
+  const payload = {
+    expectedRevision: credit?.revision || 0,
+    destinationType,
+    targetRecordId,
+    amountPaise,
+    reason: reason.trim(),
+    settlementReference: destinationType === 'EXTERNAL_SETTLEMENT' ? settlementReference.trim() : null,
+    settledAt: destinationType === 'EXTERNAL_SETTLEMENT' ? settledAt : null,
+    idempotencyKey,
+  };
+  const execute = async (apply) => {
+    setBusy(true); setError('');
+    try {
+      if (apply) {
+        setResult(await onApply(credit.creditId, { ...payload, previewToken: preview.previewToken }));
+        onCompleted?.();
+      } else setPreview(await onPreview(credit.creditId, payload));
+    } catch (requestError) { setPreview(null); setError(requestError?.message || 'Unable to allocate the credit.'); } finally { setBusy(false); }
+  };
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader><DialogTitle>Allocate or Settle Unallocated Credit</DialogTitle><DialogDescription>This applies existing money to a verified obligation without recording cash again.</DialogDescription></DialogHeader>
+        <div className="space-y-4 text-xs">
+          <p>Available: <strong>{formatPaise(credit?.remainingAmountPaise || 0)}</strong> Â· Credit {credit?.creditId}</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5"><Label htmlFor="creditDestination">Destination</Label><select id="creditDestination" value={destinationType} onChange={(event) => { setDestinationType(event.target.value); setPreview(null); }} className="h-9 w-full rounded-md border bg-background px-3 text-sm"><option value="ROOM_FEE">Room Fee obligation</option><option value="MESS">Mess obligation</option><option value="EXPENSE_REIMBURSEMENT">Shared Expense reimbursement</option><option value="EXTERNAL_SETTLEMENT">Documented refund / external settlement</option></select></div>
+            <div className="space-y-1.5"><Label htmlFor="creditTarget">Target {destinationType === 'MESS' ? 'month (YYYY-MM)' : 'record ID'}</Label><Input id="creditTarget" value={targetRecordId} onChange={(event) => { setTargetRecordId(event.target.value); setPreview(null); }} required /></div>
+            <div className="space-y-1.5"><Label htmlFor="creditAmount">Amount (â‚¹)</Label><Input id="creditAmount" type="number" min="0.01" step="0.01" value={amountRupees} onChange={(event) => { setAmountRupees(event.target.value); setPreview(null); }} required /></div>
+            <div className="space-y-1.5"><Label htmlFor="creditReason">Mandatory audit reason</Label><Input id="creditReason" value={reason} onChange={(event) => { setReason(event.target.value); setPreview(null); }} maxLength={500} required /></div>
+          </div>
+          {destinationType === 'EXTERNAL_SETTLEMENT' && <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-1.5"><Label htmlFor="settlementReference">Settlement evidence reference</Label><Input id="settlementReference" value={settlementReference} onChange={(event) => { setSettlementReference(event.target.value); setPreview(null); }} required /></div><div className="space-y-1.5"><Label htmlFor="settledAt">Settled at</Label><Input id="settledAt" type="datetime-local" value={settledAt} onChange={(event) => { setSettledAt(event.target.value); setPreview(null); }} required /></div></div>}
+          {error && <p role="alert" className="text-rose-600">{error}</p>}
+          {result ? <AuditResult result={result} /> : <PreviewPanel preview={preview} />}
+          <DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>{result ? 'Close' : 'Cancel'}</Button>{!result && (!preview ? <Button onClick={() => execute(false)} disabled={busy || !targetRecordId || amountPaise <= 0 || reason.trim().length < 3}>Preview</Button> : <Button onClick={() => execute(true)} disabled={busy || !preview.canApply}>Confirm allocation</Button>)}</DialogFooter>
         </div>
       </DialogContent>
     </Dialog>

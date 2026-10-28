@@ -140,7 +140,7 @@ export function createApp({
   app.use('/api/room-fees', sensitiveMutationLimiter, roomFees);
   app.use('/api/rooms', sensitiveMutationLimiter, rooms);
   app.use('/api/expenses', sensitiveMutationLimiter, expenses);
-  app.use('/api/finance', finance);
+  app.use('/api/finance', sensitiveMutationLimiter, finance);
   app.use('/api/stays', sensitiveMutationLimiter, stays);
   app.use('/api/admin/members', sensitiveMutationLimiter, members);
 

@@ -59,17 +59,30 @@ export function createDepositService({ repository = stayRepository } = {}) {
     /**
      * Compute current authoritative deposit balance for a stay
      */
-    async getDepositSummary(stayId) {
+    async getDepositSummary(stayId, { session = null } = {}) {
       const [account, transactions, reclassifications, unallocatedCredits] = await Promise.all([
-        repository.findDepositAccountByStayId(stayId),
-        repository.listDepositTransactionsByStayId(stayId, { includeVoided: true }),
+        repository.findDepositAccountByStayId(stayId, { session }),
+        repository.listDepositTransactionsByStayId(stayId, { includeVoided: true, session }),
         typeof repository.listPaymentReclassificationsByStayId === 'function'
-          ? repository.listPaymentReclassificationsByStayId(stayId)
+          ? repository.listPaymentReclassificationsByStayId(stayId, { session })
           : [],
         typeof repository.listUnallocatedCreditsByStayId === 'function'
-          ? repository.listUnallocatedCreditsByStayId(stayId)
+          ? repository.listUnallocatedCreditsByStayId(stayId, { session })
           : [],
       ]);
+      const creditAllocations = typeof repository.listCreditAllocationsByCreditIds === 'function'
+        ? await repository.listCreditAllocationsByCreditIds(
+          unallocatedCredits.map((credit) => credit.creditId),
+          { session },
+        )
+        : [];
+      const creditsWithAllocations = unallocatedCredits.map((credit) => ({
+        ...credit,
+        allocatedAmountPaise: credit.allocatedAmountPaise || 0,
+        settledAmountPaise: credit.settledAmountPaise || 0,
+        revision: credit.revision || 0,
+        allocations: creditAllocations.filter((allocation) => allocation.creditId === credit.creditId),
+      }));
       if (!account) {
         return {
           account: null,
@@ -82,7 +95,7 @@ export function createDepositService({ repository = stayRepository } = {}) {
           },
           transactions,
           reclassifications,
-          unallocatedCredits,
+          unallocatedCredits: creditsWithAllocations,
         };
       }
 
@@ -123,7 +136,7 @@ export function createDepositService({ repository = stayRepository } = {}) {
         },
         transactions,
         reclassifications,
-        unallocatedCredits,
+        unallocatedCredits: creditsWithAllocations,
       };
     },
 
@@ -204,9 +217,16 @@ export function createDepositService({ repository = stayRepository } = {}) {
       const account = await repository.findDepositAccountByStayId(normalized.stayId);
       const stay = await repository.findStayById(normalized.stayId);
       if (!account || !stay) throw new DepositDomainError('Source Stay or deposit account not found.', 404);
-      const activeTransactions = await repository.listDepositTransactionsByStayId(normalized.stayId, {
-        includeVoided: false,
-      });
+      const [activeTransactions, allTransactions, currentCredits, clearances] = await Promise.all([
+        repository.listDepositTransactionsByStayId(normalized.stayId, { includeVoided: false }),
+        repository.listDepositTransactionsByStayId(normalized.stayId, { includeVoided: true }),
+        typeof repository.listUnallocatedCreditsByStayId === 'function'
+          ? repository.listUnallocatedCreditsByStayId(normalized.stayId)
+          : [],
+        typeof repository.findClearancesByStayId === 'function'
+          ? repository.findClearancesByStayId(normalized.stayId)
+          : [],
+      ]);
       const conflicts = [];
       if (source.type !== DEPOSIT_TRANSACTION_TYPES.RECEIVED || source.status !== 'recorded') {
         conflicts.push({ code: 'SOURCE_RECEIPT_NOT_ACTIVE', message: 'Source is not an active deposit receipt.' });
@@ -278,6 +298,13 @@ export function createDepositService({ repository = stayRepository } = {}) {
           message: 'The source reference already exists in another active ledger.',
         });
       }
+      const existingUnallocatedCreditPaise = currentCredits.reduce(
+        (sum, credit) => sum + (credit.remainingAmountPaise || 0),
+        0,
+      );
+      const cashReceiptCount = allTransactions.filter(
+        (transaction) => transaction.type === DEPOSIT_TRANSACTION_TYPES.RECEIVED && transaction.status !== 'voided',
+      ).length;
 
       const stateFingerprint = createHash('sha256').update(JSON.stringify({
         requestFingerprint: normalized.requestFingerprint,
@@ -308,6 +335,27 @@ export function createDepositService({ repository = stayRepository } = {}) {
         sourceReceipt: source,
         allocations: normalized.allocations,
         moneyConservation: { sourceAmountPaise: source.amountPaise, allocatedAmountPaise },
+        originalCategory: 'SECURITY_DEPOSIT',
+        proposedCategory: 'UNALLOCATED_CREDIT',
+        securityDepositBeforePaise: heldPaise,
+        securityDepositAfterPaise: Math.max(0, heldPaise - source.amountPaise),
+        unallocatedCreditBeforePaise: existingUnallocatedCreditPaise,
+        unallocatedCreditAfterPaise: existingUnallocatedCreditPaise + allocatedAmountPaise,
+        cashReceiptCountBefore: cashReceiptCount,
+        cashReceiptCountAfter: cashReceiptCount,
+        affectedClearances: clearances
+          .filter((clearance) => !clearance.validityStatus || clearance.validityStatus === 'ACTIVE')
+          .map((clearance) => ({
+            clearanceId: clearance.clearanceId,
+            currentValidity: clearance.validityStatus || 'ACTIVE',
+            proposedValidity: 'REVOKED',
+          })),
+        duplicateReferenceCheck: {
+          reference: source.reference || null,
+          passed: !duplicate,
+          conflict: duplicate || null,
+        },
+        auditReason: normalized.reason,
         depositAccountTransition: account.expectedDepositPaise === 0
           && activeTransactions.length === 1
           ? { currentStatus: account.status, proposedStatus: DEPOSIT_ACCOUNT_STATUSES.NOT_REQUIRED }
@@ -334,10 +382,13 @@ export function createDepositService({ repository = stayRepository } = {}) {
         if (existing.requestFingerprint !== normalized.requestFingerprint) {
           throw new DepositDomainError('Idempotency key was reused with a different payload.', 409);
         }
+        const credits = typeof repository.listUnallocatedCreditsByReclassificationId === 'function'
+          ? await repository.listUnallocatedCreditsByReclassificationId(existing.reclassificationId)
+          : [];
         return {
           reclassificationId: existing.reclassificationId,
           journal: existing,
-          credits: [],
+          credits,
         };
       }
       if (!previewToken || typeof previewToken !== 'string') {

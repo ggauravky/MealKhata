@@ -268,6 +268,17 @@ export function useAdminStays(filter = {}) {
     return res.data;
   };
 
+  const previewCreditAllocation = async (creditId, payload) => {
+    const res = await api.post(`/api/finance/unallocated-credits/${creditId}/allocation-preview`, payload);
+    return res.data;
+  };
+
+  const allocateCredit = async (creditId, payload) => {
+    const res = await api.post(`/api/finance/unallocated-credits/${creditId}/allocate`, payload);
+    refresh();
+    return res.data;
+  };
+
   const openClearanceReview = async (stayId, reason) => {
     const res = await api.post(`/api/stays/${stayId}/clearance/review`, { reason });
     refresh();
@@ -333,6 +344,8 @@ export function useAdminStays(filter = {}) {
     reconcileHistoricalStay,
     previewPaymentReclassification,
     reclassifyPayment,
+    previewCreditAllocation,
+    allocateCredit,
     openClearanceReview,
     transferRoom,
     recordDepositTransaction,

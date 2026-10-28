@@ -6,10 +6,11 @@
 import { Router } from 'express';
 import { ROLES } from '../auth/permissions.js';
 import { MEMBER_IDS } from '../config/members.js';
-import { requireAdminOrAbove, requireAuthenticated } from '../middleware/authorize.js';
+import { requireAdminOrAbove, requireAuthenticated, requireSuperAdmin } from '../middleware/authorize.js';
 import { isValidLogicalMonth } from '../utils/month.js';
 import { financialOverviewService } from '../finance/financialOverview.service.js';
 import { monthlyFinancialPdfService } from '../finance/monthlyFinancialPdf.service.js';
+import { creditAllocationService } from '../finance/creditAllocation.service.js';
 
 function validateMonthParam(req, res, next) {
   const month = req.params.month;
@@ -25,8 +26,48 @@ function validateMonthParam(req, res, next) {
 export function createFinanceRouter({
   overviewService = financialOverviewService,
   pdfService = monthlyFinancialPdfService,
+  credits = creditAllocationService,
 } = {}) {
   const router = Router();
+
+  router.get('/unallocated-credits', requireSuperAdmin, async (req, res, next) => {
+    try {
+      const data = await credits.listCredits({
+        memberId: req.query.memberId || null,
+        status: req.query.status || null,
+        actorRole: req.auth.role,
+      });
+      return res.json({ success: true, data });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post('/unallocated-credits/:creditId/allocation-preview', requireSuperAdmin, async (req, res, next) => {
+    try {
+      const data = await credits.previewAllocation({
+        ...req.body,
+        creditId: req.params.creditId,
+        actorRole: req.auth.role,
+      });
+      return res.json({ success: true, data });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post('/unallocated-credits/:creditId/allocate', requireSuperAdmin, async (req, res, next) => {
+    try {
+      const data = await credits.allocate({
+        ...req.body,
+        creditId: req.params.creditId,
+        actorRole: req.auth.role,
+      });
+      return res.json({ success: true, data });
+    } catch (error) {
+      return next(error);
+    }
+  });
 
   // 1. Household Unified Overview (Admin / Super Admin only)
   router.get('/overview/:month', requireAdminOrAbove, validateMonthParam, async (req, res, next) => {

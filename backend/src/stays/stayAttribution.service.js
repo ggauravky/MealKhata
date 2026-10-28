@@ -103,6 +103,7 @@ export function createStayAttributionService({
       let totalExpenseSharePaise = 0;
       let totalExpenseOwedPaise = 0;
       let totalExpenseReceivablePaise = 0;
+      let memberUnallocatedCreditPaise = 0;
 
       for (const month of months) {
         // Query base monthly overview
@@ -118,6 +119,14 @@ export function createStayAttributionService({
           error.statusCode = 500;
           throw error;
         }
+
+        // Credits are a member-level liability, even when their source receipt belongs
+        // to an earlier Stay. The overview repeats the same member total for each month,
+        // so retain (rather than sum) the authoritative value.
+        memberUnallocatedCreditPaise = Math.max(
+          memberUnallocatedCreditPaise,
+          overview.credits?.unallocatedCreditPaise || 0,
+        );
 
         const multiStay = isMultiStayMonth(month);
         const monthStart = `${month}-01`;
@@ -357,6 +366,13 @@ export function createStayAttributionService({
       // Live deposit overview for this specific stayId
       const depositOverview = await deposits.getDepositSummary(stayId, { session });
       const depositHeldPaise = depositOverview?.summary?.heldPaise || 0;
+      const staySourceCreditPaise = (depositOverview?.unallocatedCredits || [])
+        .reduce((sum, credit) => sum + (credit.remainingAmountPaise || 0), 0);
+      const unallocatedCreditPaise = Math.max(
+        staySourceCreditPaise,
+        memberUnallocatedCreditPaise,
+      );
+      const unresolvedFinancialItems = [];
 
       if (depositHeldPaise > 0) {
         outstandingObligations.push({
@@ -367,12 +383,22 @@ export function createStayAttributionService({
         });
       }
 
+      if (unallocatedCreditPaise > 0) {
+        unresolvedFinancialItems.push({
+          code: 'UNALLOCATED_CREDIT_PENDING',
+          domain: 'UNALLOCATED_CREDIT',
+          amountPaise: unallocatedCreditPaise,
+          message: 'The hostel holds unapplied resident credit that still requires allocation or documented settlement.',
+        });
+      }
+
       const totalOutstandingPayablePaise =
         totalMessRemainingPaise + totalRoomRemainingPaise + totalExpenseOwedPaise;
 
       const isEligibleForNoDues =
         totalOutstandingPayablePaise === 0
         && depositHeldPaise === 0
+        && unallocatedCreditPaise === 0
         && attributionWarnings.length === 0;
 
       return {
@@ -383,6 +409,10 @@ export function createStayAttributionService({
         outstandingObligations,
         depositOverview,
         depositHeldPaise,
+        unallocatedCreditPaise,
+        memberOutstandingPayablePaise: totalOutstandingPayablePaise,
+        memberReceivablePaise: totalExpenseReceivablePaise,
+        unresolvedFinancialItems,
         totalMessBilledPaise,
         totalMessPaidPaise,
         totalMessRemainingPaise,

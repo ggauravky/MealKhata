@@ -93,6 +93,20 @@ export const roomPaymentSchema = new mongoose.Schema(
       required: true,
       unique: true,
     },
+    fundingSource: {
+      type: String,
+      enum: ['CASH_RECEIPT', 'UNALLOCATED_CREDIT'],
+      default() { return this.isNew ? 'CASH_RECEIPT' : undefined; },
+      required: true,
+      immutable: true,
+    },
+    sourceCreditAllocationId: {
+      type: String,
+      trim: true,
+      immutable: true,
+      sparse: true,
+      unique: true,
+    },
     status: {
       type: String,
       enum: Object.values(ROOM_PAYMENT_STATUSES),

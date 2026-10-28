@@ -13,7 +13,7 @@ import {
 import { CLEARANCE_VALIDITY_STATUSES, STAY_STATUSES } from './stay.constants.js';
 import { guardFinancialMutation } from '../finance/financialMutationGuard.js';
 import { runFinancialTransaction } from '../finance/financialTransaction.js';
-import { PaymentReclassification, UnallocatedCredit } from './paymentReclassification.model.js';
+import { CreditAllocation, PaymentReclassification, UnallocatedCredit } from './paymentReclassification.model.js';
 import { RoomPayment } from '../roomFees/roomPayment.model.js';
 import { Payment } from '../payments/payment.model.js';
 import { ExpenseReimbursement } from '../expenses/expenseReimbursement.model.js';
@@ -200,6 +200,13 @@ export const stayRepository = {
       expectedRevision,
       reconciledAt,
       revokedClearanceIds,
+      confirmationProvided,
+      affectedMonths,
+      attributionWarnings,
+      affectedFinancialDomains,
+      beforeState,
+      afterState,
+      obligationMappings,
     },
     { session } = {},
   ) {
@@ -227,6 +234,15 @@ export const stayRepository = {
               supersededByStayId,
               reconciliationId,
               revokedClearanceIds,
+              historicalStayId: stayId,
+              replacementStayId: supersededByStayId,
+              confirmationProvided,
+              affectedMonths,
+              attributionWarnings,
+              affectedFinancialDomains,
+              beforeState,
+              afterState,
+              obligationMappings,
             },
           },
         },
@@ -512,6 +528,19 @@ export const stayRepository = {
     const q = UnallocatedCredit.find({
       reclassificationId: { $in: journals.map((journal) => journal.reclassificationId) },
     }).sort({ createdAt: -1 });
+    if (session) q.session(session);
+    return q.lean();
+  },
+
+  async listUnallocatedCreditsByReclassificationId(reclassificationId, { session = null } = {}) {
+    const q = UnallocatedCredit.find({ reclassificationId }).sort({ creditId: 1 });
+    if (session) q.session(session);
+    return q.lean();
+  },
+
+  async listCreditAllocationsByCreditIds(creditIds, { session = null } = {}) {
+    if (!Array.isArray(creditIds) || creditIds.length === 0) return [];
+    const q = CreditAllocation.find({ creditId: { $in: creditIds } }).sort({ completedAt: 1 });
     if (session) q.session(session);
     return q.lean();
   },

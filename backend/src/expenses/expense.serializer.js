@@ -153,6 +153,8 @@ export function serializeReimbursement(r) {
     amountPaise: r.amountPaise,
     method: r.method,
     reference: r.reference || null,
+    fundingSource: r.fundingSource || 'CASH_RECEIPT',
+    sourceCreditAllocationId: r.sourceCreditAllocationId || null,
     status: r.status,
     recordedAt: r.recordedAt?.toISOString ? r.recordedAt.toISOString() : r.recordedAt,
     recordedByRole: r.recordedByRole,

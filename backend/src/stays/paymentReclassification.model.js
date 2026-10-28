@@ -42,6 +42,10 @@ const creditHistorySchema = new mongoose.Schema(
     timestamp: { type: Date, required: true, default: Date.now },
     actorRole: { type: String, required: true },
     note: { type: String, required: true, trim: true, maxlength: MAX_NOTE_LENGTH },
+    creditAllocationId: { type: String, default: null, trim: true },
+    destinationType: { type: String, default: null, trim: true },
+    targetRecordId: { type: String, default: null, trim: true },
+    amountPaise: { type: Number, default: null, min: 1, max: MAX_DEPOSIT_PAISE },
   },
   { _id: false, strict: 'throw' },
 );
@@ -55,14 +59,44 @@ const unallocatedCreditSchema = new mongoose.Schema(
     memberId: { type: String, required: true, enum: MEMBER_IDS, index: true },
     targetAccount: { type: String, required: true, trim: true, maxlength: 120 },
     amountPaise: { type: Number, required: true, min: 1, max: MAX_DEPOSIT_PAISE },
+    allocatedAmountPaise: { type: Number, required: true, default: 0, min: 0, max: MAX_DEPOSIT_PAISE },
+    settledAmountPaise: { type: Number, required: true, default: 0, min: 0, max: MAX_DEPOSIT_PAISE },
     remainingAmountPaise: { type: Number, required: true, min: 0, max: MAX_DEPOSIT_PAISE },
     paymentDate: { type: Date, required: true },
     paymentMethod: { type: String, required: true, enum: Object.values(DEPOSIT_METHODS) },
     reference: { type: String, default: null, trim: true, maxlength: MAX_REFERENCE_LENGTH },
     status: { type: String, required: true, enum: ['OPEN', 'ALLOCATED'], default: 'OPEN' },
+    revision: { type: Number, required: true, default: 0, min: 0 },
     history: { type: [creditHistorySchema], default: [] },
   },
   { collection: 'unallocated_credits', timestamps: true, strict: 'throw' },
+);
+
+const creditAllocationSchema = new mongoose.Schema(
+  {
+    creditAllocationId: { type: String, required: true, unique: true, trim: true },
+    creditId: { type: String, required: true, trim: true, index: true },
+    reclassificationId: { type: String, required: true, trim: true, index: true },
+    sourceDepositTransactionId: { type: String, required: true, trim: true, index: true },
+    memberId: { type: String, required: true, enum: MEMBER_IDS, index: true },
+    destinationType: {
+      type: String,
+      required: true,
+      enum: ['ROOM_FEE', 'MESS', 'EXPENSE_REIMBURSEMENT', 'EXTERNAL_SETTLEMENT'],
+    },
+    targetRecordId: { type: String, required: true, trim: true },
+    targetLedgerRecordId: { type: String, default: null, trim: true },
+    amountPaise: { type: Number, required: true, min: 1, max: MAX_DEPOSIT_PAISE },
+    reason: { type: String, required: true, trim: true, maxlength: MAX_NOTE_LENGTH },
+    settlementReference: { type: String, default: null, trim: true, maxlength: MAX_REFERENCE_LENGTH },
+    settledAt: { type: Date, default: null },
+    idempotencyKey: { type: String, required: true, unique: true, trim: true },
+    requestFingerprint: { type: String, required: true, trim: true },
+    status: { type: String, required: true, enum: ['COMPLETED'], default: 'COMPLETED' },
+    completedAt: { type: Date, required: true, default: Date.now },
+    completedByRole: { type: String, required: true },
+  },
+  { collection: 'credit_allocations', timestamps: true, strict: 'throw' },
 );
 
 export const PaymentReclassification =
@@ -72,3 +106,7 @@ export const PaymentReclassification =
 export const UnallocatedCredit =
   mongoose.models.UnallocatedCredit
   || mongoose.model('UnallocatedCredit', unallocatedCreditSchema);
+
+export const CreditAllocation =
+  mongoose.models.CreditAllocation
+  || mongoose.model('CreditAllocation', creditAllocationSchema);

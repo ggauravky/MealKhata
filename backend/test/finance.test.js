@@ -529,6 +529,75 @@ describe('MealKhata 2.0: Unified Financial Overview & Reporting (Phase 3)', () =
       assert.equal(res.status, 403);
     });
 
+    test('credit review and allocation routes are Super Admin only', async () => {
+      const calls = [];
+      const credits = {
+        async listCredits(payload) {
+          calls.push(['list', payload]);
+          return [{ creditId: 'credit-1', memberId: 'nikhil', remainingAmountPaise: 10_000 }];
+        },
+        async previewAllocation(payload) {
+          calls.push(['preview', payload]);
+          return { canApply: true, previewToken: 'p'.repeat(64) };
+        },
+        async allocate(payload) {
+          calls.push(['allocate', payload]);
+          return { allocation: { creditAllocationId: 'allocation-1' } };
+        },
+      };
+      const protectedApp = createApp({
+        finance: createFinanceRouter({ overviewService, credits }),
+      });
+      const payload = {
+        expectedRevision: 0,
+        destinationType: 'ROOM_FEE',
+        targetRecordId: 'charge-1',
+        amountPaise: 10_000,
+        reason: 'Verified target obligation',
+        idempotencyKey: 'credit-route-regression',
+      };
+      const memberCookie = await cookieFor(ROLES.MEMBER, 'gaurav');
+      const adminCookie = await cookieFor(ROLES.ADMIN);
+
+      await request(protectedApp)
+        .get('/api/finance/unallocated-credits?memberId=nikhil')
+        .set('Cookie', memberCookie)
+        .expect(403);
+      await request(protectedApp)
+        .post('/api/finance/unallocated-credits/credit-1/allocation-preview')
+        .set('Origin', ORIGIN)
+        .set('Cookie', memberCookie)
+        .send(payload)
+        .expect(403);
+      await request(protectedApp)
+        .post('/api/finance/unallocated-credits/credit-1/allocate')
+        .set('Origin', ORIGIN)
+        .set('Cookie', adminCookie)
+        .send({ ...payload, previewToken: 'p'.repeat(64) })
+        .expect(403);
+      assert.equal(calls.length, 0);
+
+      const superAdminCookie = await cookieFor(ROLES.SUPERADMIN);
+      await request(protectedApp)
+        .get('/api/finance/unallocated-credits?memberId=nikhil')
+        .set('Cookie', superAdminCookie)
+        .expect(200);
+      await request(protectedApp)
+        .post('/api/finance/unallocated-credits/credit-1/allocation-preview')
+        .set('Origin', ORIGIN)
+        .set('Cookie', superAdminCookie)
+        .send(payload)
+        .expect(200);
+      await request(protectedApp)
+        .post('/api/finance/unallocated-credits/credit-1/allocate')
+        .set('Origin', ORIGIN)
+        .set('Cookie', superAdminCookie)
+        .send({ ...payload, previewToken: 'p'.repeat(64) })
+        .expect(200);
+      assert.deepEqual(calls.map(([name]) => name), ['list', 'preview', 'allocate']);
+      assert.ok(calls.every(([, call]) => call.actorRole === ROLES.SUPERADMIN));
+    });
+
     test('Admin can access household overview and member financial details', async () => {
       const cookie = await cookieFor(ROLES.ADMIN);
       const resOverview = await request(testApp)

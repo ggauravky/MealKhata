@@ -110,6 +110,8 @@ describe('MealKhata 2.0 Phase 3: Unified Financial Dashboard & Reports (Frontend
       assert.match(content, /Reimbursements Owed to You/);
       assert.match(content, /debtsOwed\.map/);
       assert.match(content, /receivables\.map/);
+      assert.match(content, /debt\.expenseId.*debt\.toMemberId/s);
+      assert.match(content, /recv\.expenseId.*recv\.fromMemberId/s);
     });
   });
 

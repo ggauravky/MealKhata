@@ -121,6 +121,8 @@ export function serializeRoomPayment(payment) {
     reference: payment.reference,
     recipientSnapshot: payment.recipientSnapshot,
     idempotencyKey: payment.idempotencyKey,
+    fundingSource: payment.fundingSource || 'CASH_RECEIPT',
+    sourceCreditAllocationId: payment.sourceCreditAllocationId || null,
     status: payment.status,
     recordedAt: serializeDate(payment.recordedAt),
     recordedByRole: payment.recordedByRole,

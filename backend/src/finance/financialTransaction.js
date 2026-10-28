@@ -20,14 +20,22 @@ export async function runFinancialTransaction(
 
   for (let attempt = 0; attempt < maxRetries; attempt += 1) {
     let session = null;
+    let transactionStarted = false;
     try {
       session = await mongoose.startSession();
       session.startTransaction();
+      transactionStarted = true;
       const result = await work(session);
       await session.commitTransaction();
       return result;
     } catch (error) {
       if (session?.inTransaction()) await session.abortTransaction();
+      if (!transactionStarted) {
+        const unavailable = new Error('Financial transaction unavailable. Database transaction support is required.');
+        unavailable.statusCode = 503;
+        unavailable.cause = error;
+        throw unavailable;
+      }
       if (
         (isTransientTransactionError(error) || (retryOnDuplicateKey && error.code === 11000))
         && attempt < maxRetries - 1
