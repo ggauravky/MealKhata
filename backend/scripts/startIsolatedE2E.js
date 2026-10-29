@@ -82,8 +82,17 @@ async function seedDatabase(uri, backendPort) {
   process.env.APP_TIMEZONE = 'Asia/Kolkata';
   process.env.AUTH_JWT_SECRET = 'isolated-e2e-jwt-secret-at-least-thirty-two-bytes';
 
-  const [{ UserAccount }, { roomFeeService }, { stayService }, { expenseService }] = await Promise.all([
+  const [
+    { UserAccount },
+    { Student },
+    { StudentAuditEvent },
+    { roomFeeService },
+    { stayService },
+    { expenseService },
+  ] = await Promise.all([
     import('../src/auth/userAccount.model.js'),
+    import('../src/students/student.model.js'),
+    import('../src/students/studentAuditEvent.model.js'),
     import('../src/roomFees/roomFee.service.js'),
     import('../src/stays/stay.service.js'),
     import('../src/expenses/expense.service.js'),
@@ -94,7 +103,38 @@ async function seedDatabase(uri, backendPort) {
     import('./verifyIndexes.js'),
     import('./verifyData.js'),
   ]);
-  await Promise.all(indexVerifier.MONITORED_MODELS.map((model) => model.init()));
+  await Promise.all([
+    ...indexVerifier.MONITORED_MODELS.map((model) => model.init()),
+    Student.init(),
+    StudentAuditEvent.init(),
+  ]);
+
+  await Student.create([
+    {
+      studentId: 'gaurav',
+      displayName: 'Gaurav',
+      status: 'ACTIVE',
+      mealEligibilityFrom: '2026-10-01',
+      mealEligibilityUntil: null,
+      rosterOrder: 0,
+    },
+    {
+      studentId: 'nikhil',
+      displayName: 'Nikhil',
+      status: 'ACTIVE',
+      mealEligibilityFrom: null,
+      mealEligibilityUntil: null,
+      rosterOrder: 10,
+    },
+    {
+      studentId: 'devansh',
+      displayName: 'Devansh',
+      status: 'ACTIVE',
+      mealEligibilityFrom: null,
+      mealEligibilityUntil: null,
+      rosterOrder: 20,
+    },
+  ]);
 
   const passwordHash = await bcrypt.hash(testPassword, 12);
   await UserAccount.create([
@@ -226,8 +266,8 @@ async function main() {
     findAvailablePort(5173),
     findAvailablePort(5100),
   ]);
-  frontendOrigin = `http://localhost:${frontendPort}`;
-  backendOrigin = `http://localhost:${backendPort}`;
+  frontendOrigin = `http://127.0.0.1:${frontendPort}`;
+  backendOrigin = `http://127.0.0.1:${backendPort}`;
 
   mongoDataDirectory = await mkdtemp(path.join(tmpdir(), 'mealkhata-e2e-'));
   replSet = await MongoMemoryReplSet.create({

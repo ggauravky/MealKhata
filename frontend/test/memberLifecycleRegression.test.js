@@ -241,19 +241,30 @@ describe('member lifecycle frontend contracts', () => {
 });
 
 describe('admin member roster contract', () => {
-  test('always returns the three stable identities without creating stay data', () => {
-    const roster = normalizeMemberRoster([{
-      memberId: 'gaurav',
-      name: 'Gaurav',
-      account: { exists: true, active: true },
-      stay: { stayId: 'stay-1', status: 'ACTIVE' },
-      room: { roomNumber: '204' },
-    }]);
+  test('preserves the API roster cardinality and generated identities without creating stay data', () => {
+    const roster = normalizeMemberRoster([
+      {
+        memberId: 'gaurav',
+        name: 'Gaurav',
+        account: { exists: true, active: true },
+        stay: { stayId: 'stay-1', status: 'ACTIVE' },
+        room: { roomNumber: '204' },
+      },
+      {
+        memberId: 'student_0123456789abcdef0123456789abcdef',
+        name: 'Aarav Sen',
+        status: 'ACTIVE',
+        account: { exists: false },
+      },
+    ]);
 
-    assert.deepEqual(roster.map((row) => row.memberId), ['gaurav', 'nikhil', 'devansh']);
+    assert.deepEqual(roster.map((row) => row.memberId), [
+      'gaurav',
+      'student_0123456789abcdef0123456789abcdef',
+    ]);
     assert.equal(roster[0].stay.status, 'ACTIVE');
     assert.equal(roster[1].stay, null);
-    assert.equal(roster[2].account.exists, false);
+    assert.equal(roster[1].account.exists, false);
   });
 
   test('preserves accommodation fields and derives assignment counts separately from Stay counts', () => {
