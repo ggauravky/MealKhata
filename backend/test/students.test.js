@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
+import express from 'express';
 import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
+import request from 'supertest';
 
 import {
   LEGACY_STUDENT_ELIGIBILITY_FIXTURES,
@@ -14,6 +16,9 @@ import { StudentAuditEvent } from '../src/students/studentAuditEvent.model.js';
 import { createStudentRepository } from '../src/students/student.repository.js';
 import { createStudentService } from '../src/students/student.service.js';
 import { createStudentResolver } from '../src/students/studentResolver.service.js';
+import { createStudentRouter } from '../src/routes/student.routes.js';
+import { errorHandler } from '../src/middleware/errorHandler.js';
+import { createApp } from '../src/app.js';
 import { InMemoryStudentRepository } from './helpers/inMemoryStudentRepository.js';
 import { InMemoryUserAccountRepository } from './helpers/inMemoryUserAccountRepository.js';
 
@@ -427,5 +432,175 @@ describe('MealKhata 3.0 audited student lifecycle and date-aware resolver', () =
       }),
       (error) => Reflect.get(Object(error), 'statusCode') === 409,
     );
+  });
+});
+
+function createStudentApi(role, { service, resolver } = {}) {
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    req.auth = {
+      authenticated: role !== 'viewer',
+      role,
+      userId: `${role}-1`,
+    };
+    next();
+  });
+  app.use('/api/students', createStudentRouter({
+    service: service ?? {
+      async createStudent(input) { return { studentId: generatedStudentId, ...input, status: 'ACTIVE' }; },
+      async updateStudent({ studentId, updates }) { return { studentId, ...updates, status: 'ACTIVE' }; },
+      async archiveStudent({ studentId }) { return { studentId, status: 'ARCHIVED' }; },
+      async reactivateStudent({ studentId }) { return { studentId, status: 'ACTIVE' }; },
+    },
+    resolver: resolver ?? {
+      async listAll() { return [{ ...baseStudent, passwordHash: 'must-not-leak', _id: 'internal-id' }]; },
+      async assertKnown(studentId) { return { ...baseStudent, studentId, secret: 'must-not-leak' }; },
+    },
+  }));
+  app.use(errorHandler);
+  return app;
+}
+
+describe('MealKhata 3.0 student API and authorization', () => {
+  test('allows Admin/Super Admin reads, rejects lower roles, and serializes only public fields', async () => {
+    const adminList = await request(createStudentApi('admin')).get('/api/students').expect(200);
+    assert.equal(adminList.body.success, true);
+    assert.equal(adminList.body.data[0].studentId, 'gaurav');
+    assert.equal(JSON.stringify(adminList.body).includes('passwordHash'), false);
+    assert.equal(JSON.stringify(adminList.body).includes('internal-id'), false);
+
+    const superDetail = await request(createStudentApi('superadmin'))
+      .get('/api/students/gaurav')
+      .expect(200);
+    assert.equal(superDetail.body.data.studentId, 'gaurav');
+    assert.equal(JSON.stringify(superDetail.body).includes('must-not-leak'), false);
+
+    await request(createStudentApi('member')).get('/api/students').expect(403);
+    await request(createStudentApi('viewer')).get('/api/students').expect(401);
+  });
+
+  test('registers /api/students in the application router', async () => {
+    const students = createStudentRouter({
+      service: {},
+      resolver: { async listAll() { return []; } },
+    });
+    const app = createApp({
+      students,
+      authenticate(req, _res, next) {
+        req.auth = { authenticated: true, role: 'admin', userId: 'admin-1' };
+        next();
+      },
+    });
+    const response = await request(app).get('/api/students').expect(200);
+    assert.deepEqual(response.body, { success: true, data: [] });
+  });
+
+  test('allows only Super Admin mutations and forwards archive account-disable explicitly', async () => {
+    let adminCalls = 0;
+    const admin = createStudentApi('admin', {
+      service: {
+        async createStudent() {
+          adminCalls += 1;
+          return {};
+        },
+      },
+    });
+    await request(admin)
+      .post('/api/students')
+      .send({ displayName: 'Fourth', rosterOrder: 40, reason: 'Create' })
+      .expect(403);
+    assert.equal(adminCalls, 0);
+
+    let archiveInput;
+    const superAdminApi = createStudentApi('superadmin', {
+      service: {
+        async archiveStudent(input) {
+          archiveInput = input;
+          return { studentId: input.studentId, status: 'ARCHIVED' };
+        },
+      },
+    });
+    await request(superAdminApi)
+      .post('/api/students/gaurav/archive')
+      .send({
+        reason: 'Confirmed departure',
+        disableAccount: true,
+        expectedUpdatedAt: '2026-10-29T06:00:00.000Z',
+      })
+      .expect(200);
+    assert.equal(archiveInput.disableAccount, true);
+    assert.equal(archiveInput.actor.role, 'superadmin');
+  });
+
+  test('rejects unknown fields, object injection, malformed archive input, and duplicate contacts', async () => {
+    const strictApi = createStudentApi('superadmin');
+    await request(strictApi)
+      .post('/api/students')
+      .send({ displayName: 'Fourth', rosterOrder: 40, reason: 'Create', passwordHash: 'injected' })
+      .expect(400);
+    await request(strictApi)
+      .post('/api/students')
+      .send({ displayName: { $ne: '' }, rosterOrder: 40, reason: 'Create' })
+      .expect(400);
+    await request(strictApi)
+      .patch('/api/students/gaurav')
+      .send({ status: 'ARCHIVED', reason: 'Injection', expectedUpdatedAt: '2026-10-29T06:00:00.000Z' })
+      .expect(400);
+    await request(strictApi)
+      .post('/api/students/gaurav/archive')
+      .send({ disableAccount: 'yes', expectedUpdatedAt: '2026-10-29T06:00:00.000Z' })
+      .expect(400);
+
+    const { resolver, service } = createLifecycleHarness([baseStudent]);
+    const duplicateApi = createStudentApi('superadmin', { resolver, service });
+    const duplicate = await request(duplicateApi)
+      .post('/api/students')
+      .send({
+        displayName: 'Duplicate Contact',
+        email: 'gaurav@example.com',
+        phone: null,
+        mealEligibilityFrom: null,
+        mealEligibilityUntil: null,
+        rosterOrder: 50,
+        reason: 'Attempt duplicate contact',
+      })
+      .expect(409);
+    assert.match(duplicate.body.message, /already assigned/i);
+  });
+
+  test('supports create, patch, archive, and reactivate response envelopes', async () => {
+    const api = createStudentApi('superadmin');
+    const created = await request(api)
+      .post('/api/students')
+      .send({ displayName: 'Fourth', email: null, phone: null, mealEligibilityFrom: null, mealEligibilityUntil: null, rosterOrder: 40, reason: 'Create' })
+      .expect(201);
+    assert.equal(created.body.success, true);
+
+    await request(api)
+      .patch(`/api/students/${generatedStudentId}`)
+      .send({ displayName: 'Fourth Updated', reason: 'Correction', expectedUpdatedAt: '2026-10-29T06:00:00.000Z' })
+      .expect(200);
+    await request(api)
+      .post(`/api/students/${generatedStudentId}/archive`)
+      .send({ reason: 'Archive', disableAccount: false, expectedUpdatedAt: '2026-10-29T06:00:00.000Z' })
+      .expect(200);
+    await request(api)
+      .post(`/api/students/${generatedStudentId}/reactivate`)
+      .send({ reason: 'Reactivate', expectedUpdatedAt: '2026-10-29T06:00:00.000Z' })
+      .expect(200);
+  });
+
+  test('sanitizes unexpected service failures', async () => {
+    const api = createStudentApi('admin', {
+      resolver: {
+        async listAll() {
+          throw new Error('mongodb://secret-user:secret-password@production.example');
+        },
+      },
+    });
+    const response = await request(api).get('/api/students').expect(500);
+    assert.equal(response.body.message, 'Something went wrong');
+    assert.equal(JSON.stringify(response.body).includes('secret-password'), false);
   });
 });

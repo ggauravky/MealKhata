@@ -50,6 +50,30 @@ function assertOnlyProfileFields(updates) {
   }
 }
 
+function assertProfileInputTypes(profile) {
+  if (
+    Object.prototype.hasOwnProperty.call(profile, 'displayName')
+    && typeof profile.displayName !== 'string'
+  ) {
+    throw new HttpError(400, 'displayName must be a string.');
+  }
+  for (const field of ['email', 'phone', 'mealEligibilityFrom', 'mealEligibilityUntil']) {
+    if (
+      Object.prototype.hasOwnProperty.call(profile, field)
+      && profile[field] !== null
+      && typeof profile[field] !== 'string'
+    ) {
+      throw new HttpError(400, `${field} must be a string or null.`);
+    }
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(profile, 'rosterOrder')
+    && typeof profile.rosterOrder !== 'number'
+  ) {
+    throw new HttpError(400, 'rosterOrder must be a number.');
+  }
+}
+
 function validateProfile(profile, { requireAll = true } = {}) {
   if (requireAll || Object.prototype.hasOwnProperty.call(profile, 'displayName')) {
     if (typeof profile.displayName !== 'string' || !profile.displayName.trim()) {
@@ -137,6 +161,7 @@ export function createStudentService({
       requireSuperAdmin(actor);
       const normalizedReason = normalizeReason(reason);
       assertOnlyProfileFields(input);
+      assertProfileInputTypes(input);
       const profile = normalizeStudentProfile(input);
       validateProfile(profile);
       const studentId = generateId();
@@ -171,6 +196,7 @@ export function createStudentService({
       const normalizedReason = normalizeReason(reason);
       const expectedVersion = assertExpectedUpdatedAt(expectedUpdatedAt);
       assertOnlyProfileFields(updates);
+      assertProfileInputTypes(updates);
 
       try {
         return await runAtomically(async (session) => {

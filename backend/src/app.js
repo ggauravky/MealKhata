@@ -28,6 +28,7 @@ import { expenseRouter } from './routes/expense.routes.js';
 import { financeRouter } from './routes/finance.routes.js';
 import { stayRouter } from './routes/stay.routes.js';
 import { memberRouter } from './routes/member.routes.js';
+import { studentRouter } from './routes/student.routes.js';
 
 export const PRODUCTION_TRUST_PROXY_HOPS = 1;
 export const API_RATE_LIMIT = Object.freeze({
@@ -81,6 +82,7 @@ export function createApp({
   finance = financeRouter,
   stays = stayRouter,
   members = memberRouter,
+  students = studentRouter,
 } = {}) {
   const app = express();
 
@@ -143,6 +145,7 @@ export function createApp({
   app.use('/api/finance', sensitiveMutationLimiter, finance);
   app.use('/api/stays', sensitiveMutationLimiter, stays);
   app.use('/api/admin/members', sensitiveMutationLimiter, members);
+  app.use('/api/students', sensitiveMutationLimiter, students);
 
   app.use('/api', apiNotFound);
 
