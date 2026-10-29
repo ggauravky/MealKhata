@@ -29,8 +29,7 @@ export function createMemberRouter({
 
   router.get('/:memberId', requireAdminOrAbove, async (req, res, next) => {
     try {
-      const members = await service.listMembers();
-      const member = members.find((candidate) => candidate.memberId === req.params.memberId);
+      const member = await service.findMemberById(req.params.memberId);
       if (!member) {
         return res.status(404).json({ success: false, message: 'Member not found.' });
       }

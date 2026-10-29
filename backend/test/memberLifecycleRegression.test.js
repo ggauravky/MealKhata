@@ -98,6 +98,16 @@ describe('authoritative room assignment resolution', () => {
 describe('configured member roster and historical admission', () => {
   test('lists all configured identities without fabricating stays', async () => {
     const service = createMemberService({
+      resolver: {
+        async listCurrent() {
+          return [
+            { studentId: 'gaurav', displayName: 'Gaurav', status: 'ACTIVE', mealEligibilityFrom: '2026-10-01', mealEligibilityUntil: null, rosterOrder: 10 },
+            { studentId: 'student_00000000000000000000000000000004', displayName: 'Fourth Student', status: 'ACTIVE', mealEligibilityFrom: '2026-10-20', mealEligibilityUntil: null, rosterOrder: 20 },
+            { studentId: 'nikhil', displayName: 'Nikhil', status: 'ACTIVE', mealEligibilityFrom: null, mealEligibilityUntil: null, rosterOrder: 30 },
+            { studentId: 'devansh', displayName: 'Devansh', status: 'ACTIVE', mealEligibilityFrom: null, mealEligibilityUntil: null, rosterOrder: 40 },
+          ];
+        },
+      },
       accounts: {
         async listAll() {
           return [{
@@ -134,10 +144,16 @@ describe('configured member roster and historical admission', () => {
     });
 
     const roster = await service.listMembers();
-    assert.deepEqual(roster.map((row) => row.memberId), ['gaurav', 'nikhil', 'devansh']);
+    assert.deepEqual(roster.map((row) => row.memberId), [
+      'gaurav',
+      'student_00000000000000000000000000000004',
+      'nikhil',
+      'devansh',
+    ]);
     assert.equal(roster[0].account.email, 'gaurav@example.com');
     assert.equal(roster[0].stay.status, 'ACTIVE');
     assert.equal(roster[0].room.roomNumber, '204');
+    assert.equal(roster[1].name, 'Fourth Student');
     assert.equal(roster[1].account.exists, false);
     assert.equal(roster[1].stay, null);
   });

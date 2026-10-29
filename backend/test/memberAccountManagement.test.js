@@ -160,6 +160,16 @@ describe('canonical member accommodation roster', () => {
       },
     };
     const service = createMemberService({
+      resolver: {
+        async listCurrent() {
+          return [
+            { studentId: 'gaurav', displayName: 'Gaurav', status: 'ACTIVE', mealEligibilityFrom: '2026-10-01', mealEligibilityUntil: null, rosterOrder: 10 },
+            { studentId: 'nikhil', displayName: 'Nikhil', status: 'ACTIVE', mealEligibilityFrom: null, mealEligibilityUntil: null, rosterOrder: 20 },
+            { studentId: 'devansh', displayName: 'Devansh', status: 'ACTIVE', mealEligibilityFrom: null, mealEligibilityUntil: null, rosterOrder: 30 },
+            { studentId: 'student_00000000000000000000000000000004', displayName: 'Fourth Student', status: 'ACTIVE', mealEligibilityFrom: '2026-10-21', mealEligibilityUntil: null, rosterOrder: 40 },
+          ];
+        },
+      },
       accounts: { async listAll() { return []; } },
       stays: { async listAllStays() { return []; } },
       rooms: {
@@ -180,7 +190,12 @@ describe('canonical member accommodation roster', () => {
 
     const roster = await service.listMembers();
 
-    assert.equal(roster.length, 3);
+    assert.deepEqual(roster.map((row) => row.memberId), [
+      'gaurav',
+      'nikhil',
+      'devansh',
+      'student_00000000000000000000000000000004',
+    ]);
     assert.equal(roster[0].stay, null);
     assert.deepEqual(roster[0].assignment, {
       assignmentId: 'assignment-gaurav',
@@ -194,6 +209,9 @@ describe('canonical member accommodation roster', () => {
       effectiveFromMonth: '2026-10',
     });
     assert.equal(roster[2].feePlan, null);
+    assert.equal(roster[3].name, 'Fourth Student');
+    assert.equal(roster[3].status, 'ACTIVE');
+    assert.equal(roster[3].mealEligibilityFrom, '2026-10-21');
   });
 });
 
@@ -297,5 +315,34 @@ describe('member management API authorization and serialization', () => {
 
     assert.equal(JSON.stringify(response.body).includes('NewStrong!234'), false);
     assert.equal(JSON.stringify(response.body).includes('passwordHash'), false);
+  });
+
+  test('member detail can resolve an archived historical student outside the current roster', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      req.auth = { authenticated: true, role: 'admin', userId: 'admin-1' };
+      next();
+    });
+    app.use('/api/admin/members', createMemberRouter({
+      service: {
+        async listMembers() { return []; },
+        async findMemberById(memberId) {
+          return {
+            memberId,
+            name: 'Archived Student',
+            status: 'ARCHIVED',
+            account: { exists: false },
+            stay: null,
+            room: null,
+          };
+        },
+      },
+      accountService: { async auditLegacyConflicts() { return []; } },
+    }));
+    const response = await request(app)
+      .get('/api/admin/members/student_00000000000000000000000000000004')
+      .expect(200);
+    assert.equal(response.body.data.status, 'ARCHIVED');
   });
 });
