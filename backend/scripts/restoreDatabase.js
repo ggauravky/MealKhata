@@ -2,17 +2,31 @@ import fs from 'node:fs/promises';
 import mongoose from 'mongoose';
 import { env } from '../src/config/env.js';
 import { restoreDatabase } from '../src/backup/backupEngine.js';
+import { assertDistinctDatabaseUris } from '../src/migrations/sourceInventory.service.js';
 import { verifyDataIntegrity } from './verifyData.js';
 
 async function run() {
+  if (process.argv.includes('--help')) {
+    console.info(`Restore into an explicit disposable database and verify it.
+
+Usage: npm run db:restore -- <path-to-backup-file> [--drop]
+
+Required environment:
+  BACKUP_ENCRYPTION_KEY   Secret used to create the archive
+  RESTORE_MONGODB_URI     Explicit isolated restore target
+
+The command refuses a target matching MONGODB_URI. --drop permits clearing only
+the explicitly supplied restore target; production override flags are unsupported.`);
+    return;
+  }
+
   const filePath = process.argv[2];
   const encryptionKey = process.env.BACKUP_ENCRYPTION_KEY?.trim();
   const restoreUri = process.env.RESTORE_MONGODB_URI?.trim();
   const dropExisting = process.argv.includes('--drop');
-  const confirmOverwrite = process.argv.includes('--confirm-overwrite-production');
 
   if (!filePath) {
-    console.error('Usage: npm run db:restore -- <path-to-backup-file> [--drop] [--confirm-overwrite-production]');
+    console.error('Usage: npm run db:restore -- <path-to-backup-file> [--drop]');
     process.exit(1);
   }
 
@@ -28,11 +42,11 @@ async function run() {
     process.exit(1);
   }
 
-  // Accidental production overwrite protection
-  if (env.mongoUri && restoreUri === env.mongoUri && !confirmOverwrite) {
-    console.error('DANGER: RESTORE_MONGODB_URI matches production MONGODB_URI.');
-    console.error('To prevent accidental production database overwrite, you must explicitly supply the flag:');
-    console.error('  --confirm-overwrite-production');
+  try {
+    assertDistinctDatabaseUris({ sourceUri: env.mongoUri, targetUri: restoreUri });
+  } catch (error) {
+    console.error(`DANGER: ${error.message}.`);
+    console.error('Choose a separate disposable RESTORE_MONGODB_URI. Production override flags are not supported.');
     process.exit(1);
   }
 
@@ -46,7 +60,7 @@ async function run() {
 
   try {
     console.info(`Restoring database (dropExisting: ${dropExisting})...`);
-    const { manifest, restoredCounts } = await restoreDatabase({
+    const { manifest, restoredCounts, verification } = await restoreDatabase({
       backupPackageString,
       encryptionKey,
       targetDbConnection: targetConnection,
@@ -59,6 +73,7 @@ async function run() {
     for (const [col, count] of Object.entries(restoredCounts)) {
       console.info(`    - ${col}: ${count} records`);
     }
+    console.info(`\n✓ Archive manifest verification PASSED (${verification.targetInventory.collectionOrder.length} collections).`);
 
     console.info('\nRunning post-restore data integrity audit on target database...');
     const { passed, checks, issues } = await verifyDataIntegrity(targetConnection);
