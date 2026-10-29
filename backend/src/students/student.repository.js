@@ -114,7 +114,8 @@ export function createStudentRepository({
       return withSession(studentModel.findOne({ studentId }), session).lean();
     },
 
-    async list({ status = null, session = null } = {}) {
+    async list(options = /** @type {{ status?: string | null, session?: any }} */ ({})) {
+      const { status = null, session = null } = options;
       const filter = status ? { status } : {};
       return withSession(
         studentModel.find(filter).sort({ rosterOrder: 1, createdAt: 1, studentId: 1 }),

@@ -3,6 +3,12 @@ export const STUDENT_STATUSES = Object.freeze({
   ARCHIVED: 'ARCHIVED',
 });
 
+export const LEGACY_STUDENT_ELIGIBILITY_FIXTURES = Object.freeze({
+  gaurav: '2026-10-01',
+  nikhil: null,
+  devansh: null,
+});
+
 export const STUDENT_AUDIT_EVENT_TYPES = Object.freeze({
   CREATED: 'STUDENT_CREATED',
   PROFILE_UPDATED: 'STUDENT_PROFILE_UPDATED',

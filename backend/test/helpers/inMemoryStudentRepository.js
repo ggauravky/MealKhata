@@ -13,6 +13,11 @@ function clone(value) {
   return structuredClone(value);
 }
 
+function nextTimestamp(current) {
+  const currentTime = current instanceof Date ? current.getTime() : 0;
+  return new Date(Math.max(Date.now(), currentTime + 1));
+}
+
 function duplicateKeyError(field, value) {
   return Object.assign(new Error(`Duplicate ${field}: ${value}`), {
     code: 11000,
@@ -118,7 +123,7 @@ export class InMemoryStudentRepository {
     const nextProfile = { ...profile, ...patch };
     assertProfile(nextProfile);
     this.#assertUniqueContacts(nextProfile, studentId);
-    const updated = { ...current, ...patch, updatedAt: new Date() };
+    const updated = { ...current, ...patch, updatedAt: nextTimestamp(current.updatedAt) };
     this.students.set(studentId, clone(updated));
     return clone(updated);
   }
@@ -137,7 +142,7 @@ export class InMemoryStudentRepository {
       status: transition.status,
       archivedAt: isArchived ? transition.archivedAt : null,
       archivedReason: isArchived ? transition.archivedReason?.trim() || null : null,
-      updatedAt: new Date(),
+      updatedAt: nextTimestamp(current.updatedAt),
     };
     this.students.set(studentId, clone(updated));
     return clone(updated);
