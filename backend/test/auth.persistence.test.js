@@ -37,6 +37,12 @@ describe('7-Day Persistent Session Policy & Cookie Hardening', () => {
 
   beforeEach(async () => {
     userRepo = new InMemoryUserAccountRepository();
+    const resolver = {
+      async assertKnown(studentId) {
+        if (studentId !== 'gaurav') throw new Error('Student was not found.');
+        return { studentId, displayName: 'Gaurav Kumar', status: 'ACTIVE' };
+      },
+    };
 
     await userRepo.create({
       userId: 'usr-admin-1',
@@ -69,9 +75,9 @@ describe('7-Day Persistent Session Policy & Cookie Hardening', () => {
       sessionVersion: 1,
     });
 
-    authService = createAuthService({ userAccounts: userRepo });
+    authService = createAuthService({ userAccounts: userRepo, resolver });
     const authRouter = createAuthRouter({ service: authService });
-    const authenticate = createAuthenticateSession({ accounts: userRepo });
+    const authenticate = createAuthenticateSession({ accounts: userRepo, resolver });
     app = createApp({ auth: authRouter, authenticate });
   });
 

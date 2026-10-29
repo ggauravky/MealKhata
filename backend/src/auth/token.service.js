@@ -1,6 +1,7 @@
 import { SignJWT, jwtVerify } from 'jose';
 import { env, isProduction } from '../config/env.js';
-import { MEMBER_IDS } from '../config/members.js';
+import { assertSafeStudentId } from '../students/studentId.js';
+import { studentResolver } from '../students/studentResolver.service.js';
 import { ROLES, getPrincipalForRole, isAuthenticatedRole } from './permissions.js';
 import { userAccountRepository } from './userAccount.repository.js';
 
@@ -68,12 +69,17 @@ export async function createSessionToken(
   {
     memberId = null,
     userId = null,
+    displayName = null,
     sessionVersion = 0,
     expiresIn = null,
   } = {},
 ) {
-  if (role === ROLES.MEMBER && (!memberId || !MEMBER_IDS.includes(memberId))) {
-    throw new Error('A valid memberId is required to create a member session');
+  if (role === ROLES.MEMBER) {
+    try {
+      assertSafeStudentId(memberId);
+    } catch {
+      throw new Error('A valid memberId is required to create a member session');
+    }
   }
 
   const principal = getPrincipalForRole(role, memberId);
@@ -88,6 +94,9 @@ export async function createSessionToken(
   }
   if (role === ROLES.MEMBER) {
     payload.memberId = memberId;
+    if (typeof displayName === 'string' && displayName.trim()) {
+      payload.displayName = displayName.trim().slice(0, 100);
+    }
   }
 
   const durationSeconds = getSessionDurationSeconds(role);
@@ -103,7 +112,10 @@ export async function createSessionToken(
     .sign(getSecretKey());
 }
 
-export async function verifySessionToken(token, { accounts = userAccountRepository } = {}) {
+export async function verifySessionToken(
+  token,
+  { accounts = userAccountRepository, resolver = studentResolver } = {},
+) {
   const { payload } = await jwtVerify(token, getSecretKey(), {
     algorithms: [ALGORITHM],
     issuer: ISSUER,
@@ -131,7 +143,19 @@ export async function verifySessionToken(token, { accounts = userAccountReposito
       throw new Error('Session has been revoked');
     }
 
+    if (user.role === ROLES.MEMBER) {
+      try {
+        assertSafeStudentId(user.memberId);
+      } catch {
+        throw new Error('User account student identity is invalid');
+      }
+      await resolver.assertKnown(user.memberId);
+    }
+
     const principal = getPrincipalForRole(user.role, user.memberId);
+    if (!principal) {
+      throw new Error('User account role is invalid');
+    }
     return {
       authenticated: true,
       role: user.role,
@@ -147,7 +171,9 @@ export async function verifySessionToken(token, { accounts = userAccountReposito
   // Fallback for tokens minted without userId (e.g. pure unit tests without DB)
   if (payload.role === ROLES.MEMBER) {
     const memberId = payload.memberId;
-    if (typeof memberId !== 'string' || !MEMBER_IDS.includes(memberId)) {
+    try {
+      assertSafeStudentId(memberId);
+    } catch {
       throw new Error('Session memberId is invalid');
     }
 
@@ -164,6 +190,9 @@ export async function verifySessionToken(token, { accounts = userAccountReposito
       authenticated: true,
       role: ROLES.MEMBER,
       memberId,
+      displayName: typeof payload.displayName === 'string' && payload.displayName.trim()
+        ? payload.displayName.trim().slice(0, 100)
+        : memberId,
       principal: expectedPrincipal,
       expiresAt,
     };

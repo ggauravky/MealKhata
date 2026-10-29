@@ -32,6 +32,7 @@ import { PaymentSettings } from '../src/payments/paymentSettings.model.js';
 import { UserAccount } from '../src/auth/userAccount.model.js';
 import { MemberAccount } from '../src/auth/memberAccount.model.js';
 import { MemberAccountAudit } from '../src/members/memberAccountAudit.model.js';
+import { Student } from '../src/students/student.model.js';
 import { CreditAllocation, PaymentReclassification, UnallocatedCredit } from '../src/stays/paymentReclassification.model.js';
 import { CreditObligationState } from '../src/finance/creditObligationState.model.js';
 
@@ -195,6 +196,7 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
       UserAccount.init(),
       MemberAccount.init(),
       MemberAccountAudit.init(),
+      Student.init(),
       PaymentReclassification.init(),
       UnallocatedCredit.init(),
       CreditAllocation.init(),
@@ -2752,6 +2754,13 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
 
   describe('Canonical member-account persistence', () => {
     it('concurrent provisioning cannot create duplicate identities and audit rolls back with the loser', async () => {
+      await Student.create({
+        studentId: 'gaurav',
+        displayName: 'Gaurav',
+        status: 'ACTIVE',
+        mealEligibilityFrom: '2026-10-01',
+        rosterOrder: 0,
+      });
       const accounts = createMemberAccountService({
         verifyActorPassword: async () => {},
         now: () => new Date('2026-10-21T06:30:00.000Z'),

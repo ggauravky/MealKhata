@@ -8,6 +8,7 @@ import { PaymentSettings } from '../src/payments/paymentSettings.model.js';
 import { MonthlySettlement } from '../src/settlement/monthlySettlement.model.js';
 import { MemberAccount } from '../src/auth/memberAccount.model.js';
 import { UserAccount } from '../src/auth/userAccount.model.js';
+import { MemberAccountAudit } from '../src/members/memberAccountAudit.model.js';
 import { ReminderSettings } from '../src/settings/reminderSettings.model.js';
 import { PushSubscription } from '../src/push/pushSubscription.model.js';
 import { PushDelivery } from '../src/push/pushDelivery.model.js';
@@ -38,6 +39,7 @@ export const MONITORED_MODELS = [
   MonthlySettlement,
   MemberAccount,
   UserAccount,
+  MemberAccountAudit,
   ReminderSettings,
   PushSubscription,
   PushDelivery,

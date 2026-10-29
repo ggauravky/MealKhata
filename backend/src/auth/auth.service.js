@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import { env } from '../config/env.js';
 import { MEMBER_NAMES } from '../config/members.js';
+import { studentResolver } from '../students/studentResolver.service.js';
 import { HttpError } from '../utils/HttpError.js';
 import { ROLES } from './permissions.js';
 import { memberAccountRepository } from './memberAccount.repository.js';
@@ -11,6 +12,7 @@ const DUMMY_PASSWORD_HASH = '$2b$12$l0S7RDy0wYtH6EosWHIG/OuYdTzp5PToO/zJ8awk/kPe
 export function createAuthService({
   userAccounts = userAccountRepository,
   accounts = memberAccountRepository,
+  resolver = studentResolver,
   config = env,
 } = {}) {
   const getPrincipals = () => Object.freeze([
@@ -59,6 +61,15 @@ export function createAuthService({
           throw new HttpError(401, 'Invalid email or password.');
         }
 
+        let student = null;
+        if (userAccount.role === ROLES.MEMBER) {
+          try {
+            student = await resolver.assertKnown(userAccount.memberId);
+          } catch {
+            throw new HttpError(401, 'Invalid email or password.');
+          }
+        }
+
         // Record last login timestamp asynchronously
         userAccounts.updateLastLogin(userAccount.userId).catch(() => {});
 
@@ -67,7 +78,7 @@ export function createAuthService({
           role: userAccount.role,
           memberId: userAccount.memberId ?? null,
           userId: userAccount.userId,
-          displayName: userAccount.displayName,
+          displayName: student?.displayName ?? userAccount.displayName,
           sessionVersion: userAccount.sessionVersion ?? 0,
         };
       }

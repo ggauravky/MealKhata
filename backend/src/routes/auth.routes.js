@@ -27,6 +27,7 @@ export function createAuthRouter({ service = { authenticateCredentials } } = {})
       const token = await createSessionToken(auth.role, {
         memberId: auth.memberId,
         userId: auth.userId,
+        displayName: auth.displayName,
         sessionVersion: auth.sessionVersion,
         expiresIn: `${sessionDurationSeconds}s`,
       });

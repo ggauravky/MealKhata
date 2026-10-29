@@ -1,9 +1,26 @@
 import mongoose from 'mongoose';
-import { MEMBER_IDS } from '../config/members.js';
+import { assertSafeStudentId } from '../students/studentId.js';
+
+function isSafeStudentId(value) {
+  try {
+    assertSafeStudentId(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const memberAccountAuditSchema = new mongoose.Schema({
   auditId: { type: String, required: true, unique: true, immutable: true },
-  memberId: { type: String, required: true, enum: MEMBER_IDS, index: true },
+  memberId: {
+    type: String,
+    required: true,
+    index: true,
+    validate: {
+      validator: isSafeStudentId,
+      message: 'memberId must be a safe student ID',
+    },
+  },
   event: { type: String, required: true, index: true },
   actorUserId: { type: String, default: null },
   actorRole: { type: String, required: true },

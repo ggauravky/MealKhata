@@ -6,7 +6,7 @@ import {
 } from '../auth/token.service.js';
 import { logger } from '../utils/logger.js';
 
-export function createAuthenticateSession({ accounts } = {}) {
+export function createAuthenticateSession({ accounts, resolver } = {}) {
   return async function authenticateSession(req, res, next) {
     req.auth = createViewerAuth();
 
@@ -17,7 +17,7 @@ export function createAuthenticateSession({ accounts } = {}) {
     }
 
     try {
-      req.auth = await verifySessionToken(token, { accounts });
+      req.auth = await verifySessionToken(token, { accounts, resolver });
     } catch {
       res.clearCookie(SESSION_COOKIE_NAME, getClearSessionCookieOptions());
       logger.info('Invalid or expired session rejected');

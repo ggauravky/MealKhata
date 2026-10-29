@@ -5,20 +5,14 @@ import mongoose from 'mongoose';
 import { ROLES } from '../auth/permissions.js';
 import { userAccountRepository } from '../auth/userAccount.repository.js';
 import { env } from '../config/env.js';
-import { MEMBER_IDS, MEMBER_NAMES } from '../config/members.js';
 import { HttpError } from '../utils/HttpError.js';
 import { memberAccountRepository } from '../auth/memberAccount.repository.js';
+import { studentResolver } from '../students/studentResolver.service.js';
 import { memberAccountAuditRepository } from './memberAccount.repository.js';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const STRONG_PASSWORD_PATTERN = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{12,256}$/;
 const DUMMY_PASSWORD_HASH = '$2b$12$l0S7RDy0wYtH6EosWHIG/OuYdTzp5PToO/zJ8awk/kPeA9UmsI9AS';
-
-function requireCanonicalMember(memberId) {
-  if (!MEMBER_IDS.includes(memberId)) {
-    throw new HttpError(404, 'Member not found.');
-  }
-}
 
 function normalizeEmail(email) {
   const normalized = typeof email === 'string' ? email.trim().toLowerCase() : '';
@@ -102,6 +96,7 @@ export function createMemberAccountService({
   accounts = userAccountRepository,
   legacyAccounts = memberAccountRepository,
   audits = memberAccountAuditRepository,
+  resolver = studentResolver,
   config = env,
   now = () => new Date(),
   verifyActorPassword = null,
@@ -139,7 +134,7 @@ export function createMemberAccountService({
 
   return Object.freeze({
     async provisionAccount({ memberId, email, newPassword, currentPassword, actor }) {
-      requireCanonicalMember(memberId);
+      const student = await resolver.assertKnown(memberId);
       const normalizedEmail = normalizeEmail(email);
       validateNewPassword(newPassword);
       await reauthenticate({ actor, currentPassword });
@@ -154,7 +149,7 @@ export function createMemberAccountService({
           const created = await accounts.createMemberAccount({
             userId: randomUUID(),
             memberId,
-            displayName: MEMBER_NAMES[memberId],
+            displayName: student.displayName,
             email: normalizedEmail,
             passwordHash,
             role: ROLES.MEMBER,
@@ -174,7 +169,7 @@ export function createMemberAccountService({
     },
 
     async changeEmail({ memberId, email, currentPassword, actor }) {
-      requireCanonicalMember(memberId);
+      await resolver.assertKnown(memberId);
       const normalizedEmail = normalizeEmail(email);
       await reauthenticate({ actor, currentPassword });
 
@@ -196,7 +191,7 @@ export function createMemberAccountService({
     },
 
     async resetPassword({ memberId, newPassword, currentPassword, actor }) {
-      requireCanonicalMember(memberId);
+      await resolver.assertKnown(memberId);
       validateNewPassword(newPassword);
       await reauthenticate({ actor, currentPassword });
 
@@ -223,7 +218,7 @@ export function createMemberAccountService({
     },
 
     async setAccountActive({ memberId, active, currentPassword, actor }) {
-      requireCanonicalMember(memberId);
+      await resolver.assertKnown(memberId);
       await reauthenticate({ actor, currentPassword });
       const targetActive = Boolean(active);
 

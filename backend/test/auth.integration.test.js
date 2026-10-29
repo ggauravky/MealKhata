@@ -12,11 +12,12 @@ import {
   getSessionCookieOptions,
   SESSION_COOKIE_NAME,
 } from '../src/auth/token.service.js';
-import { authenticateSession } from '../src/middleware/authenticate.js';
+import { authenticateSession, createAuthenticateSession } from '../src/middleware/authenticate.js';
 import { requireAuthenticated, requireSuperAdmin } from '../src/middleware/authorize.js';
 import { LOGIN_RATE_LIMIT } from '../src/middleware/rateLimiters.js';
 import { TEST_CREDENTIALS } from './setup-env.js';
 import { env } from '../src/config/env.js';
+import { InMemoryUserAccountRepository } from './helpers/inMemoryUserAccountRepository.js';
 
 const APP_ORIGIN = 'http://localhost:5173';
 
@@ -24,10 +25,10 @@ function postLogin(credentials, origin = APP_ORIGIN) {
   return request(app).post('/api/auth/login').set('Origin', origin).send(credentials);
 }
 
-function createAuthorizationTestApp() {
+function createAuthorizationTestApp(authenticate = authenticateSession) {
   const testApp = express();
   testApp.use(cookieParser());
-  testApp.use(authenticateSession);
+  testApp.use(authenticate);
   testApp.get('/authenticated', requireAuthenticated, (req, res) => res.json({ role: req.auth.role }));
   testApp.get('/superadmin', requireSuperAdmin, (req, res) => res.json({ role: req.auth.role }));
   return testApp;
@@ -167,6 +168,81 @@ describe('authentication API', () => {
 });
 
 describe('authentication authorization', () => {
+  test('enforces Member permissions for a generated student identity', async () => {
+    const memberId = 'student_0123456789abcdef0123456789abcdef';
+    const accounts = new InMemoryUserAccountRepository();
+    await accounts.create({
+      userId: 'user-aarav',
+      memberId,
+      displayName: 'Aarav Sen',
+      email: 'aarav@example.com',
+      passwordHash: 'not-returned-by-session-validation',
+      role: ROLES.MEMBER,
+      active: true,
+      sessionVersion: 2,
+    });
+    const resolver = {
+      async assertKnown(studentId) {
+        if (studentId !== memberId) {
+          const error = new Error('Student was not found.');
+          error.statusCode = 404;
+          throw error;
+        }
+        return { studentId, displayName: 'Aarav Sen', status: 'ACTIVE' };
+      },
+    };
+    const authenticate = createAuthenticateSession({ accounts, resolver });
+    const testApp = createAuthorizationTestApp(authenticate);
+    const token = await createSessionToken(ROLES.MEMBER, {
+      memberId,
+      userId: 'user-aarav',
+      sessionVersion: 2,
+    });
+
+    await request(testApp)
+      .get('/authenticated')
+      .set('Cookie', `${SESSION_COOKIE_NAME}=${token}`)
+      .expect(200);
+    await request(testApp)
+      .get('/superadmin')
+      .set('Cookie', `${SESSION_COOKIE_NAME}=${token}`)
+      .expect(403);
+  });
+
+  test('rejects a canonical Member session when its student identity is unknown', async () => {
+    const memberId = 'student_ffffffffffffffffffffffffffffffff';
+    const accounts = new InMemoryUserAccountRepository();
+    await accounts.create({
+      userId: 'user-unknown',
+      memberId,
+      displayName: 'Unknown Student',
+      email: 'unknown.student@example.com',
+      passwordHash: 'not-returned-by-session-validation',
+      role: ROLES.MEMBER,
+      active: true,
+      sessionVersion: 0,
+    });
+    const resolver = {
+      async assertKnown() {
+        const error = new Error('Student was not found.');
+        error.statusCode = 404;
+        throw error;
+      },
+    };
+    const authenticate = createAuthenticateSession({ accounts, resolver });
+    const testApp = createAuthorizationTestApp(authenticate);
+    const token = await createSessionToken(ROLES.MEMBER, {
+      memberId,
+      userId: 'user-unknown',
+      sessionVersion: 0,
+    });
+
+    await request(testApp)
+      .get('/authenticated')
+      .set('Cookie', `${SESSION_COOKIE_NAME}=${token}`)
+      .expect(401);
+  });
+
   test('uses 401 for viewers, 403 for insufficient roles, and allows Super Admin', async () => {
     const testApp = createAuthorizationTestApp();
     await request(testApp).get('/authenticated').expect(401);
