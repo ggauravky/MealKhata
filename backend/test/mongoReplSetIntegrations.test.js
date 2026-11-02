@@ -36,10 +36,10 @@ import { Student } from '../src/students/student.model.js';
 import { CreditAllocation, PaymentReclassification, UnallocatedCredit } from '../src/stays/paymentReclassification.model.js';
 import { CreditObligationState } from '../src/finance/creditObligationState.model.js';
 
-import { createStayService, stayService } from '../src/stays/stay.service.js';
+import { createStayService } from '../src/stays/stay.service.js';
 import { defaultStayAttributionService } from '../src/stays/stayAttribution.service.js';
 import { depositService } from '../src/stays/deposit.service.js';
-import { roomFeeService } from '../src/roomFees/roomFee.service.js';
+import { createRoomFeeService } from '../src/roomFees/roomFee.service.js';
 import { expenseService } from '../src/expenses/expense.service.js';
 import { stayRepository } from '../src/stays/stay.repository.js';
 import { roomRepository } from '../src/roomFees/room.repository.js';
@@ -50,6 +50,18 @@ import { creditAllocationService } from '../src/finance/creditAllocation.service
 import { mealService } from '../src/meals/meal.service.js';
 import { createMemberAccountService } from '../src/members/memberAccount.service.js';
 import { createMemberService } from '../src/members/member.service.js';
+
+const fixedIntegrationNow = () => new Date('2026-10-29T06:30:00.000Z');
+const roomFeeService = createRoomFeeService({
+  repository: roomRepository,
+  now: fixedIntegrationNow,
+});
+const stayService = createStayService({
+  repository: stayRepository,
+  roomFees: roomFeeService,
+  deposits: depositService,
+  now: fixedIntegrationNow,
+});
 
 let replSet;
 
