@@ -1,14 +1,15 @@
 import { Router } from 'express';
-import { MEMBER_IDS } from '../config/members.js';
+import { assertSafeStudentId } from '../students/studentId.js';
 import { env } from '../config/env.js';
 import { ROLES } from '../auth/permissions.js';
-import { requireAdminOrAbove, requireAuthenticated } from '../middleware/authorize.js';
+import { requireAdminOrAbove, requireAuthenticated, requireSuperAdmin } from '../middleware/authorize.js';
 import { authorizeLogicalDate } from '../middleware/dateAuthorization.js';
 import { authorizeMemberResource } from '../middleware/memberAuthorization.js';
 import { canEditDate, getLogicalDateInTimeZone, isValidLogicalDate } from '../utils/date.js';
 import { MEAL_TYPES, WRITABLE_MEAL_STATUSES } from '../meals/meal.constants.js';
 import { isValidPricePaise } from '../billing/monthlyRate.constants.js';
 import { mealService } from '../meals/meal.service.js';
+import { historicalMealCorrectionService } from '../meals/mealHistoricalCorrection.service.js';
 import { settlementService } from '../settlement/settlement.service.js';
 import { broadcastMealUpdated } from '../socket.js';
 
@@ -43,7 +44,9 @@ function validateMealChange(req, res, next) {
     return reject(res, 'Invalid meal type.');
   }
 
-  if (!MEMBER_IDS.includes(body.memberId)) {
+  try {
+    assertSafeStudentId(body.memberId);
+  } catch {
     return reject(res, 'Invalid member.');
   }
 
@@ -80,22 +83,30 @@ function withPermissions(data, req, now, timezone) {
     now,
     timeZone: timezone,
   });
+  const historical = Boolean(data.calculationVersion);
 
   let editableMemberIds = [];
-  if (isDateEditable) {
+  if (isDateEditable && !historical) {
     if (req.auth?.role === ROLES.SUPERADMIN || req.auth?.role === ROLES.ADMIN) {
-      editableMemberIds = [...MEMBER_IDS];
+      editableMemberIds = [...new Set([
+        ...Object.keys(data.meals?.morning ?? {}),
+        ...Object.keys(data.meals?.night ?? {}),
+      ])];
     } else if (req.auth?.role === ROLES.MEMBER && req.auth.memberId) {
-      editableMemberIds = [req.auth.memberId];
+      if (Object.hasOwn(data.meals?.morning ?? {}, req.auth.memberId)
+        || Object.hasOwn(data.meals?.night ?? {}, req.auth.memberId)) {
+        editableMemberIds = [req.auth.memberId];
+      }
     }
   }
 
   return {
     ...data,
     permissions: {
-      canEdit: isDateEditable && editableMemberIds.length > 0,
-      canConfigureAllocation: isDateEditable && (req.auth?.role === ROLES.SUPERADMIN || req.auth?.role === ROLES.ADMIN),
-      canConfigurePrice: isDateEditable && (req.auth?.role === ROLES.SUPERADMIN || req.auth?.role === ROLES.ADMIN),
+      canEdit: isDateEditable && !historical && editableMemberIds.length > 0,
+      canConfigureAllocation: isDateEditable && !historical && (req.auth?.role === ROLES.SUPERADMIN || req.auth?.role === ROLES.ADMIN),
+      canConfigurePrice: isDateEditable && !historical && (req.auth?.role === ROLES.SUPERADMIN || req.auth?.role === ROLES.ADMIN),
+      canCorrectHistorical: isDateEditable && historical && req.auth?.role === ROLES.SUPERADMIN,
       editableMemberIds,
     },
   };
@@ -103,12 +114,41 @@ function withPermissions(data, req, now, timezone) {
 
 export function createMealRouter({
   service = mealService,
+  correctionService = historicalMealCorrectionService,
   settlements = settlementService,
   broadcast = broadcastMealUpdated,
   now = () => new Date(),
   timezone = env.appTimezone,
 } = {}) {
   const router = Router();
+
+  router.post(
+    '/:date/corrections',
+    requireSuperAdmin,
+    validateDate,
+    authorizeLogicalDate({ source: 'params', now, timeZone: timezone }),
+    async (req, res, next) => {
+      try {
+        const allowed = new Set(['expectedRevision', 'operation', 'mealType', 'memberId', 'status', 'allocation', 'pricePaise', 'reason']);
+        if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)
+          || Object.keys(req.body).some((key) => !allowed.has(key))) {
+          return reject(res, 'Invalid historical correction request.');
+        }
+        if (settlements && await settlements.isMonthClosed(req.params.date.slice(0, 7))) {
+          return res.status(409).json({ success: false, message: 'This month is closed. Reopen it before correcting meal history.' });
+        }
+        const data = await correctionService.correct({
+          ...req.body,
+          date: req.logicalDate,
+          actorRole: req.auth.role,
+        });
+        broadcast({ date: data.date, mealType: req.body.mealType, historicalCorrection: true, revision: data.revision, updatedAt: data.updatedAt });
+        return res.json({ success: true, changed: true, data: withPermissions(data, req, now(), timezone) });
+      } catch (error) {
+        return next(error);
+      }
+    },
+  );
 
   router.get('/today', async (req, res) => {
     const currentTime = now();
@@ -149,6 +189,7 @@ export function createMealRouter({
           date: req.logicalDate,
           mealType: req.params.mealType,
           allocation: req.body,
+          expectedRevision: req.body?.expectedRevision ?? null,
           actorRole: req.auth.role,
           actorMemberId: req.auth.role === ROLES.MEMBER ? req.auth.memberId : null,
         });

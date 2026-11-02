@@ -1,4 +1,5 @@
 import { MEMBER_IDS } from '../config/members.js';
+import { normalizeParticipantIds } from './mealParticipants.js';
 import {
   ALLOCATION_MODES,
   MAX_MEMBER_SHARE_UNITS,
@@ -8,7 +9,8 @@ import {
   SHARE_UNITS_PER_PLATE,
 } from './plateAllocation.constants.js';
 
-export function validatePlateAllocation(allocation) {
+export function validatePlateAllocation(allocation, { participants = MEMBER_IDS, maxPhysicalPlates = MAX_PHYSICAL_PLATES } = {}) {
+  const participantIds = normalizeParticipantIds(participants);
   if (!allocation || typeof allocation !== 'object') {
     throw new Error('Allocation must be an object or array of plates');
   }
@@ -24,11 +26,14 @@ export function validatePlateAllocation(allocation) {
     throw new Error('Allocation plates must be an array');
   }
 
-  if (plates.length > MAX_PHYSICAL_PLATES) {
-    throw new Error(`Cannot allocate more than ${MAX_PHYSICAL_PLATES} physical plates per meal`);
+  if (!Number.isInteger(maxPhysicalPlates) || maxPhysicalPlates < 1 || maxPhysicalPlates > 100) {
+    throw new Error('Maximum physical plates must be an integer from 1 to 100');
+  }
+  if (plates.length > maxPhysicalPlates) {
+    throw new Error(`Cannot allocate more than ${maxPhysicalPlates} physical plates per meal`);
   }
 
-  const memberTotalUnits = Object.fromEntries(MEMBER_IDS.map((id) => [id, 0]));
+  const memberTotalUnits = Object.fromEntries(participantIds.map((id) => [id, 0]));
 
   for (let i = 0; i < plates.length; i += 1) {
     const plate = plates[i];
@@ -40,12 +45,12 @@ export function validatePlateAllocation(allocation) {
     let plateTotal = 0;
 
     for (const key of Object.keys(shares)) {
-      if (!MEMBER_IDS.includes(key)) {
+      if (!participantIds.includes(key)) {
         throw new Error(`Unknown member '${key}' on plate #${i + 1}`);
       }
     }
 
-    for (const memberId of MEMBER_IDS) {
+    for (const memberId of participantIds) {
       const units = shares[memberId] ?? 0;
 
       if (!Number.isInteger(units) || units < 0 || units > SHARE_UNITS_PER_PLATE) {
@@ -65,7 +70,7 @@ export function validatePlateAllocation(allocation) {
     }
   }
 
-  for (const memberId of MEMBER_IDS) {
+  for (const memberId of participantIds) {
     if (memberTotalUnits[memberId] > MAX_MEMBER_SHARE_UNITS) {
       throw new Error(
         `Member '${memberId}' total allocation across plates cannot exceed 1 full plate equivalent (6 units) (received ${memberTotalUnits[memberId]})`,
@@ -77,29 +82,37 @@ export function validatePlateAllocation(allocation) {
     mode,
     plates: plates.map((plate) => ({
       shares: Object.fromEntries(
-        MEMBER_IDS.map((id) => [id, plate.shares[id] ?? 0]),
+        participantIds.map((id) => [id, plate.shares[id] ?? 0]),
       ),
     })),
   };
 }
 
-export function getEffectiveMealAllocation({ statuses = {}, customAllocation = null } = {}) {
+export function getEffectiveMealAllocation({ statuses = {}, customAllocation = null, participants = MEMBER_IDS } = {}) {
+  const participantIds = normalizeParticipantIds(participants);
   let result;
   if (customAllocation && customAllocation.mode === ALLOCATION_MODES.CUSTOM && Array.isArray(customAllocation.plates)) {
+    for (const plate of customAllocation.plates) {
+      for (const studentId of Object.keys(plate.shares ?? {})) {
+        if (!participantIds.includes(studentId)) {
+          throw new TypeError(`Unknown participant '${studentId}' in stored meal allocation`);
+        }
+      }
+    }
     result = {
       mode: ALLOCATION_MODES.CUSTOM,
       source: 'custom',
       plates: customAllocation.plates.map((plate) => ({
         shares: Object.fromEntries(
-          MEMBER_IDS.map((id) => [id, plate.shares?.[id] ?? 0]),
+          participantIds.map((id) => [id, plate.shares?.[id] ?? 0]),
         ),
       })),
     };
   } else {
     const plates = [];
-    for (const memberId of MEMBER_IDS) {
+    for (const memberId of participantIds) {
       if (statuses[memberId] === 'taking') {
-        const shares = Object.fromEntries(MEMBER_IDS.map((id) => [id, 0]));
+        const shares = Object.fromEntries(participantIds.map((id) => [id, 0]));
         shares[memberId] = SHARE_UNITS_PER_PLATE;
         plates.push({ shares });
       }
@@ -112,16 +125,17 @@ export function getEffectiveMealAllocation({ statuses = {}, customAllocation = n
     };
   }
 
-  result.shareUnits = calculateMemberShareUnits(result);
+  result.shareUnits = calculateMemberShareUnits(result, { participants: participantIds });
   return result;
 }
 
-export function calculateMemberShareUnits(effectiveAllocation) {
-  const units = Object.fromEntries(MEMBER_IDS.map((id) => [id, 0]));
+export function calculateMemberShareUnits(effectiveAllocation, { participants = MEMBER_IDS } = {}) {
+  const participantIds = normalizeParticipantIds(participants);
+  const units = Object.fromEntries(participantIds.map((id) => [id, 0]));
   const plates = effectiveAllocation?.plates ?? [];
 
   for (const plate of plates) {
-    for (const memberId of MEMBER_IDS) {
+    for (const memberId of participantIds) {
       units[memberId] += plate.shares?.[memberId] ?? 0;
     }
   }
@@ -130,21 +144,22 @@ export function calculateMemberShareUnits(effectiveAllocation) {
   return { ...units, totalUnits };
 }
 
-export function deriveParticipationStatuses(effectiveAllocation) {
-  const units = calculateMemberShareUnits(effectiveAllocation);
+export function deriveParticipationStatuses(effectiveAllocation, { participants = MEMBER_IDS } = {}) {
+  const participantIds = normalizeParticipantIds(participants);
+  const units = calculateMemberShareUnits(effectiveAllocation, { participants: participantIds });
   return Object.fromEntries(
-    MEMBER_IDS.map((id) => [id, units[id] > 0 ? 'taking' : 'skip']),
+    participantIds.map((id) => [id, units[id] > 0 ? 'taking' : 'skip']),
   );
 }
 
-function getDeterministicRotation(date, mealType) {
-  if (!date) return [...MEMBER_IDS];
+function getDeterministicRotation(date, mealType, participantIds) {
+  if (!date || participantIds.length === 0) return [...participantIds];
 
   const dateParts = date.split('-').map((p) => Number.parseInt(p, 10));
   const numericSum = dateParts.reduce((acc, n) => acc + (Number.isNaN(n) ? 0 : n), 0);
-  const offset = (numericSum + (mealType === 'night' ? 1 : 0)) % MEMBER_IDS.length;
+  const offset = (numericSum + (mealType === 'night' ? 1 : 0)) % participantIds.length;
 
-  return [...MEMBER_IDS.slice(offset), ...MEMBER_IDS.slice(0, offset)];
+  return [...participantIds.slice(offset), ...participantIds.slice(0, offset)];
 }
 
 export function resolveMealPricePaise({ day, mealType, fallbackPricePaise }) {
@@ -171,11 +186,29 @@ export function splitMealCost({
   effectiveAllocation,
   allocation,
   pricePaise = MEAL_PRICES[mealType] ?? 0,
+  participants = MEMBER_IDS,
 }) {
+  const participantIds = normalizeParticipantIds(participants);
   const targetAllocation = effectiveAllocation || allocation;
   const plates = targetAllocation?.plates ?? [];
   const physicalPlates = plates.length;
   const totalCostPaise = physicalPlates * pricePaise;
+
+  if (!Number.isSafeInteger(pricePaise) || pricePaise < 0 || !Number.isSafeInteger(totalCostPaise)) {
+    throw new TypeError('Meal price and total cost must be safe non-negative integer paise');
+  }
+  for (const plate of plates) {
+    const entries = Object.entries(plate.shares ?? {});
+    let units = 0;
+    for (const [studentId, shareUnits] of entries) {
+      if (!participantIds.includes(studentId)) throw new TypeError(`Unknown participant '${studentId}' in meal allocation`);
+      if (!Number.isInteger(shareUnits) || shareUnits < 0 || shareUnits > SHARE_UNITS_PER_PLATE) {
+        throw new TypeError('Meal share units must be integers from 0 to 6');
+      }
+      units += shareUnits;
+    }
+    if (units !== SHARE_UNITS_PER_PLATE) throw new TypeError('Each physical plate must have exactly six share units');
+  }
 
   if (physicalPlates === 0) {
     return {
@@ -184,7 +217,7 @@ export function splitMealCost({
       pricePaise,
       totalCostPaise: 0,
       members: Object.fromEntries(
-        MEMBER_IDS.map((id) => [
+        participantIds.map((id) => [
           id,
           {
             shareUnits: 0,
@@ -193,21 +226,28 @@ export function splitMealCost({
           },
         ]),
       ),
-      memberAmountsPaise: Object.fromEntries(MEMBER_IDS.map((id) => [id, 0])),
+      memberAmountsPaise: Object.fromEntries(participantIds.map((id) => [id, 0])),
       roomAmountPaise: 0,
     };
   }
 
-  const memberUnits = calculateMemberShareUnits(targetAllocation);
+  const memberUnits = calculateMemberShareUnits(targetAllocation, { participants: participantIds });
   const totalWeight = physicalPlates * SHARE_UNITS_PER_PLATE;
+  if (memberUnits.totalUnits !== totalWeight
+    || participantIds.some((studentId) => memberUnits[studentId] > MAX_MEMBER_SHARE_UNITS)) {
+    throw new TypeError('Meal shares must conserve plates and cannot exceed six units per participant');
+  }
 
   const baseAmounts = {};
   const remainders = {};
   let allocatedBaseSum = 0;
 
-  for (const memberId of MEMBER_IDS) {
+  for (const memberId of participantIds) {
     const units = memberUnits[memberId] ?? 0;
     const numerator = totalCostPaise * units;
+    if (!Number.isSafeInteger(numerator)) {
+      throw new TypeError('Meal cost multiplication exceeds safe integer paise');
+    }
     const base = Math.floor(numerator / totalWeight);
     const remainder = numerator % totalWeight;
 
@@ -217,9 +257,12 @@ export function splitMealCost({
   }
 
   const leftoverPaise = totalCostPaise - allocatedBaseSum;
-  const priorityOrder = getDeterministicRotation(date, mealType);
+  if (leftoverPaise < 0 || leftoverPaise > participantIds.length) {
+    throw new TypeError('Meal allocation cannot conserve the exact plate cost');
+  }
+  const priorityOrder = getDeterministicRotation(date, mealType, participantIds);
 
-  const sortedMembers = [...MEMBER_IDS].sort((a, b) => {
+  const sortedMembers = [...participantIds].sort((a, b) => {
     const remDiff = remainders[b] - remainders[a];
     if (remDiff !== 0) return remDiff;
     return priorityOrder.indexOf(a) - priorityOrder.indexOf(b);
@@ -232,7 +275,7 @@ export function splitMealCost({
   }
 
   const membersResult = Object.fromEntries(
-    MEMBER_IDS.map((memberId) => {
+    participantIds.map((memberId) => {
       const units = memberUnits[memberId] ?? 0;
       return [
         memberId,
@@ -252,7 +295,7 @@ export function splitMealCost({
     totalCostPaise,
     members: membersResult,
     memberAmountsPaise: Object.fromEntries(
-      MEMBER_IDS.map((memberId) => [memberId, finalAmounts[memberId]]),
+      participantIds.map((memberId) => [memberId, finalAmounts[memberId]]),
     ),
     roomAmountPaise: totalCostPaise,
   };
@@ -284,11 +327,14 @@ export function formatPlateFraction(shareUnits) {
   return `${whole}${frac}`;
 }
 
-export function createPresetAllocation(presetName, { members = MEMBER_IDS, fullMemberId = null } = {}) {
+export function createPresetAllocation(presetName, { participants = MEMBER_IDS, members = participants, fullMemberId = null } = {}) {
+  const participantIds = normalizeParticipantIds(participants);
+  const selected = normalizeParticipantIds(members);
+  if (selected.some((id) => !participantIds.includes(id))) throw new Error('Preset contains an ineligible student');
   switch (presetName) {
     case PRESET_NAMES.INDIVIDUAL: {
-      const plates = members.map((m) => {
-        const shares = Object.fromEntries(MEMBER_IDS.map((id) => [id, 0]));
+      const plates = selected.map((m) => {
+        const shares = Object.fromEntries(participantIds.map((id) => [id, 0]));
         shares[m] = SHARE_UNITS_PER_PLATE;
         return { shares };
       });
@@ -296,12 +342,12 @@ export function createPresetAllocation(presetName, { members = MEMBER_IDS, fullM
     }
 
     case PRESET_NAMES.ONE_PLATE_TWO_SHARED: {
-      if (members.length !== 2) {
+      if (selected.length !== 2) {
         throw new Error('1 Plate / 2 People preset requires exactly 2 members');
       }
-      const shares = Object.fromEntries(MEMBER_IDS.map((id) => [id, 0]));
-      shares[members[0]] = 3;
-      shares[members[1]] = 3;
+      const shares = Object.fromEntries(participantIds.map((id) => [id, 0]));
+      shares[selected[0]] = 3;
+      shares[selected[1]] = 3;
       return {
         mode: ALLOCATION_MODES.CUSTOM,
         plates: [{ shares }],
@@ -309,7 +355,8 @@ export function createPresetAllocation(presetName, { members = MEMBER_IDS, fullM
     }
 
     case PRESET_NAMES.ONE_PLATE_THREE_SHARED: {
-      const shares = Object.fromEntries(MEMBER_IDS.map((id) => [id, 2]));
+      if (selected.length !== 3) throw new Error('1 Plate / 3 People preset requires exactly 3 members');
+      const shares = Object.fromEntries(participantIds.map((id) => [id, selected.includes(id) ? 2 : 0]));
       return {
         mode: ALLOCATION_MODES.CUSTOM,
         plates: [{ shares }],
@@ -317,8 +364,9 @@ export function createPresetAllocation(presetName, { members = MEMBER_IDS, fullM
     }
 
     case PRESET_NAMES.TWO_PLATES_THREE_EQUAL: {
-      const plate1 = { shares: Object.fromEntries(MEMBER_IDS.map((id) => [id, 2])) };
-      const plate2 = { shares: Object.fromEntries(MEMBER_IDS.map((id) => [id, 2])) };
+      if (selected.length !== 3) throw new Error('2 Plates / 3 People preset requires exactly 3 members');
+      const plate1 = { shares: Object.fromEntries(participantIds.map((id) => [id, selected.includes(id) ? 2 : 0])) };
+      const plate2 = { shares: Object.fromEntries(participantIds.map((id) => [id, selected.includes(id) ? 2 : 0])) };
       return {
         mode: ALLOCATION_MODES.CUSTOM,
         plates: [plate1, plate2],
@@ -326,13 +374,14 @@ export function createPresetAllocation(presetName, { members = MEMBER_IDS, fullM
     }
 
     case PRESET_NAMES.TWO_PLATES_ONE_FULL_TWO_HALF: {
-      const targetFull = fullMemberId && MEMBER_IDS.includes(fullMemberId) ? fullMemberId : members[0];
-      const otherTwo = MEMBER_IDS.filter((id) => id !== targetFull);
+      if (selected.length !== 3) throw new Error('2 Plates / 3 People preset requires exactly 3 members');
+      const targetFull = fullMemberId && selected.includes(fullMemberId) ? fullMemberId : selected[0];
+      const otherTwo = selected.filter((id) => id !== targetFull);
 
-      const plate1Shares = Object.fromEntries(MEMBER_IDS.map((id) => [id, 0]));
+      const plate1Shares = Object.fromEntries(participantIds.map((id) => [id, 0]));
       plate1Shares[targetFull] = SHARE_UNITS_PER_PLATE;
 
-      const plate2Shares = Object.fromEntries(MEMBER_IDS.map((id) => [id, 0]));
+      const plate2Shares = Object.fromEntries(participantIds.map((id) => [id, 0]));
       plate2Shares[otherTwo[0]] = 3;
       plate2Shares[otherTwo[1]] = 3;
 
@@ -343,8 +392,9 @@ export function createPresetAllocation(presetName, { members = MEMBER_IDS, fullM
     }
 
     case PRESET_NAMES.THREE_PLATES_THREE_FULL: {
-      const plates = MEMBER_IDS.map((m) => {
-        const shares = Object.fromEntries(MEMBER_IDS.map((id) => [id, 0]));
+      if (selected.length !== 3) throw new Error('3 Plates / 3 People preset requires exactly 3 members');
+      const plates = selected.map((m) => {
+        const shares = Object.fromEntries(participantIds.map((id) => [id, 0]));
         shares[m] = SHARE_UNITS_PER_PLATE;
         return { shares };
       });

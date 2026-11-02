@@ -2,6 +2,8 @@ import mongoose from 'mongoose';
 import { env } from '../src/config/env.js';
 import { connectDatabase, disconnectDatabase } from '../src/config/db.js';
 import { MealDay } from '../src/meals/meal.model.js';
+import { MealHistorySnapshot } from '../src/meals/mealHistorySnapshot.model.js';
+import { MealHistoricalCorrection } from '../src/meals/mealHistoricalCorrection.model.js';
 import { MonthlyMealRate } from '../src/billing/monthlyRate.model.js';
 import { Payment } from '../src/payments/payment.model.js';
 import { PaymentSettings } from '../src/payments/paymentSettings.model.js';
@@ -33,6 +35,8 @@ import { CreditObligationState } from '../src/finance/creditObligationState.mode
 
 export const MONITORED_MODELS = [
   MealDay,
+  MealHistorySnapshot,
+  MealHistoricalCorrection,
   MonthlyMealRate,
   Payment,
   PaymentSettings,

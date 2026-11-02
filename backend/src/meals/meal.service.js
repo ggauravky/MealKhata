@@ -5,14 +5,21 @@ import { HttpError } from '../utils/HttpError.js';
 import { DEFAULT_MEAL_STATUS, getMealPath, MEAL_TYPES } from './meal.constants.js';
 import { createDefaultMealDay } from './meal.defaults.js';
 import { mealRepository } from './meal.repository.js';
-import { serializeHistory, serializeMealDay } from './meal.serializer.js';
+import { serializeHistory, serializeLegacyMealSnapshot, serializeMealDay } from './meal.serializer.js';
 import {
+  calculateMemberShareUnits,
   deriveParticipationStatuses,
   validatePlateAllocation,
 } from './plateAllocation.service.js';
 import { stayRepository } from '../stays/stay.repository.js';
 import { MEMBER_IDS } from '../config/members.js';
 import { studentResolver } from '../students/studentResolver.service.js';
+import { extractMealParticipantIds, normalizeParticipantIds } from './mealParticipants.js';
+import { resolvePhysicalPlateLimit } from './plateAllocation.constants.js';
+import { mealHistorySnapshotRepository } from './mealHistorySnapshot.repository.js';
+import { mealHistoricalCorrectionRepository } from './mealHistoricalCorrection.repository.js';
+import { resolveHistoricalMealAuthority } from './mealHistoricalCorrection.service.js';
+import { assertMemberNotCheckedOut } from './mealCheckoutGuard.js';
 
 const MAX_CONCURRENT_RETRIES = 12;
 
@@ -20,33 +27,13 @@ function isDuplicateKeyError(error) {
   return error?.code === 11000;
 }
 
-async function assertMemberNotCheckedOut(memberId, date, stays) {
-  if (!stays) return;
-  const activeStay = typeof stays.getActiveStayForMember === 'function'
-    ? await stays.getActiveStayForMember(memberId)
-    : (typeof stays.findActiveStayForMember === 'function' ? await stays.findActiveStayForMember(memberId) : null);
-
-  if (!activeStay) {
-    const memberStays = typeof stays.listStaysForMember === 'function'
-      ? await stays.listStaysForMember(memberId)
-      : (typeof stays.findStaysByMember === 'function' ? await stays.findStaysByMember(memberId) : []);
-
-    const checkedOutStays = (memberStays || []).filter((s) => s.status === 'CHECKED_OUT' && s.actualLeftOn);
-    if (checkedOutStays.length > 0) {
-      checkedOutStays.sort((a, b) => (b.actualLeftOn || '').localeCompare(a.actualLeftOn || ''));
-      const lastStay = checkedOutStays[0];
-      if (date > lastStay.actualLeftOn) {
-        throw new HttpError(400, `Meal participation is blocked after hostel checkout on ${lastStay.actualLeftOn}.`);
-      }
-    }
-  }
-}
-
 export function createMealService({
   repository = mealRepository,
   settlements = null,
   stays = null,
   students = null,
+  snapshots = null,
+  corrections = null,
   timezone = env.appTimezone,
 } = {}) {
   const listEligibleStudentIds = async (date) => {
@@ -59,14 +46,50 @@ export function createMealService({
     createDefaultMealDay(date, await listEligibleStudentIds(date))
   );
 
-  const serializeDay = async (document, date) => serializeMealDay(document, date, {
-    timezone,
-    ...(document ? {} : { participants: await listEligibleStudentIds(date) }),
+  const participantsForDay = async (document, date) => document
+    ? normalizeParticipantIds(document.participantOrder?.length ? document.participantOrder : extractMealParticipantIds(document))
+    : listEligibleStudentIds(date);
+
+  const verifiedSnapshot = async (document) => resolveHistoricalMealAuthority(document, {
+    snapshots,
+    corrections: corrections ?? { listByDate: async () => [] },
   });
 
-  const runFinancialMutation = (date, actorRole, work) => {
+  const serializeDay = async (document, date) => {
+    if (document && document.schemaVersion !== 3 && snapshots) {
+      return serializeLegacyMealSnapshot(await verifiedSnapshot(document), { timezone });
+    }
+    return serializeMealDay(document, date, {
+      timezone,
+      ...(document ? {} : { participants: await listEligibleStudentIds(date) }),
+    });
+  };
+
+  const runFinancialMutation = async (date, actorRole, work, proposedIds = []) => {
+    const previous = await repository.findByDate(date);
+    if (previous && previous.schemaVersion !== 3 && snapshots) {
+      await verifiedSnapshot(previous);
+      throw new HttpError(409, 'Historical meal correction requires an explicit revision-aware correction.');
+    }
+    const memberIds = normalizeParticipantIds([
+      ...(previous ? extractMealParticipantIds(previous) : await listEligibleStudentIds(date)),
+      ...proposedIds,
+    ]);
     if (typeof repository.executeFinancialMutation === 'function') {
-      return repository.executeFinancialMutation({ date, memberIds: MEMBER_IDS, actorRole }, work);
+      return repository.executeFinancialMutation({ date, memberIds, actorRole }, async ({ session, guard }) => work({
+        session,
+        guard: async () => {
+          const current = await repository.findByDate(date, { session });
+          if (current && current.schemaVersion !== 3 && snapshots) {
+            await verifiedSnapshot(current);
+            throw new HttpError(409, 'Historical meal correction requires an explicit revision-aware correction.');
+          }
+          const currentIds = current
+            ? extractMealParticipantIds(current)
+            : await listEligibleStudentIds(date);
+          await guard({ memberIds: normalizeParticipantIds([...memberIds, ...currentIds]) });
+        },
+      }));
     }
     return work({ session: null, guard: async () => {} });
   };
@@ -77,6 +100,10 @@ export function createMealService({
         const document = await repository.findByDate(date);
         return serializeDay(document, date);
       } catch (error) {
+        if (error instanceof HttpError) throw error;
+        if (/historical meal (?:correction )?snapshot/i.test(error.message)) {
+          throw new HttpError(503, error.message, { cause: error });
+        }
         throw new HttpError(503, 'Meal data is temporarily unavailable.', { cause: error });
       }
     },
@@ -84,8 +111,27 @@ export function createMealService({
     async getHistory(date, limit) {
       try {
         const document = await repository.findByDate(date);
-        return serializeHistory(document, date, limit);
+        if (document && document.schemaVersion !== 3 && snapshots) await verifiedSnapshot(document);
+        const history = serializeHistory(document, date, limit);
+        if (document && document.schemaVersion !== 3 && corrections) {
+          const correctionEvents = (await corrections.listByDate(date)).map((record) => ({
+            changedAt: new Date(record.createdAt).toISOString(),
+            actorRole: record.actorRole,
+            actorMemberId: null,
+            mealType: record.mealType,
+            changeType: record.operation,
+            reason: record.reason,
+            revision: record.revision,
+            type: 'historical_correction',
+          }));
+          history.items = [...history.items, ...correctionEvents]
+            .sort((a, b) => b.changedAt.localeCompare(a.changedAt)).slice(0, limit);
+        }
+        return history;
       } catch (error) {
+        if (/historical meal (?:correction )?snapshot/i.test(error.message)) {
+          throw new HttpError(503, error.message, { cause: error });
+        }
         throw new HttpError(503, 'Meal history is temporarily unavailable.', { cause: error });
       }
     },
@@ -117,6 +163,9 @@ export function createMealService({
         return await runFinancialMutation(date, actorRole, async ({ session, guard }) => {
           for (let attempt = 0; attempt < MAX_CONCURRENT_RETRIES; attempt += 1) {
             const currentDocument = await repository.findByDate(date, { session });
+          if (currentDocument && !(await participantsForDay(currentDocument, date)).includes(memberId)) {
+            throw new HttpError(409, 'Student is not a participant in this saved meal.');
+          }
           const currentStatus = currentDocument?.meals?.[mealType]?.[memberId] ?? DEFAULT_MEAL_STATUS;
           const currentAllocation = currentDocument?.allocations?.[mealType];
           const hasCustomAllocation = currentAllocation && currentAllocation.mode === 'custom';
@@ -142,6 +191,8 @@ export function createMealService({
           if (!currentDocument) {
             const newDocument = await createDefaultDayForDate(date);
             if (!Object.hasOwn(newDocument.meals[mealType], memberId)) {
+              if (!students) throw new HttpError(400, 'Invalid member.');
+              if (typeof students.assertKnown === 'function') await students.assertKnown(memberId);
               throw new HttpError(409, 'Student is not eligible for meals on this date.');
             }
             newDocument.meals[mealType][memberId] = status;
@@ -218,7 +269,7 @@ export function createMealService({
           }
 
           throw new Error('Concurrent meal updates did not settle');
-        });
+        }, [memberId]);
       } catch (error) {
         if (error instanceof HttpError || error.statusCode) {
           throw error;
@@ -234,6 +285,7 @@ export function createMealService({
       date,
       mealType,
       allocation,
+      expectedRevision = null,
       actorRole,
       actorMemberId = null,
       changedAt = new Date(),
@@ -241,13 +293,24 @@ export function createMealService({
       if (settlements && (await settlements.isMonthClosed(date.slice(0, 7)))) {
         throw new HttpError(409, 'This month is closed. Reopen the month before changing plate allocation.');
       }
+      if (expectedRevision !== null && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0)) {
+        throw new HttpError(400, 'Expected revision must be a non-negative integer.');
+      }
 
-      const validatedAllocation = validatePlateAllocation(allocation);
-      const derivedStatuses = deriveParticipationStatuses(validatedAllocation);
+      const existingDay = await repository.findByDate(date);
+      if (expectedRevision !== null && (existingDay?.revision ?? 0) !== expectedRevision) {
+        throw new HttpError(409, 'Meal revision changed. Refresh and retry the allocation.');
+      }
+      const participantIds = await participantsForDay(existingDay, date);
+      const validatedAllocation = validatePlateAllocation(allocation, {
+        participants: participantIds,
+        maxPhysicalPlates: resolvePhysicalPlateLimit(participantIds.length),
+      });
+      const derivedStatuses = deriveParticipationStatuses(validatedAllocation, { participants: participantIds });
 
       if (stays && validatedAllocation.plates) {
-        for (const [mId, plates] of Object.entries(validatedAllocation.plates)) {
-          if (plates > 0) {
+        for (const [mId, units] of Object.entries(calculateMemberShareUnits(validatedAllocation, { participants: participantIds }))) {
+          if (mId !== 'totalUnits' && units > 0) {
             await assertMemberNotCheckedOut(mId, date, stays);
           }
         }
@@ -257,6 +320,14 @@ export function createMealService({
         return await runFinancialMutation(date, actorRole, async ({ session, guard }) => {
           for (let attempt = 0; attempt < MAX_CONCURRENT_RETRIES; attempt += 1) {
             const currentDocument = await repository.findByDate(date, { session });
+          if (expectedRevision !== null && (currentDocument?.revision ?? 0) !== expectedRevision) {
+            throw new HttpError(409, 'Meal revision changed. Refresh and retry the allocation.');
+          }
+          const currentIds = await participantsForDay(currentDocument, date);
+          if (currentIds.length !== participantIds.length
+            || currentIds.some((studentId, index) => studentId !== participantIds[index])) {
+            throw new HttpError(409, 'Meal participants changed. Refresh and retry the allocation.');
+          }
           const currentAllocation = currentDocument?.allocations?.[mealType] ?? null;
 
           const allocationChange = {
@@ -316,7 +387,7 @@ export function createMealService({
           }
 
           throw new Error('Concurrent allocation updates did not settle');
-        });
+        }, participantIds);
       } catch (error) {
         if (error instanceof HttpError || error.statusCode) {
           throw error;
@@ -587,4 +658,9 @@ export function createMealService({
   });
 }
 
-export const mealService = createMealService({ stays: stayRepository, students: studentResolver });
+export const mealService = createMealService({
+  stays: stayRepository,
+  students: studentResolver,
+  snapshots: mealHistorySnapshotRepository,
+  corrections: mealHistoricalCorrectionRepository,
+});

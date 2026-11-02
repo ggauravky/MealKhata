@@ -191,7 +191,7 @@ export function buildLegacyMealSnapshot(rawSourceDay) {
     assertKnownAllocation(sourceDay.allocations?.[mealType], `allocations.${mealType}`);
   }
   const statuses = normalizeStatuses(sourceDay);
-  const serialized = serializeMealDay(sourceDay, sourceDay.date);
+  const serialized = serializeMealDay(sourceDay, sourceDay.date, { participants: MEMBER_IDS });
   const canonicalSource = pickFields(sourceDay, SOURCE_FIELDS);
 
   return {
@@ -218,6 +218,19 @@ export function buildLegacyMealSnapshot(rawSourceDay) {
     sourceCreatedAt: toIsoString(sourceDay.createdAt, 'source createdAt'),
     sourceUpdatedAt: toIsoString(sourceDay.updatedAt, 'source updatedAt'),
   };
+}
+
+export function verifyLegacyMealSnapshot(sourceDay, storedSnapshot) {
+  const date = sourceDay?.date;
+  if (!storedSnapshot) throw new Error(`Historical meal snapshot missing for ${date}`);
+  const expected = buildLegacyMealSnapshot(sourceDay);
+  if (storedSnapshot.sourceChecksum !== expected.sourceChecksum) {
+    throw new Error(`Historical meal snapshot source checksum mismatch for ${date}`);
+  }
+  if (stableStringify(comparableSnapshot(storedSnapshot)) !== stableStringify(expected)) {
+    throw new Error(`Historical meal snapshot mismatch for ${date}`);
+  }
+  return storedSnapshot;
 }
 
 export function createLegacyMealSnapshotService({ source, snapshots } = {}) {

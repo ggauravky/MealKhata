@@ -1,19 +1,26 @@
-import { MEMBER_IDS } from '../config/members.js';
 import { env } from '../config/env.js';
 import { mealRepository } from '../meals/meal.repository.js';
-import { serializeMealDay } from '../meals/meal.serializer.js';
+import { serializeLegacyMealSnapshot, serializeMealDay } from '../meals/meal.serializer.js';
+import { mealHistorySnapshotRepository } from '../meals/mealHistorySnapshot.repository.js';
+import { mealHistoricalCorrectionRepository } from '../meals/mealHistoricalCorrection.repository.js';
+import { resolveHistoricalMealAuthority } from '../meals/mealHistoricalCorrection.service.js';
+import { studentResolver } from '../students/studentResolver.service.js';
 import { HttpError } from '../utils/HttpError.js';
 import { firstDateOfMonth, lastDateOfMonth, listDatesInMonth } from '../utils/month.js';
 
-function serializeMonthDay(document, date, { timezone = env.appTimezone } = {}) {
-  const serialized = serializeMealDay(document, date, { timezone });
+function serializeMonthDay(document, date, { timezone = env.appTimezone, participants, snapshot } = {}) {
+  const serialized = snapshot
+    ? serializeLegacyMealSnapshot(snapshot, { timezone })
+    : serializeMealDay(document, date, { timezone, participants });
 
-  const morningTaking = MEMBER_IDS.filter((memberId) => serialized.meals.morning[memberId] === 'taking').length;
-  const nightTaking = MEMBER_IDS.filter((memberId) => serialized.meals.night[memberId] === 'taking').length;
-  const morningSkipping = MEMBER_IDS.filter((memberId) => serialized.meals.morning[memberId] === 'skip').length;
-  const nightSkipping = MEMBER_IDS.filter((memberId) => serialized.meals.night[memberId] === 'skip').length;
-  const morningNotSet = MEMBER_IDS.filter((memberId) => (serialized.meals.morning[memberId] ?? 'not_set') === 'not_set').length;
-  const nightNotSet = MEMBER_IDS.filter((memberId) => (serialized.meals.night[memberId] ?? 'not_set') === 'not_set').length;
+  const morningStatuses = Object.values(serialized.meals.morning);
+  const nightStatuses = Object.values(serialized.meals.night);
+  const morningTaking = morningStatuses.filter((status) => status === 'taking').length;
+  const nightTaking = nightStatuses.filter((status) => status === 'taking').length;
+  const morningSkipping = morningStatuses.filter((status) => status === 'skip').length;
+  const nightSkipping = nightStatuses.filter((status) => status === 'skip').length;
+  const morningNotSet = morningStatuses.filter((status) => status === 'not_set').length;
+  const nightNotSet = nightStatuses.filter((status) => status === 'not_set').length;
 
   const isMorningCustom = serialized.allocations.morning.source === 'custom';
   const isNightCustom = serialized.allocations.night.source === 'custom';
@@ -37,7 +44,14 @@ function serializeMonthDay(document, date, { timezone = env.appTimezone } = {}) 
     allocations: serialized.allocations,
     pricing: serialized.pricing,
     dailyCostSummary: serialized.dailyCostSummary,
-    priceOverrides: document?.priceOverrides ?? null,
+    priceOverrides: snapshot
+      ? Object.fromEntries(['morning', 'night'].map((mealType) => [
+        mealType,
+        snapshot.pricing[mealType].isOverridden
+          ? { pricePaise: snapshot.pricing[mealType].overridePricePaise, reason: snapshot.pricing[mealType].reason }
+          : null,
+      ]))
+      : document?.priceOverrides ?? null,
     counts: {
       morningTaking,
       morningSkipping,
@@ -54,7 +68,13 @@ function serializeMonthDay(document, date, { timezone = env.appTimezone } = {}) 
   };
 }
 
-export function createMonthMealService({ repository = mealRepository, timezone = env.appTimezone } = {}) {
+export function createMonthMealService({
+  repository = mealRepository,
+  students = null,
+  snapshots = null,
+  corrections = null,
+  timezone = env.appTimezone,
+} = {}) {
   return Object.freeze({
     async getMonth(month) {
       try {
@@ -64,18 +84,37 @@ export function createMonthMealService({ repository = mealRepository, timezone =
         );
         const byDate = new Map(documents.map((document) => [document.date, document]));
 
+        const days = await Promise.all(listDatesInMonth(month).map(async (date) => {
+          const document = byDate.get(date);
+          const participants = !document && students
+            ? (await students.listEligibleOn(date)).map(({ studentId }) => studentId)
+            : undefined;
+          const snapshot = document && document.schemaVersion !== 3 && snapshots
+            ? await resolveHistoricalMealAuthority(document, {
+              snapshots,
+              corrections: corrections ?? { listByDate: async () => [] },
+            })
+            : null;
+          return serializeMonthDay(document, date, { timezone, participants, snapshot });
+        }));
+
         return {
           month,
           timezone,
-          days: listDatesInMonth(month).map((date) =>
-            serializeMonthDay(byDate.get(date), date, { timezone }),
-          ),
+          days,
         };
       } catch (error) {
+        if (/historical meal (?:correction )?snapshot/i.test(error.message)) {
+          throw new HttpError(503, error.message, { cause: error });
+        }
         throw new HttpError(503, 'Monthly meal data is temporarily unavailable.', { cause: error });
       }
     },
   });
 }
 
-export const monthMealService = createMonthMealService();
+export const monthMealService = createMonthMealService({
+  students: studentResolver,
+  snapshots: mealHistorySnapshotRepository,
+  corrections: mealHistoricalCorrectionRepository,
+});

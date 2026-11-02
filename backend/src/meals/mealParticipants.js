@@ -94,10 +94,13 @@ export function calculateStoredShareUnits(allocation) {
   return { ...units, totalUnits: Object.values(units).reduce((sum, value) => sum + value, 0) };
 }
 
-export function validateAllocationPlates(plates) {
+export function validateAllocationPlates(plates, { maxPhysicalPlates = MAX_PHYSICAL_PLATES } = {}) {
   if (!Array.isArray(plates)) throw new TypeError('allocation plates must be an array');
-  if (plates.length > MAX_PHYSICAL_PLATES) {
-    throw new TypeError(`allocation cannot exceed ${MAX_PHYSICAL_PLATES} physical plates`);
+  if (!Number.isInteger(maxPhysicalPlates) || maxPhysicalPlates < 1 || maxPhysicalPlates > 100) {
+    throw new TypeError('maximum physical plates must be between 1 and 100');
+  }
+  if (plates.length > maxPhysicalPlates) {
+    throw new TypeError(`allocation cannot exceed ${maxPhysicalPlates} physical plates`);
   }
 
   const participantUnits = new Map();

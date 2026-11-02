@@ -16,6 +16,7 @@ export function createDefaultMealDay(date, participants = MEMBER_IDS) {
   return {
     date,
     schemaVersion: 3,
+    participantOrder: normalizeParticipantIds(participants),
     meals: createDefaultMeals(participants),
     allocations: {
       morning: null,

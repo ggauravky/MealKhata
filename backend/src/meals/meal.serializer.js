@@ -1,4 +1,3 @@
-import { MEMBER_IDS } from '../config/members.js';
 import { env } from '../config/env.js';
 import { createDefaultMealDay } from './meal.defaults.js';
 import {
@@ -7,7 +6,7 @@ import {
   splitMealCost,
 } from './plateAllocation.service.js';
 import { MEAL_PRICES } from './plateAllocation.constants.js';
-import { calculateStoredShareUnits, toPlainMealValue } from './mealParticipants.js';
+import { calculateStoredShareUnits, extractMealParticipantIds, normalizeParticipantIds, toPlainMealValue } from './mealParticipants.js';
 
 function serializeDate(value) {
   if (!value) {
@@ -23,15 +22,22 @@ export function serializeMealDay(
   { timezone = env.appTimezone, participants } = {},
 ) {
   const source = toPlainMealValue(document ?? createDefaultMealDay(date, participants));
+  const participantIds = normalizeParticipantIds(
+    source.participantOrder?.length
+      ? source.participantOrder
+      : (source.schemaVersion !== 3 && participants ? participants : extractMealParticipantIds(source)),
+  );
 
   const morningAllocation = getEffectiveMealAllocation({
     statuses: source.meals?.morning,
     customAllocation: source.allocations?.morning,
+    participants: participantIds,
   });
 
   const nightAllocation = getEffectiveMealAllocation({
     statuses: source.meals?.night,
     customAllocation: source.allocations?.night,
+    participants: participantIds,
   });
 
   const defaultMorningPrice = MEAL_PRICES.morning;
@@ -61,6 +67,7 @@ export function serializeMealDay(
     mealType: 'morning',
     effectiveAllocation: morningAllocation,
     pricePaise: effectiveMorningPrice,
+    participants: participantIds,
   });
 
   const nightCost = splitMealCost({
@@ -68,6 +75,7 @@ export function serializeMealDay(
     mealType: 'night',
     effectiveAllocation: nightAllocation,
     pricePaise: effectiveNightPrice,
+    participants: participantIds,
   });
 
   const serializeAllocation = (mealType, effectiveAllocation, cost) => {
@@ -79,7 +87,7 @@ export function serializeMealDay(
       source: isStoredCustom ? 'custom' : effectiveAllocation.source,
       plates,
       physicalPlates: plates.length,
-      shareUnits: isStoredCustom ? calculateStoredShareUnits(storedAllocation) : calculateMemberShareUnits(effectiveAllocation),
+      shareUnits: isStoredCustom ? calculateStoredShareUnits(storedAllocation) : calculateMemberShareUnits(effectiveAllocation, { participants: participantIds }),
       cost,
     };
   };
@@ -87,6 +95,7 @@ export function serializeMealDay(
   return {
     date,
     ...(Object.hasOwn(source, 'schemaVersion') ? { schemaVersion: source.schemaVersion } : {}),
+    ...(source.participantOrder ? { participantOrder: [...participantIds] } : {}),
     timezone,
     saved: Boolean(document),
     revision: source.revision,
@@ -116,7 +125,7 @@ export function serializeMealDay(
     },
     dailyCostSummary: {
       members: Object.fromEntries(
-        MEMBER_IDS.map((id) => [
+        participantIds.map((id) => [
           id,
           {
             morningAmountPaise: morningCost.members[id].amountPaise,
@@ -138,6 +147,57 @@ export function serializeMealDay(
     },
     createdAt: serializeDate(source.createdAt),
     updatedAt: serializeDate(source.updatedAt),
+  };
+}
+
+export function serializeLegacyMealSnapshot(snapshot, { timezone = env.appTimezone } = {}) {
+  const participants = normalizeParticipantIds(snapshot.participantOrder);
+  const costFor = (mealType) => {
+    const cost = snapshot.costs[mealType];
+    return {
+      ...structuredClone(cost),
+      physicalPlateCount: cost.physicalPlates,
+      members: Object.fromEntries(participants.map((studentId) => [studentId, {
+        shareUnits: snapshot.allocations[mealType].shareUnits[studentId],
+        amountPaise: cost.memberAmountsPaise[studentId],
+        plateEquivalent: snapshot.allocations[mealType].shareUnits[studentId] / 6,
+      }])),
+    };
+  };
+  const morningCost = costFor('morning');
+  const nightCost = costFor('night');
+  return {
+    date: snapshot.date,
+    calculationVersion: snapshot.calculationVersion,
+    participantOrder: participants,
+    timezone,
+    saved: true,
+    revision: snapshot.sourceRevision,
+    meals: structuredClone(snapshot.statuses),
+    allocations: {
+      morning: { ...structuredClone(snapshot.allocations.morning), cost: morningCost },
+      night: { ...structuredClone(snapshot.allocations.night), cost: nightCost },
+    },
+    pricing: structuredClone(snapshot.pricing),
+    dailyCostSummary: {
+      members: Object.fromEntries(participants.map((studentId) => [studentId, {
+        morningAmountPaise: morningCost.memberAmountsPaise[studentId],
+        nightAmountPaise: nightCost.memberAmountsPaise[studentId],
+        totalAmountPaise: morningCost.memberAmountsPaise[studentId] + nightCost.memberAmountsPaise[studentId],
+      }])),
+      room: {
+        morningAmountPaise: morningCost.roomAmountPaise,
+        nightAmountPaise: nightCost.roomAmountPaise,
+        totalAmountPaise: morningCost.roomAmountPaise + nightCost.roomAmountPaise,
+      },
+    },
+    plateCounts: {
+      morning: morningCost.physicalPlates,
+      night: nightCost.physicalPlates,
+      total: morningCost.physicalPlates + nightCost.physicalPlates,
+    },
+    createdAt: snapshot.sourceCreatedAt,
+    updatedAt: snapshot.sourceUpdatedAt,
   };
 }
 

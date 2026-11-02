@@ -5,6 +5,7 @@ import { studentResolver } from '../students/studentResolver.service.js';
 import { assertSafeStudentId } from '../students/studentId.js';
 import {
   extractMealParticipantIds,
+  normalizeParticipantIds,
   toPlainMealValue,
   validateStudentKeyedRecord,
 } from './mealParticipants.js';
@@ -21,13 +22,21 @@ function statusPathStudentId(path) {
 
 async function assertKnownParticipants(day, resolver) {
   if (day?.schemaVersion !== 3) return;
+  const ordered = normalizeParticipantIds(day.participantOrder ?? extractMealParticipantIds(day));
+  const allowed = new Set(ordered);
   for (const mealType of ['morning', 'night']) {
     validateStudentKeyedRecord(day.meals?.[mealType], `meals.${mealType}`);
+    for (const studentId of Object.keys(day.meals?.[mealType] ?? {})) {
+      if (!allowed.has(studentId)) throw new TypeError(`Meal status contains an unrecorded student: ${studentId}`);
+    }
     for (const plate of day.allocations?.[mealType]?.plates ?? []) {
       validateStudentKeyedRecord(plate?.shares, `allocations.${mealType}.shares`);
+      for (const studentId of Object.keys(plate?.shares ?? {})) {
+        if (!allowed.has(studentId)) throw new TypeError(`Meal allocation contains an unrecorded student: ${studentId}`);
+      }
     }
   }
-  for (const studentId of extractMealParticipantIds(day)) await resolver.assertKnown(studentId);
+  for (const studentId of ordered) await resolver.assertKnown(studentId);
 }
 
 async function assertKnownStatusPath(path, resolver) {
@@ -42,8 +51,8 @@ export function createMealRepository({ model = MealDay, resolver = studentResolv
     return runFinancialTransaction(
       async (session) => work({
         session,
-        guard: () => guardFinancialMutation({
-          memberIds,
+        guard: ({ memberIds: currentMemberIds = memberIds } = {}) => guardFinancialMutation({
+          memberIds: currentMemberIds,
           effectiveDate: date,
           actorRole,
           session,
@@ -61,7 +70,7 @@ export function createMealRepository({ model = MealDay, resolver = studentResolv
 
   async findInDateRange(startDate, endDate) {
     return model.find({ date: { $gte: startDate, $lte: endDate } })
-      .select({ date: 1, schemaVersion: 1, meals: 1, allocations: 1, priceOverrides: 1, revision: 1, updatedAt: 1, _id: 0 })
+      .select({ date: 1, schemaVersion: 1, participantOrder: 1, meals: 1, allocations: 1, priceOverrides: 1, revision: 1, changes: 1, allocationChanges: 1, priceChanges: 1, createdAt: 1, updatedAt: 1, _id: 0 })
       .lean()
       .exec();
   },

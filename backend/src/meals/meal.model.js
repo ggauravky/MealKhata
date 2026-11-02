@@ -4,7 +4,8 @@ import { isValidPricePaise } from '../billing/monthlyRate.constants.js';
 import { assertSafeStudentId } from '../students/studentId.js';
 import { isValidLogicalDate } from '../utils/date.js';
 import { DEFAULT_MEAL_STATUS, MEAL_STATUSES, MEAL_TYPES } from './meal.constants.js';
-import { validateAllocationPlates, validateStudentKeyedRecord } from './mealParticipants.js';
+import { normalizeParticipantIds, validateAllocationPlates, validateStudentKeyedRecord } from './mealParticipants.js';
+import { resolvePhysicalPlateLimit } from './plateAllocation.constants.js';
 
 function isSafeStudentId(value) {
   try {
@@ -88,7 +89,13 @@ const mealAllocationSchema = new mongoose.Schema(
       required: true,
       default: () => [],
       validate: {
-        validator: validateAllocationPlates,
+        validator: function validatePlatesForDay(plates) {
+          const day = this.ownerDocument?.();
+          const maxPhysicalPlates = day?.schemaVersion === 3
+            ? resolvePhysicalPlateLimit(day.participantOrder?.length ?? 0)
+            : 3;
+          return validateAllocationPlates(plates, { maxPhysicalPlates });
+        },
         message: 'allocation violates physical-plate or six-share-unit rules',
       },
     },
@@ -170,6 +177,18 @@ const mealDaySchema = new mongoose.Schema(
       required: false,
       enum: [3],
     },
+    participantOrder: {
+      type: [String],
+      required: function requiredForV3() { return this.schemaVersion === 3; },
+      default: undefined,
+      immutable: true,
+      validate: {
+        validator: (ids) => {
+          try { return normalizeParticipantIds(ids).length === ids.length; } catch { return false; }
+        },
+        message: 'participant order must contain distinct safe student IDs',
+      },
+    },
     meals: {
       morning: statusMapField(),
       night: statusMapField(),
@@ -200,5 +219,21 @@ const mealDaySchema = new mongoose.Schema(
     versionKey: false,
   },
 );
+
+mealDaySchema.pre('validate', function validateRecordedParticipants() {
+  if (this.schemaVersion !== 3 || !Array.isArray(this.participantOrder)) return;
+  const recorded = new Set(this.participantOrder);
+  const keys = (value) => value instanceof Map ? [...value.keys()] : Object.keys(value ?? {});
+  for (const mealType of MEAL_TYPES) {
+    for (const studentId of keys(this.meals?.[mealType])) {
+      if (!recorded.has(studentId)) throw new TypeError(`Meal status participant ${studentId} is absent from participant order`);
+    }
+    for (const plate of this.allocations?.[mealType]?.plates ?? []) {
+      for (const studentId of keys(plate.shares)) {
+        if (!recorded.has(studentId)) throw new TypeError(`Meal allocation participant ${studentId} is absent from participant order`);
+      }
+    }
+  }
+});
 
 export const MealDay = mongoose.models.MealDay ?? mongoose.model('MealDay', mealDaySchema);

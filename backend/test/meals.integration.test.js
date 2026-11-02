@@ -167,6 +167,51 @@ describe('public meal reads', () => {
 });
 
 describe('meal mutation authorization and validation', () => {
+  test('a generated fourth student can be edited by Super Admin through the meal route', async () => {
+    const dynamicRepository = new InMemoryMealRepository();
+    const dynamicService = createMealService({
+      repository: dynamicRepository,
+      students: { listEligibleOn: async () => [
+        { studentId: 'gaurav' }, { studentId: FOURTH_STUDENT_ID },
+      ] },
+      timezone: 'Asia/Kolkata',
+    });
+    const dynamicApp = createApp({ meals: createMealRouter({
+      service: dynamicService,
+      now: () => NOW,
+      timezone: 'Asia/Kolkata',
+      broadcast: () => {},
+      settlements: null,
+    }) });
+    const response = await patchMeal(ROLES.SUPERADMIN, DATES.today, {
+      mealType: 'morning', memberId: FOURTH_STUDENT_ID, status: 'taking',
+    }, dynamicApp);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.data.meals.morning[FOURTH_STUDENT_ID], 'taking');
+    assert.ok(response.body.data.permissions.editableMemberIds.includes(FOURTH_STUDENT_ID));
+  });
+
+  test('allocation API rejects a stale expected revision for a fourth student', async () => {
+    const dynamicRepository = new InMemoryMealRepository();
+    const dynamicService = createMealService({
+      repository: dynamicRepository,
+      students: { listEligibleOn: async () => [
+        { studentId: 'gaurav' }, { studentId: FOURTH_STUDENT_ID },
+      ] },
+    });
+    const app = createApp({ meals: createMealRouter({
+      service: dynamicService, settlements: null, broadcast: () => {},
+      now: () => NOW, timezone: 'Asia/Kolkata',
+    }) });
+    const allocation = { mode: 'custom', plates: [{ shares: { [FOURTH_STUDENT_ID]: 6 } }], expectedRevision: 0 };
+    const endpoint = `/api/meals/${DATES.today}/morning/allocation`;
+    await request(app).put(endpoint).set('Origin', ORIGIN).set('Cookie', await cookieFor(ROLES.SUPERADMIN))
+      .send(allocation).expect(200);
+    const stale = await request(app).put(endpoint).set('Origin', ORIGIN).set('Cookie', await cookieFor(ROLES.SUPERADMIN))
+      .send(allocation).expect(409);
+    assert.match(stale.body.message, /revision|refresh/i);
+    assert.equal((await dynamicRepository.findByDate(DATES.today)).revision, 1);
+  });
   const validChange = { mealType: 'night', memberId: 'nikhil', status: 'skip' };
 
   test('7. Viewer PATCH returns 401', async () => {
@@ -488,6 +533,7 @@ describe('broadcast and model safety', () => {
         { shares: { nikhil: 6 } },
         { shares: { devansh: 6 } },
         { shares: { [FOURTH_STUDENT_ID]: 6 } },
+        { shares: { gaurav: 6 } },
       ],
     ];
 
