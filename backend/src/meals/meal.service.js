@@ -12,6 +12,7 @@ import {
 } from './plateAllocation.service.js';
 import { stayRepository } from '../stays/stay.repository.js';
 import { MEMBER_IDS } from '../config/members.js';
+import { studentResolver } from '../students/studentResolver.service.js';
 
 const MAX_CONCURRENT_RETRIES = 12;
 
@@ -45,8 +46,24 @@ export function createMealService({
   repository = mealRepository,
   settlements = null,
   stays = null,
+  students = null,
   timezone = env.appTimezone,
 } = {}) {
+  const listEligibleStudentIds = async (date) => {
+    if (!students) return MEMBER_IDS;
+    const eligibleStudents = await students.listEligibleOn(date);
+    return eligibleStudents.map(({ studentId }) => studentId);
+  };
+
+  const createDefaultDayForDate = async (date) => (
+    createDefaultMealDay(date, await listEligibleStudentIds(date))
+  );
+
+  const serializeDay = async (document, date) => serializeMealDay(document, date, {
+    timezone,
+    ...(document ? {} : { participants: await listEligibleStudentIds(date) }),
+  });
+
   const runFinancialMutation = (date, actorRole, work) => {
     if (typeof repository.executeFinancialMutation === 'function') {
       return repository.executeFinancialMutation({ date, memberIds: MEMBER_IDS, actorRole }, work);
@@ -58,7 +75,7 @@ export function createMealService({
     async getDay(date) {
       try {
         const document = await repository.findByDate(date);
-        return serializeMealDay(document, date, { timezone });
+        return serializeDay(document, date);
       } catch (error) {
         throw new HttpError(503, 'Meal data is temporarily unavailable.', { cause: error });
       }
@@ -108,7 +125,7 @@ export function createMealService({
             return {
               changed: false,
               allocationReset: false,
-              data: serializeMealDay(currentDocument, date, { timezone }),
+              data: await serializeDay(currentDocument, date),
             };
           }
 
@@ -123,7 +140,10 @@ export function createMealService({
           };
 
           if (!currentDocument) {
-            const newDocument = createDefaultMealDay(date);
+            const newDocument = await createDefaultDayForDate(date);
+            if (!Object.hasOwn(newDocument.meals[mealType], memberId)) {
+              throw new HttpError(409, 'Student is not eligible for meals on this date.');
+            }
             newDocument.meals[mealType][memberId] = status;
             newDocument.revision = 1;
             newDocument.changes.push(statusChange);
@@ -134,7 +154,7 @@ export function createMealService({
               return {
                 changed: true,
                 allocationReset: false,
-                data: serializeMealDay(created, date, { timezone }),
+                data: await serializeDay(created, date),
               };
             } catch (error) {
               if (isDuplicateKeyError(error)) {
@@ -173,7 +193,7 @@ export function createMealService({
               return {
                 changed: true,
                 allocationReset: true,
-                data: serializeMealDay(updated, date, { timezone }),
+                data: await serializeDay(updated, date),
               };
             }
           } else {
@@ -191,7 +211,7 @@ export function createMealService({
               return {
                 changed: true,
                 allocationReset: false,
-                data: serializeMealDay(updated, date, { timezone }),
+                data: await serializeDay(updated, date),
               };
             }
           }
@@ -251,7 +271,7 @@ export function createMealService({
           };
 
           if (!currentDocument) {
-            const newDocument = createDefaultMealDay(date);
+            const newDocument = await createDefaultDayForDate(date);
             newDocument.allocations = {
               morning: null,
               night: null,
@@ -266,7 +286,7 @@ export function createMealService({
               const created = await repository.create(newDocument, { session });
               return {
                 changed: true,
-                data: serializeMealDay(created, date, { timezone }),
+                data: await serializeDay(created, date),
               };
             } catch (error) {
               if (isDuplicateKeyError(error)) {
@@ -290,7 +310,7 @@ export function createMealService({
           if (updated) {
             return {
               changed: true,
-              data: serializeMealDay(updated, date, { timezone }),
+              data: await serializeDay(updated, date),
             };
           }
           }
@@ -328,7 +348,7 @@ export function createMealService({
           if (!currentAllocation) {
             return {
               changed: false,
-              data: serializeMealDay(currentDocument, date, { timezone }),
+              data: await serializeDay(currentDocument, date),
             };
           }
 
@@ -354,7 +374,7 @@ export function createMealService({
           if (updated) {
             return {
               changed: true,
-              data: serializeMealDay(updated, date, { timezone }),
+              data: await serializeDay(updated, date),
             };
           }
           }
@@ -421,7 +441,7 @@ export function createMealService({
           if (currentPrice === pricePaise && currentReason === normalizedReason) {
             return {
               changed: false,
-              data: serializeMealDay(currentDocument, date, { timezone }),
+              data: await serializeDay(currentDocument, date),
             };
           }
 
@@ -442,7 +462,7 @@ export function createMealService({
           };
 
           if (!currentDocument) {
-            const newDocument = createDefaultMealDay(date);
+            const newDocument = await createDefaultDayForDate(date);
             newDocument.priceOverrides[mealType] = newOverride;
             newDocument.revision = 1;
             newDocument.priceChanges.push(priceChange);
@@ -452,7 +472,7 @@ export function createMealService({
               const created = await repository.create(newDocument, { session });
               return {
                 changed: true,
-                data: serializeMealDay(created, date, { timezone }),
+                data: await serializeDay(created, date),
               };
             } catch (error) {
               if (isDuplicateKeyError(error)) {
@@ -475,7 +495,7 @@ export function createMealService({
           if (updated) {
             return {
               changed: true,
-              data: serializeMealDay(updated, date, { timezone }),
+              data: await serializeDay(updated, date),
             };
           }
           }
@@ -521,7 +541,7 @@ export function createMealService({
           if (!currentOverride) {
             return {
               changed: false,
-              data: serializeMealDay(currentDocument, date, { timezone }),
+              data: await serializeDay(currentDocument, date),
             };
           }
 
@@ -547,7 +567,7 @@ export function createMealService({
           if (updated) {
             return {
               changed: true,
-              data: serializeMealDay(updated, date, { timezone }),
+              data: await serializeDay(updated, date),
             };
           }
           }
@@ -567,4 +587,4 @@ export function createMealService({
   });
 }
 
-export const mealService = createMealService({ stays: stayRepository });
+export const mealService = createMealService({ stays: stayRepository, students: studentResolver });

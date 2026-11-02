@@ -7,6 +7,7 @@ import {
   splitMealCost,
 } from './plateAllocation.service.js';
 import { MEAL_PRICES } from './plateAllocation.constants.js';
+import { calculateStoredShareUnits, toPlainMealValue } from './mealParticipants.js';
 
 function serializeDate(value) {
   if (!value) {
@@ -16,8 +17,12 @@ function serializeDate(value) {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
-export function serializeMealDay(document, date, { timezone = env.appTimezone } = {}) {
-  const source = document ?? createDefaultMealDay(date);
+export function serializeMealDay(
+  document,
+  date,
+  { timezone = env.appTimezone, participants } = {},
+) {
+  const source = toPlainMealValue(document ?? createDefaultMealDay(date, participants));
 
   const morningAllocation = getEffectiveMealAllocation({
     statuses: source.meals?.morning,
@@ -28,9 +33,6 @@ export function serializeMealDay(document, date, { timezone = env.appTimezone } 
     statuses: source.meals?.night,
     customAllocation: source.allocations?.night,
   });
-
-  const morningUnits = calculateMemberShareUnits(morningAllocation);
-  const nightUnits = calculateMemberShareUnits(nightAllocation);
 
   const defaultMorningPrice = MEAL_PRICES.morning;
   const defaultNightPrice = MEAL_PRICES.night;
@@ -68,32 +70,33 @@ export function serializeMealDay(document, date, { timezone = env.appTimezone } 
     pricePaise: effectiveNightPrice,
   });
 
+  const serializeAllocation = (mealType, effectiveAllocation, cost) => {
+    const storedAllocation = source.allocations?.[mealType];
+    const isStoredCustom = storedAllocation?.mode === 'custom' && Array.isArray(storedAllocation.plates);
+    const plates = isStoredCustom ? storedAllocation.plates : effectiveAllocation.plates;
+    return {
+      mode: isStoredCustom ? storedAllocation.mode : effectiveAllocation.mode,
+      source: isStoredCustom ? 'custom' : effectiveAllocation.source,
+      plates,
+      physicalPlates: plates.length,
+      shareUnits: isStoredCustom ? calculateStoredShareUnits(storedAllocation) : calculateMemberShareUnits(effectiveAllocation),
+      cost,
+    };
+  };
+
   return {
     date,
+    ...(Object.hasOwn(source, 'schemaVersion') ? { schemaVersion: source.schemaVersion } : {}),
     timezone,
     saved: Boolean(document),
     revision: source.revision,
     meals: {
-      morning: { ...source.meals?.morning },
-      night: { ...source.meals?.night },
+      morning: { ...(source.meals?.morning ?? {}) },
+      night: { ...(source.meals?.night ?? {}) },
     },
     allocations: {
-      morning: {
-        mode: morningAllocation.mode,
-        source: morningAllocation.source,
-        plates: morningAllocation.plates,
-        physicalPlates: morningAllocation.plates.length,
-        shareUnits: morningUnits,
-        cost: morningCost,
-      },
-      night: {
-        mode: nightAllocation.mode,
-        source: nightAllocation.source,
-        plates: nightAllocation.plates,
-        physicalPlates: nightAllocation.plates.length,
-        shareUnits: nightUnits,
-        cost: nightCost,
-      },
+      morning: serializeAllocation('morning', morningAllocation, morningCost),
+      night: serializeAllocation('night', nightAllocation, nightCost),
     },
     pricing: {
       morning: {
@@ -133,14 +136,16 @@ export function serializeMealDay(document, date, { timezone = env.appTimezone } 
       night: nightAllocation.plates.length,
       total: morningAllocation.plates.length + nightAllocation.plates.length,
     },
+    createdAt: serializeDate(source.createdAt),
     updatedAt: serializeDate(source.updatedAt),
   };
 }
 
 export function serializeHistory(document, date, limit) {
-  const changes = document?.changes ?? [];
-  const allocationChanges = document?.allocationChanges ?? [];
-  const priceChanges = document?.priceChanges ?? [];
+  const source = toPlainMealValue(document) ?? {};
+  const changes = source.changes ?? [];
+  const allocationChanges = source.allocationChanges ?? [];
+  const priceChanges = source.priceChanges ?? [];
 
   const serializedStatus = changes.map((change) => ({
     changedAt: serializeDate(change.changedAt),

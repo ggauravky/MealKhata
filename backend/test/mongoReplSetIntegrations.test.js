@@ -3842,6 +3842,13 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
     });
 
     it('Checkout No-Dues consistency under a concurrent meal participation change', async () => {
+      await Student.create({
+        studentId: 'gaurav',
+        displayName: 'Gaurav',
+        status: 'ACTIVE',
+        mealEligibilityFrom: '2026-10-01',
+        rosterOrder: 0,
+      });
       const room = await ensureRoom('207-meal-change', 2);
       const stay = await stayService.createStay({
         memberId: 'gaurav',

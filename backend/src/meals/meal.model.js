@@ -1,67 +1,97 @@
 import mongoose from 'mongoose';
 import { AUTHENTICATED_ROLES } from '../auth/permissions.js';
 import { isValidPricePaise } from '../billing/monthlyRate.constants.js';
-import { MEMBER_IDS } from '../config/members.js';
+import { assertSafeStudentId } from '../students/studentId.js';
 import { isValidLogicalDate } from '../utils/date.js';
 import { DEFAULT_MEAL_STATUS, MEAL_STATUSES, MEAL_TYPES } from './meal.constants.js';
+import { validateAllocationPlates, validateStudentKeyedRecord } from './mealParticipants.js';
 
-const statusField = () => ({
-  type: String,
-  enum: MEAL_STATUSES,
-  required: true,
-  default: DEFAULT_MEAL_STATUS,
-});
+function isSafeStudentId(value) {
+  try {
+    assertSafeStudentId(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-const mealSchemaDefinition = Object.fromEntries(
-  MEMBER_IDS.map((memberId) => [memberId, statusField()]),
-);
+function studentIdField({ nullable = false } = {}) {
+  return {
+    type: String,
+    required: !nullable,
+    default: nullable ? null : undefined,
+    validate: {
+      validator: (value) => nullable && value === null ? true : isSafeStudentId(value),
+      message: 'student identity must be a safe lowercase Mongo key identifier',
+    },
+  };
+}
 
-const mealSchema = new mongoose.Schema(mealSchemaDefinition, {
-  _id: false,
-  strict: 'throw',
-});
+function statusMapField() {
+  return {
+    type: Map,
+    of: {
+      type: String,
+      enum: MEAL_STATUSES,
+      required: true,
+      default: DEFAULT_MEAL_STATUS,
+    },
+    required: true,
+    default: () => new Map(),
+    validate: {
+      validator: (value) => validateStudentKeyedRecord(value, 'meal statuses'),
+      message: 'meal statuses contain an unsafe student key',
+    },
+  };
+}
 
 const changeSchema = new mongoose.Schema(
   {
     changedAt: { type: Date, required: true },
     actorRole: { type: String, enum: AUTHENTICATED_ROLES, required: true },
-    actorMemberId: { type: String, enum: [...MEMBER_IDS, null], required: false, default: null },
+    actorMemberId: studentIdField({ nullable: true }),
     mealType: { type: String, enum: MEAL_TYPES, required: true },
-    memberId: { type: String, enum: MEMBER_IDS, required: true },
+    memberId: studentIdField(),
     from: { type: String, enum: MEAL_STATUSES, required: true },
     to: { type: String, enum: MEAL_STATUSES, required: true },
   },
   { _id: false, strict: 'throw' },
 );
 
-const plateShareSchema = new mongoose.Schema(
-  Object.fromEntries(
-    MEMBER_IDS.map((memberId) => [
-      memberId,
-      {
+const plateSchema = new mongoose.Schema(
+  {
+    shares: {
+      type: Map,
+      of: {
         type: Number,
         required: true,
-        default: 0,
         min: 0,
         max: 6,
         validate: { validator: Number.isInteger, message: 'share must be an integer' },
       },
-    ]),
-  ),
-  { _id: false },
-);
-
-const plateSchema = new mongoose.Schema(
-  {
-    shares: { type: plateShareSchema, required: true },
+      required: true,
+      default: () => new Map(),
+      validate: {
+        validator: (value) => validateStudentKeyedRecord(value, 'plate shares'),
+        message: 'plate shares contain an unsafe student key',
+      },
+    },
   },
-  { _id: false },
+  { _id: false, strict: 'throw' },
 );
 
 const mealAllocationSchema = new mongoose.Schema(
   {
     mode: { type: String, enum: ['default', 'custom'], required: true, default: 'custom' },
-    plates: { type: [plateSchema], required: true, default: () => [] },
+    plates: {
+      type: [plateSchema],
+      required: true,
+      default: () => [],
+      validate: {
+        validator: validateAllocationPlates,
+        message: 'allocation violates physical-plate or six-share-unit rules',
+      },
+    },
   },
   { _id: false },
 );
@@ -70,7 +100,7 @@ const allocationChangeSchema = new mongoose.Schema(
   {
     changedAt: { type: Date, required: true },
     actorRole: { type: String, enum: AUTHENTICATED_ROLES, required: true },
-    actorMemberId: { type: String, enum: [...MEMBER_IDS, null], required: false, default: null },
+    actorMemberId: studentIdField({ nullable: true }),
     mealType: { type: String, enum: MEAL_TYPES, required: true },
     changeType: {
       type: String,
@@ -109,7 +139,7 @@ const priceChangeSchema = new mongoose.Schema(
   {
     changedAt: { type: Date, required: true },
     actorRole: { type: String, enum: AUTHENTICATED_ROLES, required: true },
-    actorMemberId: { type: String, enum: [...MEMBER_IDS, null], required: false, default: null },
+    actorMemberId: studentIdField({ nullable: true }),
     mealType: { type: String, enum: MEAL_TYPES, required: true },
     changeType: {
       type: String,
@@ -135,9 +165,14 @@ const mealDaySchema = new mongoose.Schema(
         message: 'date must be a valid calendar date in YYYY-MM-DD format',
       },
     },
+    schemaVersion: {
+      type: Number,
+      required: false,
+      enum: [3],
+    },
     meals: {
-      morning: { type: mealSchema, required: true, default: () => ({}) },
-      night: { type: mealSchema, required: true, default: () => ({}) },
+      morning: statusMapField(),
+      night: statusMapField(),
     },
     allocations: {
       morning: { type: mealAllocationSchema, required: false, default: null },

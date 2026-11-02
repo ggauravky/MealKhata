@@ -250,7 +250,7 @@ describe('legacy meal snapshot persistence and verification', () => {
 
     await SnapshotModel.updateOne(
       { date: sourceDay.date },
-      { $set: { 'costs.morning.roomAmountPaise': 999 } },
+      { $inc: { 'costs.morning.roomAmountPaise': 1 } },
     );
     await assert.rejects(service.capture({ verify: true }), /exact snapshot verification mismatch/i);
   });
