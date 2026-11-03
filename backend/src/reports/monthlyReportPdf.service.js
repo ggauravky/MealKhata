@@ -336,9 +336,14 @@ export function createMonthlyReportPdfService({ exportService = monthlyReportExp
             .text('Status', colX[11], thY + 6, { width: colWidths[11] - 4, align: 'center' });
 
           let currentY = thY + 22;
-          const memberIds = ['gaurav', 'nikhil', 'devansh'];
+          const memberIds = Object.keys(data.members ?? {});
 
           memberIds.forEach((id, idx) => {
+            if (currentY > doc.page.height - 95) {
+              doc.addPage();
+              currentY = 55;
+              doc.fontSize(9).font('Helvetica-Bold').text('Student meal summary (continued)', MARGIN, 38);
+            }
             const m = data.members[id];
             const isAlt = idx % 2 === 1;
             const rowHeight = 22;

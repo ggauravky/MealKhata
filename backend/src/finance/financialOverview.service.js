@@ -3,7 +3,8 @@
  * Authoritative read-only composition service joining Mess, Room Fees, and Other Expenses.
  */
 
-import { MEMBER_IDS, MEMBERS } from '../config/members.js';
+import { studentResolver } from '../students/studentResolver.service.js';
+import { assertSafeStudentId } from '../students/studentId.js';
 import { ROLES } from '../auth/permissions.js';
 import { HttpError } from '../utils/HttpError.js';
 import { isValidLogicalMonth, compareLogicalMonths } from '../utils/month.js';
@@ -32,6 +33,7 @@ export function createFinancialOverviewService({
   roomFees = defaultRoomFeeService,
   expenses = defaultExpenseService,
   creditReader = { listOpenForMember: async () => [] },
+  students = null,
   now = () => new Date(),
   timezone = FINANCIAL_TIMEZONE,
 } = {}) {
@@ -50,7 +52,9 @@ export function createFinancialOverviewService({
       if (!isValidLogicalMonth(month)) {
         throw new HttpError(400, 'Month must be in YYYY-MM format.');
       }
-      if (!MEMBER_IDS.includes(memberId)) {
+      try {
+        assertSafeStudentId(memberId);
+      } catch {
         throw new HttpError(400, `Invalid member ID: ${memberId}`);
       }
 
@@ -69,6 +73,10 @@ export function createFinancialOverviewService({
         ]);
 
       // 1. Mess Domain
+      const student = students ? await students.assertKnown(memberId).catch((error) => {
+        if (error?.statusCode === 404) return null;
+        throw error;
+      }) : null;
       let messBillPaise = 0;
       let messPaidPaise = 0;
       let messRemainingPaise = 0;
@@ -183,6 +191,7 @@ export function createFinancialOverviewService({
 
       const rawOverview = {
         memberId,
+        displayName: student?.displayName ?? null,
         month,
         periodType,
         generatedAt: now().toISOString(),
@@ -250,15 +259,32 @@ export function createFinancialOverviewService({
       const periodType = getPeriodType(month);
 
       // Concurrently query domain services and individual member overviews
-      const [isMessClosed, activeSettlement, messSummary, roomSummary, expenseSummary, ...memberOverviews] =
+      const [isMessClosed, activeSettlement, messSummary, roomSummary, expenseSummary, knownStudents, expenseRecords] =
         await Promise.all([
           settlements.isMonthClosed(month),
           settlements.getActiveSettlement(month),
           paymentSummaries.getSummary(month),
           roomFees.getMonthlySummary(month, actorRole),
           expenses.getHouseholdExpenseSummary(month, { actorRole }),
-          ...MEMBER_IDS.map((memberId) => this.getMemberFinancialOverview({ memberId, month, actorRole })),
+          students ? students.listAll() : [],
+          expenses.listExpensesByMonth(month, { actorRole }),
         ]);
+      const creditStudentIds = (await Promise.all(knownStudents.map(async (student) => ({
+        studentId: student.studentId,
+        credits: await creditReader.listOpenForMember(student.studentId),
+      })))).filter(({ credits }) => credits.length > 0).map(({ studentId }) => studentId);
+      const memberIds = [...new Set([
+        ...Object.keys(messSummary?.members ?? {}),
+        ...Object.keys(activeSettlement?.snapshot?.members ?? {}),
+        ...(roomSummary?.members ?? []).map((member) => member.memberId),
+        ...expenseRecords.filter((expense) => expense.status !== 'voided').flatMap((expense) => [
+          expense.paidByMemberId,
+          ...(expense.allocations ?? []).map((allocation) => allocation.memberId),
+        ]).filter(Boolean),
+        ...creditStudentIds,
+      ])];
+      const memberOverviews = await Promise.all(memberIds.map((memberId) =>
+        this.getMemberFinancialOverview({ memberId, month, actorRole })));
 
       // 1. Household Mess Numbers
       let messCostPaise = 0;
@@ -380,4 +406,4 @@ export function createFinancialOverviewService({
   });
 }
 
-export const financialOverviewService = createFinancialOverviewService({ creditReader: databaseCreditReader });
+export const financialOverviewService = createFinancialOverviewService({ creditReader: databaseCreditReader, students: studentResolver });

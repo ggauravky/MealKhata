@@ -3,7 +3,7 @@
  * Aggregates unified datasets for monthly reporting tabs and PDF generation.
  */
 
-import { MEMBER_IDS, MEMBERS } from '../config/members.js';
+import { assertSafeStudentId } from '../students/studentId.js';
 import { ROLES } from '../auth/permissions.js';
 import { HttpError } from '../utils/HttpError.js';
 import { isValidLogicalMonth } from '../utils/month.js';
@@ -58,7 +58,9 @@ export function createMonthlyFinancialReportService({
       if (!isValidLogicalMonth(month)) {
         throw new HttpError(400, 'Month must be in YYYY-MM format.');
       }
-      if (!MEMBER_IDS.includes(memberId)) {
+      try {
+        assertSafeStudentId(memberId);
+      } catch {
         throw new HttpError(400, `Invalid member ID: ${memberId}`);
       }
 

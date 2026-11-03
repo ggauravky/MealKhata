@@ -32,7 +32,6 @@ import { usePaymentSummary } from '../hooks/usePaymentSummary.js';
 import { usePwa } from '../hooks/usePwa.js';
 import { useServerToday } from '../hooks/useServerToday.js';
 import { useSettlement } from '../hooks/useSettlement.js';
-import { ROOMMATES } from '../lib/constants.js';
 import { addLogicalMonths, formatLogicalMonth, isValidLogicalMonth } from '../lib/logicalMonth.js';
 import { formatPaise } from '../lib/money.js';
 import { canInitiatePayment, PAYMENT_STATUS_LABELS } from '../lib/paymentFlow.js';
@@ -437,11 +436,11 @@ export function PaymentsPage() {
 
               {/* Member Payment Cards Grid */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {ROOMMATES.map((roommate) => (
+                {Object.entries(data.members ?? {}).map(([memberId, member]) => (
                   <MemberPaymentCard
-                    key={roommate.id}
-                    roommate={roommate}
-                    member={data.members[roommate.id]}
+                    key={memberId}
+                    roommate={{ id: memberId, name: member.displayName ?? memberId }}
+                    member={member}
                     periodType={data.periodType}
                     role={auth.role}
                     currentMemberId={auth.memberId}
@@ -497,7 +496,7 @@ export function PaymentsPage() {
           ) : (
             <div className="divide-y divide-slate-100 dark:divide-slate-800">
               {history.items.map((payment) => {
-                const roommate = ROOMMATES.find(({ id }) => id === payment.memberId);
+                const memberName = data?.members?.[payment.memberId]?.displayName ?? payment.memberId;
                 const isVoided = payment.status === 'voided';
 
                 return (
@@ -520,7 +519,7 @@ export function PaymentsPage() {
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                            {roommate?.name ?? payment.memberId}
+                            {memberName}
                           </span>
                           <Badge
                             variant={isVoided ? 'destructive' : 'taking'}
@@ -595,6 +594,7 @@ export function PaymentsPage() {
       {voidingPayment && (
         <VoidPaymentDialog
           payment={voidingPayment}
+          memberName={data?.members?.[voidingPayment.memberId]?.displayName ?? voidingPayment.memberId}
           onClose={() => setVoidingPayment(null)}
           onVoided={handleVoided}
         />

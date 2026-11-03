@@ -1,6 +1,5 @@
 import { AlertCircle, CheckCircle2, ChevronDown, ChevronUp, Download, History, Lock, Unlock } from 'lucide-react';
 import { useState } from 'react';
-import { ROOMMATES } from '../../lib/constants.js';
 import { formatLogicalMonth } from '../../lib/logicalMonth.js';
 import { formatPaise } from '../../lib/money.js';
 import { CloseMonthDialog } from './CloseMonthDialog.jsx';
@@ -147,8 +146,7 @@ export function SettlementPanel({
           </p>
           <ul className="settlement-blockers-list">
             {status.blockers.map((blocker, index) => {
-              const roommate = ROOMMATES.find((r) => r.id === blocker.memberId);
-              const memberName = roommate?.name || blocker.memberId;
+              const memberName = blocker.displayName || blocker.memberId;
               let description = blocker.message;
 
               if (blocker.type === 'remaining_balance') {

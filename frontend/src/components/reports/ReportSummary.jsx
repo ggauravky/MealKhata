@@ -1,5 +1,4 @@
 import { CookingPot } from 'lucide-react';
-import { ROOMMATES } from '../../lib/constants.js';
 import { formatPaise } from '../../lib/money.js';
 import { formatPlateFraction } from '../../lib/plates.js';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card.jsx';
@@ -29,8 +28,8 @@ export function ReportSummary({ title, description, summary, isClosed = false })
 
       {/* Member Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {ROOMMATES.map((member) => {
-          const memberSummary = summary?.members?.[member.id] || { amountPaise: 0 };
+        {Object.entries(summary?.members ?? {}).map(([memberId, memberSummary]) => {
+          const memberName = memberSummary.displayName ?? memberId;
           const hasShareUnits = memberSummary.morningShareUnits !== undefined;
 
           const morningMeals = hasShareUnits
@@ -47,12 +46,12 @@ export function ReportSummary({ title, description, summary, isClosed = false })
             : (memberSummary.totalPlates ?? memberSummary.totalMeals ?? 0);
 
           return (
-            <Card key={member.id} className="border-slate-200/90 dark:border-slate-800">
+            <Card key={memberId} className="border-slate-200/90 dark:border-slate-800">
               <CardHeader className="flex flex-row items-center justify-between pb-3">
                 <div className="flex items-center gap-2.5">
-                  <MemberAvatar memberId={member.id} name={member.name} size="sm" />
+                  <MemberAvatar memberId={memberId} name={memberName} size="sm" />
                   <CardTitle className="text-base font-semibold text-slate-900 dark:text-slate-100">
-                    {member.name}
+                    {memberName}
                   </CardTitle>
                 </div>
                 {isClosed && (

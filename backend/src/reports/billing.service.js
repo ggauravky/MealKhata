@@ -1,10 +1,10 @@
-import { MEMBER_IDS } from '../config/members.js';
 import {
   getEffectiveMealAllocation,
   resolveMealPricePaise,
   splitMealCost,
 } from '../meals/plateAllocation.service.js';
 import { MEAL_PRICES } from '../meals/plateAllocation.constants.js';
+import { assertSafeStudentId } from '../students/studentId.js';
 
 function emptyMemberAccumulator() {
   return {
@@ -21,9 +21,7 @@ export function calculateBillingSummary(days, rates = {}, { startDate, endDate }
   const morningPrice = rates.morningPricePaise ?? MEAL_PRICES.morning;
   const nightPrice = rates.nightPricePaise ?? MEAL_PRICES.night;
 
-  const memberAcc = Object.fromEntries(
-    MEMBER_IDS.map((id) => [id, emptyMemberAccumulator()]),
-  );
+  const memberAcc = Object.create(null);
 
   let roomMorningPlates = 0;
   let roomNightPlates = 0;
@@ -33,14 +31,35 @@ export function calculateBillingSummary(days, rates = {}, { startDate, endDate }
   let roomNightAmountPaise = 0;
 
   for (const day of days) {
-    const morningAllocation = getEffectiveMealAllocation({
+    const participants = day.participantOrder?.length
+      ? day.participantOrder
+      : [...new Set([
+        ...Object.keys(day.meals?.morning ?? {}),
+        ...Object.keys(day.meals?.night ?? {}),
+        ...Object.keys(day.dailyCostSummary?.members ?? {}),
+      ])];
+    for (const id of participants) {
+      try {
+        assertSafeStudentId(id);
+      } catch {
+        throw new Error(`Unsafe student reference for ${day.date}`);
+      }
+      memberAcc[id] ??= emptyMemberAccumulator();
+    }
+    const historical = day.calculationVersion?.startsWith('legacy-');
+    if (historical && (!day.dailyCostSummary || !day.allocations?.morning?.cost || !day.allocations?.night?.cost)) {
+      throw new Error(`Missing verified historical cost for ${day.date}`);
+    }
+    const morningAllocation = historical ? null : getEffectiveMealAllocation({
       statuses: day.meals?.morning,
       customAllocation: day.allocations?.morning,
+      participants,
     });
 
-    const nightAllocation = getEffectiveMealAllocation({
+    const nightAllocation = historical ? null : getEffectiveMealAllocation({
       statuses: day.meals?.night,
       customAllocation: day.allocations?.night,
+      participants,
     });
 
     const morningPriceForDay = resolveMealPricePaise({
@@ -55,26 +74,44 @@ export function calculateBillingSummary(days, rates = {}, { startDate, endDate }
       fallbackPricePaise: nightPrice,
     });
 
-    const morningSplit = splitMealCost({
+    const morningSplit = historical ? day.allocations.morning.cost : splitMealCost({
       date: day.date,
       mealType: 'morning',
       effectiveAllocation: morningAllocation,
       pricePaise: morningPriceForDay,
+      participants,
     });
 
-    const nightSplit = splitMealCost({
+    const nightSplit = historical ? day.allocations.night.cost : splitMealCost({
       date: day.date,
       mealType: 'night',
       effectiveAllocation: nightAllocation,
       pricePaise: nightPriceForDay,
+      participants,
     });
+
+    if (historical) {
+      const expected = day.dailyCostSummary;
+      const roomTotal = morningSplit.roomAmountPaise + nightSplit.roomAmountPaise;
+      const memberTotal = participants.reduce((sum, id) => sum
+        + (morningSplit.members?.[id]?.amountPaise ?? 0)
+        + (nightSplit.members?.[id]?.amountPaise ?? 0), 0);
+      if (roomTotal !== expected.room?.totalAmountPaise || memberTotal !== roomTotal ||
+          participants.some((id) =>
+            (morningSplit.members?.[id]?.amountPaise ?? 0) !== expected.members?.[id]?.morningAmountPaise ||
+            (nightSplit.members?.[id]?.amountPaise ?? 0) !== expected.members?.[id]?.nightAmountPaise ||
+            (morningSplit.members?.[id]?.amountPaise ?? 0) +
+            (nightSplit.members?.[id]?.amountPaise ?? 0) !== expected.members?.[id]?.totalAmountPaise)) {
+        throw new Error(`Historical cost mismatch for ${day.date}`);
+      }
+    }
 
     roomMorningPlates += morningSplit.physicalPlates;
     roomNightPlates += nightSplit.physicalPlates;
     roomMorningAmountPaise += morningSplit.roomAmountPaise;
     roomNightAmountPaise += nightSplit.roomAmountPaise;
 
-    for (const memberId of MEMBER_IDS) {
+    for (const memberId of participants) {
       if (day.meals?.morning?.[memberId] === 'taking') {
         memberAcc[memberId].morningParticipationCount += 1;
         roomMorningParticipants += 1;
@@ -84,15 +121,15 @@ export function calculateBillingSummary(days, rates = {}, { startDate, endDate }
         roomNightParticipants += 1;
       }
 
-      memberAcc[memberId].morningShareUnits += morningSplit.members[memberId].shareUnits;
-      memberAcc[memberId].nightShareUnits += nightSplit.members[memberId].shareUnits;
-      memberAcc[memberId].morningAmountPaise += morningSplit.members[memberId].amountPaise;
-      memberAcc[memberId].nightAmountPaise += nightSplit.members[memberId].amountPaise;
+      memberAcc[memberId].morningShareUnits += morningSplit.members?.[memberId]?.shareUnits ?? 0;
+      memberAcc[memberId].nightShareUnits += nightSplit.members?.[memberId]?.shareUnits ?? 0;
+      memberAcc[memberId].morningAmountPaise += morningSplit.members?.[memberId]?.amountPaise ?? 0;
+      memberAcc[memberId].nightAmountPaise += nightSplit.members?.[memberId]?.amountPaise ?? 0;
     }
   }
 
   const members = Object.fromEntries(
-    MEMBER_IDS.map((memberId) => {
+    Object.keys(memberAcc).map((memberId) => {
       const acc = memberAcc[memberId];
       const totalShareUnits = acc.morningShareUnits + acc.nightShareUnits;
       const totalAmountPaise = acc.morningAmountPaise + acc.nightAmountPaise;

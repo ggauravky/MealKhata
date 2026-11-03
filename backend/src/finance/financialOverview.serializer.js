@@ -19,7 +19,7 @@ export function serializeMemberOverview(overview) {
     periodType: overview.periodType,
     member: {
       memberId: memberConfig.id,
-      displayName: memberConfig.name,
+      displayName: overview.displayName ?? memberConfig.name,
       avatarColor: memberConfig.color || null,
     },
     mess: {
@@ -68,7 +68,9 @@ export function serializeMemberOverview(overview) {
 export function serializeHouseholdOverview(overview) {
   const serializedMemberSummaries = {};
   for (const [memberId, memberData] of Object.entries(overview.memberSummaries)) {
-    serializedMemberSummaries[memberId] = serializeMemberOverview(memberData);
+    serializedMemberSummaries[memberId] = memberData.member
+      ? memberData
+      : serializeMemberOverview(memberData);
   }
 
   return {

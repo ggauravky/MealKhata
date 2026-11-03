@@ -77,33 +77,30 @@ export function ReportsPage() {
       return data.toDate;
     }
 
-    const snapshot = settlement.status.activeSettlement.snapshot;
-    if (snapshot.snapshotVersion === 2) {
-      return {
-        members: snapshot.members,
-        room: snapshot.room,
-      };
-    }
-
-    // Legacy Snapshot v1
+    const activeSettlement = settlement.status.activeSettlement;
+    const snapshot = activeSettlement.snapshot;
     return {
       members: Object.fromEntries(
         Object.entries(snapshot.members).map(([id, m]) => [
           id,
           {
-            morningCount: m.morningCount,
-            nightCount: m.nightCount,
-            totalMeals: m.totalPlates,
+            ...m,
+            displayName: m.displayName ?? data?.toDate?.members?.[id]?.displayName ?? id,
+            morningCount: m.morningParticipationCount ?? m.morningCount ?? 0,
+            nightCount: m.nightParticipationCount ?? m.nightCount ?? 0,
+            totalMeals: m.totalShareUnits ? m.totalShareUnits / 6 : m.totalPlates ?? 0,
             amountPaise: m.billAmountPaise,
           },
         ]),
       ),
       room: {
-        morningCount: snapshot.room.morningCount,
-        nightCount: snapshot.room.nightCount,
-        totalMeals: snapshot.room.totalPlates,
+        ...snapshot.room,
+        morningCount: snapshot.room.morningPhysicalPlates ?? snapshot.room.morningCount ?? 0,
+        nightCount: snapshot.room.nightPhysicalPlates ?? snapshot.room.nightCount ?? 0,
+        totalMeals: snapshot.room.totalPhysicalPlates ?? snapshot.room.totalPlates ?? 0,
         amountPaise: snapshot.room.billAmountPaise,
       },
+      snapshotVersion: activeSettlement.snapshotVersion,
     };
   };
 

@@ -139,8 +139,13 @@ export function generateSettlementPdf(settlement) {
       let currentY = tableTop + 24;
 
       // Table Rows
-      const memberKeys = ['gaurav', 'nikhil', 'devansh'];
+      const memberKeys = snapshot.studentIds ?? Object.keys(members ?? {});
       for (const key of memberKeys) {
+        if (currentY > doc.page.height - 90) {
+          doc.addPage();
+          currentY = 55;
+          doc.fontSize(10).font('Helvetica-Bold').text('Settlement members (continued)', 50, 38);
+        }
         const m = members[key] || {
           morningCount: 0,
           nightCount: 0,
@@ -150,7 +155,7 @@ export function generateSettlementPdf(settlement) {
           remainingAmountPaise: 0,
         };
 
-        const name = MEMBER_NAMES[key] || key;
+        const name = m.displayName || MEMBER_NAMES[key] || key;
         const morningPart = m.morningParticipationCount ?? m.morningCount ?? 0;
         const nightPart = m.nightParticipationCount ?? m.nightCount ?? 0;
         const morningUnits = m.morningShareUnits ?? (morningPart * 6);

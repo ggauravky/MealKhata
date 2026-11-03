@@ -1,16 +1,18 @@
 import crypto from 'node:crypto';
-import { MEMBER_IDS } from '../config/members.js';
 import { paymentSummaryService } from '../payments/paymentSummary.service.js';
 import { reportService } from '../reports/report.service.js';
 import { HttpError } from '../utils/HttpError.js';
 import { isValidLogicalMonth } from '../utils/month.js';
 import { monthlySettlementRepository } from './monthlySettlement.repository.js';
 import { serializeSettlement, serializeSettlementHistory } from './monthlySettlement.serializer.js';
+import { studentResolver } from '../students/studentResolver.service.js';
+import { MEMBER_NAMES } from '../config/members.js';
 
 export function createSettlementService({
   reports = reportService,
   summaries = paymentSummaryService,
   repository = monthlySettlementRepository,
+  students = null,
   now = () => new Date(),
 } = {}) {
   return Object.freeze({
@@ -75,7 +77,7 @@ export function createSettlementService({
         });
       }
 
-      for (const memberId of MEMBER_IDS) {
+      for (const memberId of Object.keys(summary.members ?? {})) {
         const memberSummary = summary.members[memberId];
         if (!memberSummary) continue;
 
@@ -83,6 +85,7 @@ export function createSettlementService({
           blockers.push({
             type: 'remaining_balance',
             memberId,
+            displayName: report.toDate?.members?.[memberId]?.displayName ?? memberId,
             amountPaise: memberSummary.remainingAmountPaise,
             message: `${memberId} has remaining balance to settle.`,
           });
@@ -92,6 +95,7 @@ export function createSettlementService({
           blockers.push({
             type: 'overpayment',
             memberId,
+            displayName: report.toDate?.members?.[memberId]?.displayName ?? memberId,
             amountPaise: memberSummary.overpaidAmountPaise,
             message: `Blocked: ${memberId} is overpaid. Correct the payment ledger before closing.`,
           });
@@ -137,7 +141,13 @@ export function createSettlementService({
       ]);
 
       const members = {};
-      for (const memberId of MEMBER_IDS) {
+      const studentIds = [...new Set([
+        ...Object.keys(report.toDate?.members ?? {}),
+        ...Object.keys(summary.members ?? {}),
+      ])];
+      const knownStudents = students ? await students.listAll() : [];
+      const studentNames = Object.fromEntries(knownStudents.map((student) => [student.studentId, student.displayName]));
+      for (const memberId of studentIds) {
         const toDateMember = report.toDate?.members[memberId] || { morningCount: 0, nightCount: 0, totalMeals: 0, amountPaise: 0 };
         const summaryMember = summary.members[memberId] || { paidAmountPaise: 0 };
 
@@ -148,6 +158,7 @@ export function createSettlementService({
         const totalUnits = toDateMember.totalShareUnits ?? (morningUnits + nightUnits);
 
         members[memberId] = {
+          displayName: studentNames[memberId] ?? MEMBER_NAMES[memberId] ?? memberId,
           morningCount: morningParticipation,
           nightCount: nightParticipation,
           totalPlates: totalUnits / 6,
@@ -159,6 +170,7 @@ export function createSettlementService({
           billAmountPaise: toDateMember.amountPaise,
           paidAmountPaise: summaryMember.paidAmountPaise,
           remainingAmountPaise: 0,
+          overpaidAmountPaise: 0,
         };
       }
 
@@ -182,6 +194,7 @@ export function createSettlementService({
       };
 
       const snapshot = {
+        studentIds,
         rates: {
           morningPricePaise: report.rates.morningPricePaise,
           nightPricePaise: report.rates.nightPricePaise,
@@ -200,7 +213,7 @@ export function createSettlementService({
           settlementId,
           month,
           sequence,
-          snapshotVersion: 2,
+          snapshotVersion: 3,
           snapshot,
           closedAt: now(),
           closedByRole: actorRole,
@@ -245,4 +258,4 @@ export function createSettlementService({
   });
 }
 
-export const settlementService = createSettlementService();
+export const settlementService = createSettlementService({ students: studentResolver });

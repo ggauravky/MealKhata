@@ -5,9 +5,11 @@
 
 import { Router } from 'express';
 import { ROLES } from '../auth/permissions.js';
-import { MEMBER_IDS } from '../config/members.js';
+import { studentResolver } from '../students/studentResolver.service.js';
+import { assertSafeStudentId } from '../students/studentId.js';
 import { requireAdminOrAbove, requireAuthenticated, requireSuperAdmin } from '../middleware/authorize.js';
 import { isValidLogicalMonth } from '../utils/month.js';
+import { HttpError } from '../utils/HttpError.js';
 import { financialOverviewService } from '../finance/financialOverview.service.js';
 import { monthlyFinancialPdfService } from '../finance/monthlyFinancialPdf.service.js';
 import { creditAllocationService } from '../finance/creditAllocation.service.js';
@@ -23,10 +25,20 @@ function validateMonthParam(req, res, next) {
   return next();
 }
 
+async function validateStudentId(studentId, students) {
+  try {
+    assertSafeStudentId(studentId);
+  } catch {
+    throw new HttpError(400, `Invalid member ID: ${studentId}`);
+  }
+  if (students) await students.assertKnown(studentId);
+}
+
 export function createFinanceRouter({
   overviewService = financialOverviewService,
   pdfService = monthlyFinancialPdfService,
   credits = creditAllocationService,
+  students = null,
 } = {}) {
   const router = Router();
 
@@ -91,15 +103,16 @@ export function createFinanceRouter({
 
       // If Admin without member identity, allow query param override or default
       if (!targetMemberId && (req.auth.role === ROLES.ADMIN || req.auth.role === ROLES.SUPERADMIN)) {
-        targetMemberId = req.query.memberId || MEMBER_IDS[0];
+        targetMemberId = req.query.memberId || null;
       }
 
-      if (!targetMemberId || !MEMBER_IDS.includes(targetMemberId)) {
+      if (!targetMemberId) {
         return res.status(403).json({
           success: false,
           message: 'Member identity required to view personal financial overview.',
         });
       }
+      await validateStudentId(targetMemberId, req.auth.role === ROLES.MEMBER ? null : students);
 
       const data = await overviewService.getMemberFinancialOverview({
         memberId: targetMemberId,
@@ -116,9 +129,7 @@ export function createFinanceRouter({
   router.get('/members/:memberId/:month', requireAdminOrAbove, validateMonthParam, async (req, res, next) => {
     try {
       const { memberId, month } = req.params;
-      if (!MEMBER_IDS.includes(memberId)) {
-        return res.status(400).json({ success: false, message: `Invalid member ID: ${memberId}` });
-      }
+      await validateStudentId(memberId, students);
 
       const data = await overviewService.getMemberFinancialOverview({
         memberId,
@@ -138,15 +149,16 @@ export function createFinanceRouter({
       let targetMemberId = req.auth.memberId;
 
       if (!targetMemberId && (req.auth.role === ROLES.ADMIN || req.auth.role === ROLES.SUPERADMIN)) {
-        targetMemberId = req.query.memberId || MEMBER_IDS[0];
+        targetMemberId = req.query.memberId || null;
       }
 
-      if (!targetMemberId || !MEMBER_IDS.includes(targetMemberId)) {
+      if (!targetMemberId) {
         return res.status(403).json({
           success: false,
           message: 'Member identity required to download personal statement.',
         });
       }
+      await validateStudentId(targetMemberId, req.auth.role === ROLES.MEMBER ? null : students);
 
       const pdfDoc = await pdfService.generateMemberStatementPdf({
         memberId: targetMemberId,
@@ -202,9 +214,7 @@ export function createFinanceRouter({
     async (req, res, next) => {
       try {
         const { memberId, month } = req.params;
-        if (!MEMBER_IDS.includes(memberId)) {
-          return res.status(400).json({ success: false, message: `Invalid member ID: ${memberId}` });
-        }
+        await validateStudentId(memberId, students);
 
         const pdfDoc = await pdfService.generateMemberStatementPdf({
           memberId,
@@ -229,4 +239,4 @@ export function createFinanceRouter({
   return router;
 }
 
-export const financeRouter = createFinanceRouter();
+export const financeRouter = createFinanceRouter({ students: studentResolver });

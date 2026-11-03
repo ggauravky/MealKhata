@@ -6,8 +6,17 @@
 import PDFDocument from 'pdfkit';
 import { monthlyFinancialReportService } from './monthlyFinancialReport.service.js';
 import { formatPdfCurrency } from './financialConstants.js';
-import { MEMBERS } from '../config/members.js';
+import { MEMBER_NAMES } from '../config/members.js';
+import { studentResolver } from '../students/studentResolver.service.js';
 import { formatLogicalMonth } from '../utils/month.js';
+
+export function financialPdfMemberRows(overview) {
+  return Object.entries(overview.memberSummaries ?? {}).map(([id, summary]) => ({
+    id,
+    name: summary.member?.displayName ?? MEMBER_NAMES[id] ?? id,
+    summary,
+  }));
+}
 
 const COLORS = Object.freeze({
   primary: '#0f766e', // MealKhata Teal
@@ -27,8 +36,7 @@ const COLORS = Object.freeze({
 });
 
 function getMemberName(memberId) {
-  const found = MEMBERS.find((m) => m.id === memberId);
-  return found ? found.name : memberId;
+  return MEMBER_NAMES[memberId] ?? memberId;
 }
 
 function formatDateIST(isoString) {
@@ -46,6 +54,7 @@ function formatDateIST(isoString) {
 
 export function createMonthlyFinancialPdfService({
   reportDataService = monthlyFinancialReportService,
+  students = null,
 } = {}) {
   /**
    * Helper to draw standard page header
@@ -133,6 +142,8 @@ export function createMonthlyFinancialPdfService({
     async generateHouseholdStatementPdf({ month, actorRole }) {
       const report = await reportDataService.getHouseholdReportData(month, { actorRole });
       const { overview, roomCharges, expenses } = report;
+      const names = students ? Object.fromEntries((await students.listAll()).map((student) => [student.studentId, student.displayName])) : {};
+      const nameFor = (id) => names[id] ?? getMemberName(id);
       const monthLabel = formatLogicalMonth(month);
       const generatedAtFormatted = formatDateIST(overview.generatedAt);
 
@@ -388,9 +399,13 @@ export function createMonthlyFinancialPdfService({
       let totalExpRecv = 0;
       let totalCombinedPayable = 0;
 
-      for (const member of MEMBERS) {
-        const ms = overview.memberSummaries[member.id];
-        if (!ms) continue;
+      for (const member of financialPdfMemberRows(overview)) {
+        const ms = member.summary;
+        if (mY > doc.page.height - 90) {
+          doc.addPage();
+          mY = 60;
+          doc.fontSize(10).font('Helvetica-Bold').text('Student financial breakdown (continued)', 40, 42);
+        }
 
         totalMessBill += ms.mess.billPaise;
         totalMessPaid += ms.mess.paidPaise;
@@ -514,7 +529,7 @@ export function createMonthlyFinancialPdfService({
             .fillColor(COLORS.textDark)
             .text(`Room ${rc.roomNumber || 'N/A'}`, 48, rRowY + 6, { width: 80 })
             .font('Helvetica')
-            .text(getMemberName(rc.memberId), 135, rRowY + 6, { width: 120 })
+            .text(nameFor(rc.memberId), 135, rRowY + 6, { width: 120 })
             .text(formatPdfCurrency(rc.baseAmountPaise), 260, rRowY + 6, { width: 85, align: 'right' })
             .text(formatPdfCurrency(adjTotal), 355, rRowY + 6, { width: 85, align: 'right' })
             .font('Helvetica-Bold')
@@ -583,7 +598,7 @@ export function createMonthlyFinancialPdfService({
             .text(e.date, 48, eRowY + 6, { width: 70 })
             .text(e.category?.replace('_', ' ').toUpperCase() || 'OTHER', 125, eRowY + 6, { width: 85 })
             .text(e.title || 'Untitled', 215, eRowY + 6, { width: 180 })
-            .text(getMemberName(e.paidByMemberId), 400, eRowY + 6, { width: 80 })
+            .text(nameFor(e.paidByMemberId), 400, eRowY + 6, { width: 80 })
             .text(e.splitType ? e.splitType.toUpperCase() : 'EQUAL', 485, eRowY + 6, { width: 65 })
             .font('Helvetica-Bold')
             .text(formatPdfCurrency(e.amountPaise), 555, eRowY + 6, { width: 80, align: 'right' })
@@ -616,9 +631,11 @@ export function createMonthlyFinancialPdfService({
     async generateMemberStatementPdf({ memberId, month, actorRole }) {
       const report = await reportDataService.getMemberReportData(memberId, month, { actorRole });
       const { overview, expenses } = report;
+      const names = students ? Object.fromEntries((await students.listAll()).map((student) => [student.studentId, student.displayName])) : {};
+      const nameFor = (id) => names[id] ?? getMemberName(id);
       const monthLabel = formatLogicalMonth(month);
       const generatedAtFormatted = formatDateIST(overview.generatedAt);
-      const memberName = getMemberName(memberId);
+      const memberName = overview.member?.displayName ?? nameFor(memberId);
 
       const doc = new PDFDocument({
         size: 'A4',
@@ -782,7 +799,7 @@ export function createMonthlyFinancialPdfService({
             .fontSize(8)
             .font('Helvetica-Bold')
             .fillColor(COLORS.textDark)
-            .text(`Pay to ${getMemberName(debt.toMemberId)}:`, 50, doc.y + 5, { width: 140 })
+            .text(`Pay to ${nameFor(debt.toMemberId)}:`, 50, doc.y + 5, { width: 140 })
             .font('Helvetica')
             .fillColor(COLORS.textMuted)
             .text(`${debt.title} (${debt.date})`, 190, doc.y + 5, { width: 220 })
@@ -805,7 +822,7 @@ export function createMonthlyFinancialPdfService({
             .fontSize(8)
             .font('Helvetica-Bold')
             .fillColor(COLORS.textDark)
-            .text(`${getMemberName(recv.fromMemberId)} owes you:`, 50, doc.y + 5, { width: 140 })
+            .text(`${nameFor(recv.fromMemberId)} owes you:`, 50, doc.y + 5, { width: 140 })
             .font('Helvetica')
             .fillColor(COLORS.textMuted)
             .text(`${recv.title} (${recv.date})`, 190, doc.y + 5, { width: 220 })
@@ -848,4 +865,4 @@ export function createMonthlyFinancialPdfService({
   });
 }
 
-export const monthlyFinancialPdfService = createMonthlyFinancialPdfService();
+export const monthlyFinancialPdfService = createMonthlyFinancialPdfService({ students: studentResolver });

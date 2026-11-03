@@ -6,6 +6,7 @@ import { buildLegacyMealSnapshot } from '../src/migrations/legacyMealSnapshot.se
 import { createHistoricalMealCorrectionService, resolveHistoricalMealAuthority } from '../src/meals/mealHistoricalCorrection.service.js';
 import { createMealService } from '../src/meals/meal.service.js';
 import { createMonthMealService } from '../src/calendar/monthMeal.service.js';
+import { createReportService } from '../src/reports/report.service.js';
 import { createMealRouter } from '../src/routes/meal.routes.js';
 import { createApp } from '../src/app.js';
 import { createSessionToken, SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
@@ -51,6 +52,14 @@ test('explicit historical correction preserves the original day and frozen snaps
   const calendar = await createMonthMealService({ repository: meals, snapshots, corrections }).getMonth('2026-09');
   assert.equal(calendar.days[8].pricing.morning.effectivePricePaise, 101);
   assert.equal(calendar.days[8].priceOverrides.morning.pricePaise, 101);
+  const report = await createReportService({
+    meals: createMonthMealService({ repository: meals, snapshots, corrections }),
+    rates: { getRate: async () => ({ configured: true, morningPricePaise: 5000, nightPricePaise: 7000 }) },
+    now: () => new Date('2026-10-01T12:00:00Z'),
+  }).getMonthlyReport('2026-09');
+  assert.equal(report.toDate.room.amountPaise, 101);
+  assert.equal(report.toDate.members.gaurav.amountPaise, 101);
+  assert.equal(frozen.costs.morning.roomAmountPaise, 0);
   const blocked = createHistoricalMealCorrectionService({
     meals, snapshots, corrections,
     stays: {

@@ -1,6 +1,7 @@
 import { ROLES } from '../auth/permissions.js';
 import { env, isPushConfigured } from '../config/env.js';
-import { MEMBERS } from '../config/members.js';
+import { MEMBER_NAMES } from '../config/members.js';
+import { studentResolver } from '../students/studentResolver.service.js';
 import { mealService as defaultMealService } from '../meals/meal.service.js';
 import {
   calculateMemberShareUnits,
@@ -29,6 +30,7 @@ export function createDashboardService({
   paymentSummaryService = defaultPaymentSummaryService,
   settlementService = defaultSettlementService,
   reminderSettingsService = defaultReminderSettingsService,
+  students = null,
   pushConfigured = isPushConfigured,
   now = () => new Date(),
   timezone = env.appTimezone,
@@ -39,7 +41,7 @@ export function createDashboardService({
       const actorMemberId = auth?.memberId || null;
       const displayName =
         auth?.displayName ||
-        (actorMemberId ? MEMBERS.find((m) => m.id === actorMemberId)?.name : null);
+        (actorMemberId ? MEMBER_NAMES[actorMemberId] ?? actorMemberId : null);
 
       const currentNow = now();
       const today = getLogicalDateInTimeZone(currentNow, timezone);
@@ -83,29 +85,39 @@ export function createDashboardService({
       }
 
       const defaultMealStatus = 'not_set';
-      const morningMeals = todayDay?.meals?.morning || {
-        gaurav: defaultMealStatus,
-        nikhil: defaultMealStatus,
-        devansh: defaultMealStatus,
-      };
-      const nightMeals = todayDay?.meals?.night || {
-        gaurav: defaultMealStatus,
-        nikhil: defaultMealStatus,
-        devansh: defaultMealStatus,
-      };
+      const morningMeals = todayDay?.meals?.morning ?? {};
+      const nightMeals = todayDay?.meals?.night ?? {};
+      let currentStudents = [];
+      if (students) {
+        try {
+          currentStudents = await students.listCurrent();
+        } catch {
+          errors.students = 'Failed to fetch students';
+        }
+      }
+      const names = Object.fromEntries(currentStudents.map((student) => [student.studentId, student.displayName]));
+      const participantIds = [...new Set([
+        ...(todayDay?.participantOrder ?? []),
+        ...Object.keys(morningMeals),
+        ...Object.keys(nightMeals),
+        ...currentStudents.map((student) => student.studentId),
+      ])];
+      const historical = todayDay?.calculationVersion?.startsWith('legacy-');
 
-      const morningAllocation = getEffectiveMealAllocation({
+      const morningAllocation = historical ? todayDay.allocations.morning : getEffectiveMealAllocation({
         statuses: morningMeals,
         customAllocation: todayDay?.allocations?.morning,
+        participants: participantIds,
       });
 
-      const nightAllocation = getEffectiveMealAllocation({
+      const nightAllocation = historical ? todayDay.allocations.night : getEffectiveMealAllocation({
         statuses: nightMeals,
         customAllocation: todayDay?.allocations?.night,
+        participants: participantIds,
       });
 
-      const morningUnits = calculateMemberShareUnits(morningAllocation);
-      const nightUnits = calculateMemberShareUnits(nightAllocation);
+      const morningUnits = historical ? morningAllocation.shareUnits : calculateMemberShareUnits(morningAllocation, { participants: participantIds });
+      const nightUnits = historical ? nightAllocation.shareUnits : calculateMemberShareUnits(nightAllocation, { participants: participantIds });
 
       const morningPrice = resolveMealPricePaise({
         day: todayDay,
@@ -118,38 +130,40 @@ export function createDashboardService({
         fallbackPricePaise: MEAL_PRICES.night,
       });
 
-      const morningCost = splitMealCost({
+      const morningCost = historical ? morningAllocation.cost : splitMealCost({
         date: today,
         mealType: 'morning',
         effectiveAllocation: morningAllocation,
         pricePaise: morningPrice,
+        participants: participantIds,
       });
 
-      const nightCost = splitMealCost({
+      const nightCost = historical ? nightAllocation.cost : splitMealCost({
         date: today,
         mealType: 'night',
         effectiveAllocation: nightAllocation,
         pricePaise: nightPrice,
+        participants: participantIds,
       });
 
-      const morningEating = MEMBERS.filter((m) => morningMeals[m.id] === 'taking').length;
-      const nightEating = MEMBERS.filter((m) => nightMeals[m.id] === 'taking').length;
-      const morningPlates = morningAllocation.plates.length;
-      const nightPlates = nightAllocation.plates.length;
+      const morningEating = Object.values(morningMeals).filter((status) => status === 'taking').length;
+      const nightEating = Object.values(nightMeals).filter((status) => status === 'taking').length;
+      const morningPlates = historical ? morningCost.physicalPlates : morningAllocation.plates.length;
+      const nightPlates = historical ? nightCost.physicalPlates : nightAllocation.plates.length;
       const totalPlatesToday = morningPlates + nightPlates;
 
-      const memberPlates = MEMBERS.map((m) => {
-        const mUnits = morningUnits[m.id] ?? 0;
-        const nUnits = nightUnits[m.id] ?? 0;
+      const memberPlates = participantIds.map((memberId) => {
+        const mUnits = morningUnits[memberId] ?? 0;
+        const nUnits = nightUnits[memberId] ?? 0;
         const totalUnits = mUnits + nUnits;
-        const mCost = morningCost.members[m.id]?.amountPaise ?? 0;
-        const nCost = nightCost.members[m.id]?.amountPaise ?? 0;
+        const mCost = morningCost.members[memberId]?.amountPaise ?? 0;
+        const nCost = nightCost.members[memberId]?.amountPaise ?? 0;
 
         return {
-          memberId: m.id,
-          name: m.name,
-          morning: morningMeals[m.id] || defaultMealStatus,
-          night: nightMeals[m.id] || defaultMealStatus,
+          memberId,
+          name: names[memberId] ?? MEMBER_NAMES[memberId] ?? memberId,
+          morning: morningMeals[memberId] || defaultMealStatus,
+          night: nightMeals[memberId] || defaultMealStatus,
           morningShareUnits: mUnits,
           nightShareUnits: nUnits,
           totalShareUnits: totalUnits,
@@ -171,7 +185,7 @@ export function createDashboardService({
         actorRole === ROLES.MEMBER && actorMemberId
           ? [actorMemberId]
           : actorRole === ROLES.ADMIN || actorRole === ROLES.SUPERADMIN
-            ? MEMBERS.map((m) => m.id)
+            ? participantIds
             : [];
 
       // 2. Member Hero (Personal meals today)
@@ -520,4 +534,4 @@ export function createDashboardService({
   });
 }
 
-export const dashboardService = createDashboardService();
+export const dashboardService = createDashboardService({ students: studentResolver });
