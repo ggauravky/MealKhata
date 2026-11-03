@@ -1,5 +1,5 @@
 import { AlertCircle, AlertTriangle, Check, Loader2, Save, Sparkles } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button } from '../ui/button.jsx';
 import {
   Dialog,
@@ -13,10 +13,10 @@ import { Input } from '../ui/input.jsx';
 import { Label } from '../ui/label.jsx';
 import { ExpenseSplitPreview } from './ExpenseSplitPreview.jsx';
 import { api } from '../../lib/api.js';
+import { useOperationalStudents } from '../../hooks/useOperationalStudents.js';
 import {
   EXPENSE_CATEGORIES,
   EXPENSE_CATEGORY_CONFIG,
-  ROOMMATES,
   SPLIT_TYPES,
 } from '../../lib/constants.js';
 import { formatPaise, paymentRupeesToPaise } from '../../lib/money.js';
@@ -29,19 +29,20 @@ export function EditExpenseDialog({
   onSuccess,
   onViewReimbursements,
 }) {
+  const studentRoster = useOperationalStudents({ includeArchived: true, enabled: open });
+  const roster = useMemo(() => studentRoster.data.filter((student) => student.status === 'ACTIVE'
+    || expense?.paidByMemberId === student.id
+    || expense?.allocations?.some((allocation) => allocation.memberId === student.id)),
+  [studentRoster.data, expense]);
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('groceries');
   const [date, setDate] = useState('');
   const [amountRupees, setAmountRupees] = useState('');
-  const [paidByMemberId, setPaidByMemberId] = useState('gaurav');
+  const [paidByMemberId, setPaidByMemberId] = useState('');
   const [splitType, setSplitType] = useState('equal');
-  const [selectedParticipants, setSelectedParticipants] = useState(ROOMMATES.map((m) => m.id));
-  const [personalBeneficiary, setPersonalBeneficiary] = useState('gaurav');
-  const [customAmounts, setCustomAmounts] = useState({
-    gaurav: '',
-    nikhil: '',
-    devansh: '',
-  });
+  const [selectedParticipants, setSelectedParticipants] = useState([]);
+  const [personalBeneficiary, setPersonalBeneficiary] = useState('');
+  const [customAmounts, setCustomAmounts] = useState({});
   const [description, setDescription] = useState('');
   const [reason, setReason] = useState('');
 
@@ -62,16 +63,16 @@ export function EditExpenseDialog({
       setCategory(expense.category || 'groceries');
       setDate(expense.date || '');
       setAmountRupees(initialAmounts.amountRupees);
-      setPaidByMemberId(expense.paidByMemberId || 'gaurav');
+      setPaidByMemberId(expense.paidByMemberId || '');
       setSplitType(expense.splitType || 'equal');
 
       const allocMembers = (expense.allocations || []).map((a) => a.memberId);
-      setSelectedParticipants(allocMembers.length > 0 ? allocMembers : ROOMMATES.map((m) => m.id));
+      setSelectedParticipants(allocMembers.length > 0 ? allocMembers : roster.filter((m) => m.status === 'ACTIVE').map((m) => m.id));
 
       if (expense.splitType === 'personal' && allocMembers.length === 1) {
         setPersonalBeneficiary(allocMembers[0]);
       } else {
-        setPersonalBeneficiary(expense.paidByMemberId || 'gaurav');
+        setPersonalBeneficiary(expense.paidByMemberId || '');
       }
 
       setCustomAmounts(initialAmounts.customAmounts);
@@ -81,7 +82,7 @@ export function EditExpenseDialog({
       setPreviewError('');
       setSubmitError('');
     }
-  }, [open, expense]);
+  }, [open, expense, roster]);
 
   const totalAmountPaise = paymentRupeesToPaise(amountRupees) || 0;
 
@@ -115,7 +116,7 @@ export function EditExpenseDialog({
       };
     } else if (splitType === 'custom') {
       const customAllocations = [];
-      for (const m of ROOMMATES) {
+      for (const m of roster) {
         const p = paymentRupeesToPaise(customAmounts[m.id]) || 0;
         if (p > 0) {
           customAllocations.push({ memberId: m.id, amountPaise: p });
@@ -158,6 +159,7 @@ export function EditExpenseDialog({
     personalBeneficiary,
     customAmounts,
     hasReimbursements,
+    roster,
   ]);
 
   const handleToggleParticipant = (memberId) => {
@@ -171,6 +173,10 @@ export function EditExpenseDialog({
     e.preventDefault();
     if (!expense) return;
     setSubmitError('');
+    if (studentRoster.loading || studentRoster.error || !roster.some((member) => member.id === paidByMemberId)) {
+      setSubmitError(studentRoster.error || 'Select a valid student who paid.');
+      return;
+    }
 
     if (!reason.trim()) {
       setSubmitError('A mandatory correction reason is required (up to 300 characters).');
@@ -197,7 +203,7 @@ export function EditExpenseDialog({
           changes.participants = [personalBeneficiary];
         } else if (splitType === 'custom') {
           const customAllocations = [];
-          for (const m of ROOMMATES) {
+          for (const m of roster) {
             const p = paymentRupeesToPaise(customAmounts[m.id]) || 0;
             if (p > 0) {
               customAllocations.push({ memberId: m.id, amountPaise: p });
@@ -258,6 +264,8 @@ export function EditExpenseDialog({
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4 pt-1">
+          {studentRoster.loading && <p className="text-xs text-slate-500">Loading students…</p>}
+          {studentRoster.error && <p className="text-xs text-rose-700">{studentRoster.error}</p>}
           {submitError && (
             <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2">
               <AlertCircle className="h-4 w-4 shrink-0" />
@@ -348,7 +356,7 @@ export function EditExpenseDialog({
                 disabled={hasReimbursements}
                 className="w-full h-9 rounded-md border border-slate-200 bg-white px-2.5 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100"
               >
-                {ROOMMATES.map((m) => (
+                {roster.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name}
                   </option>
@@ -386,7 +394,7 @@ export function EditExpenseDialog({
                     Shared equally among:
                   </span>
                   <div className="grid grid-cols-3 gap-2">
-                    {ROOMMATES.map((m) => {
+                    {roster.map((m) => {
                       const isSelected = selectedParticipants.includes(m.id);
                       return (
                         <button
@@ -421,7 +429,7 @@ export function EditExpenseDialog({
                     onChange={(e) => setPersonalBeneficiary(e.target.value)}
                     className="w-full h-9 rounded-md border border-slate-200 bg-white px-2.5 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100"
                   >
-                    {ROOMMATES.map((m) => (
+                    {roster.map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.name}
                       </option>
@@ -437,7 +445,7 @@ export function EditExpenseDialog({
                     Individual amounts (must sum to total):
                   </span>
                   <div className="grid grid-cols-3 gap-2">
-                    {ROOMMATES.map((m) => (
+                    {roster.map((m) => (
                       <div key={m.id} className="space-y-1">
                         <Label htmlFor={`edit-custom-${m.id}`} className="text-[11px]">
                           {m.name}
@@ -446,7 +454,7 @@ export function EditExpenseDialog({
                           id={`edit-custom-${m.id}`}
                           type="number"
                           placeholder="0"
-                          value={customAmounts[m.id]}
+                          value={customAmounts[m.id] ?? ''}
                           onChange={(e) =>
                             setCustomAmounts((prev) => ({ ...prev, [m.id]: e.target.value }))
                           }
@@ -472,6 +480,7 @@ export function EditExpenseDialog({
                 <ExpenseSplitPreview
                   preview={preview}
                   paidByMemberId={paidByMemberId}
+                  roster={roster}
                 />
               )}
             </div>
@@ -481,7 +490,7 @@ export function EditExpenseDialog({
               <div className="flex items-center gap-2 flex-wrap pt-0.5">
                 {(expense.allocations || []).map((a) => (
                   <span key={a.memberId} className="px-2 py-0.5 bg-white dark:bg-slate-800 border rounded text-[11px] font-mono">
-                    {ROOMMATES.find((m) => m.id === a.memberId)?.name || a.memberId}: {formatPaise(a.amountPaise)}
+                    {roster.find((m) => m.id === a.memberId)?.name || a.memberId}: {formatPaise(a.amountPaise)}
                   </span>
                 ))}
               </div>
@@ -536,7 +545,7 @@ export function EditExpenseDialog({
             <Button
               type="submit"
               size="sm"
-              disabled={submitting || !reason.trim() || previewError}
+              disabled={submitting || studentRoster.loading || Boolean(studentRoster.error) || !reason.trim() || previewError}
               className="bg-teal-700 hover:bg-teal-800 text-white text-xs gap-1.5"
             >
               {submitting ? (

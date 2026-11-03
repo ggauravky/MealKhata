@@ -14,12 +14,11 @@ import { Input } from '../../ui/input.jsx';
 import { Label } from '../../ui/label.jsx';
 import { Select } from '../../ui/select.jsx';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../ui/table.jsx';
-import { ROOMMATES } from '../../../lib/constants.js';
 import { formatLogicalMonth } from '../../../lib/logicalMonth.js';
 import { formatPaise, rupeesToPaise } from '../../../lib/money.js';
 import { api } from '../../../lib/api.js';
 
-export function AdminMonthlyChargesTab({ month, summary, onRefresh, role, loading = false, error = '' }) {
+export function AdminMonthlyChargesTab({ month, summary, onRefresh, role, loading = false, error = '', roster = [] }) {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewData, setPreviewData] = useState(null);
   const [previewError, setPreviewError] = useState('');
@@ -186,7 +185,7 @@ export function AdminMonthlyChargesTab({ month, summary, onRefresh, role, loadin
               </TableRow>
             </TableHeader>
             <TableBody>
-              {ROOMMATES.map((roommate) => {
+              {roster.map((roommate) => {
                 const memberData = membersMap.get(roommate.id);
                 const charge = memberData?.charge;
                 const isIssued = Boolean(charge && charge.status !== 'cancelled');

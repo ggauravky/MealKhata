@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { runFinancialTransaction } from './financialTransaction.js';
-import { CreditAllocation, UnallocatedCredit } from '../stays/paymentReclassification.model.js';
+import { CreditAllocation, PaymentReclassification, UnallocatedCredit } from '../stays/paymentReclassification.model.js';
+import { financialBoundaryService } from './financialBoundary.service.js';
+import { getLogicalDateInTimeZone } from '../utils/date.js';
 import { CreditObligationState } from './creditObligationState.model.js';
 import { RoomCharge } from '../roomFees/roomCharge.model.js';
 import { RoomPayment } from '../roomFees/roomPayment.model.js';
@@ -164,6 +166,11 @@ export const creditAllocationRepository = Object.freeze({
 
       const credit = await UnallocatedCredit.findOne({ creditId }).session(session).lean();
       if (!credit) throw domainError(404, 'Unallocated credit not found.', 'CREDIT_NOT_FOUND');
+      const source = await PaymentReclassification.findOne({ reclassificationId: credit.reclassificationId }).session(session).lean();
+      if (!source) throw domainError(409, 'Verified credit source is missing.', 'CREDIT_SOURCE_MISSING');
+      await financialBoundaryService.assertOperationalFinancialDate(
+        getLogicalDateInTimeZone(source.paymentDate, 'Asia/Kolkata'), { session },
+      );
       const currentRevision = credit.revision || 0;
       if (currentRevision !== expectedRevision) {
         throw domainError(409, 'Unallocated credit changed after preview. Refresh and retry.', 'CREDIT_REVISION_CONFLICT');
@@ -190,6 +197,10 @@ export const creditAllocationRepository = Object.freeze({
         session,
         messSnapshot,
       });
+      if (destinationType === 'MESS') await financialBoundaryService.assertOperationalMonth(targetRecordId, { session });
+      else if (destinationType === 'ROOM_FEE') await financialBoundaryService.assertFullOperationalMonth(target.month, { session });
+      else if (destinationType === 'EXPENSE_REIMBURSEMENT') await financialBoundaryService.assertOperationalFinancialDate(target.expense.date, { session });
+      else await financialBoundaryService.assertOperationalFinancialDate(getLogicalDateInTimeZone(settledAt, 'Asia/Kolkata'), { session });
       if (destinationType !== 'EXTERNAL_SETTLEMENT' && amountPaise > target.outstandingAmountPaise) {
         throw domainError(409, 'Allocation exceeds the verified target obligation.', 'TARGET_AMOUNT_EXCEEDED', {
           targetOutstandingPaise: target.outstandingAmountPaise,

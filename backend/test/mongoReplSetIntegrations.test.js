@@ -41,6 +41,8 @@ import { MemberAccountAudit } from '../src/members/memberAccountAudit.model.js';
 import { Student } from '../src/students/student.model.js';
 import { CreditAllocation, PaymentReclassification, UnallocatedCredit } from '../src/stays/paymentReclassification.model.js';
 import { CreditObligationState } from '../src/finance/creditObligationState.model.js';
+import { SystemSettings } from '../src/settings/systemSettings.model.js';
+import { financialBoundaryService } from '../src/finance/financialBoundary.service.js';
 
 import { createStayService } from '../src/stays/stay.service.js';
 import { defaultStayAttributionService } from '../src/stays/stayAttribution.service.js';
@@ -52,6 +54,7 @@ import { roomRepository } from '../src/roomFees/room.repository.js';
 import { defaultExpenseRepository } from '../src/expenses/expense.repository.js';
 import { computeChargeFinancials } from '../src/roomFees/roomFee.serializer.js';
 import { paymentRepository } from '../src/payments/payment.repository.js';
+import { createPaymentService } from '../src/payments/payment.service.js';
 import { creditAllocationService } from '../src/finance/creditAllocation.service.js';
 import { mealService } from '../src/meals/meal.service.js';
 import { createMealService } from '../src/meals/meal.service.js';
@@ -224,6 +227,7 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
       UnallocatedCredit.init(),
       CreditAllocation.init(),
       CreditObligationState.init(),
+      SystemSettings.init(),
     ]);
   });
 
@@ -241,13 +245,86 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
     for (const key of Object.keys(collections)) {
       await collections[key].deleteMany({});
     }
+    await SystemSettings.create({ settingsId: 'system', financialStartDate: '1900-01-01',
+      timezone: 'Asia/Kolkata', revision: 1, configuredAt: new Date(), configuredBy: 'isolated-test' });
+    await Student.insertMany(['gaurav', 'nikhil', 'devansh'].map((studentId, rosterOrder) => ({
+      studentId, displayName: studentId, rosterOrder, status: 'ACTIVE', mealEligibilityFrom: '2026-01-01',
+    })));
+  });
+
+  it('rejects pre-boundary financial repository writes atomically and refuses partial-month room charges', async () => {
+    await SystemSettings.updateOne({ settingsId: 'system' }, { $set: { financialStartDate: '2026-11-15' } });
+    const expenseId = randomUUID();
+    await assert.rejects(defaultExpenseRepository.createExpense({
+      expenseId, date: '2026-11-14', month: '2026-11', title: 'Historical fixture',
+      category: 'groceries', amountPaise: 100, paidByMemberId: 'gaurav', splitType: 'personal',
+      allocations: [{ memberId: 'gaurav', amountPaise: 100 }], createdByRole: 'admin',
+      revision: randomUUID(), status: 'recorded',
+    }), (error) => error.statusCode === 409 && error.details?.code === 'HISTORICAL_FINANCIAL_DATE');
+    assert.equal(await Expense.countDocuments({ expenseId }), 0);
+    const gatedRooms = createRoomFeeService({ repository: roomRepository, students: studentResolver,
+      boundary: financialBoundaryService,
+      now: () => new Date('2026-12-01T12:00:00Z') });
+    await assert.rejects(gatedRooms.issueCharges('2026-11', 'superadmin'),
+      (error) => error.statusCode === 409 && error.details?.code === 'NON_OPERATIONAL_MONTH');
+    assert.equal(await RoomCharge.countDocuments({ month: '2026-11' }), 0);
+  });
+
+  it('manages a fourth student across Stay, Room Fee, expense and reimbursement in the operational database', async () => {
+    const memberId = 'student_fourth';
+    await Student.create({ studentId: memberId, displayName: 'Fourth Student', rosterOrder: 3,
+      status: 'ACTIVE', mealEligibilityFrom: '2026-10-01' });
+    const dynamicRooms = createRoomFeeService({ repository: roomRepository, students: studentResolver,
+      boundary: financialBoundaryService, now: fixedIntegrationNow });
+    const dynamicStays = createStayService({ repository: stayRepository, students: studentResolver,
+      boundary: financialBoundaryService, roomFees: dynamicRooms, deposits: depositService,
+      now: fixedIntegrationNow });
+    const room = await ensureRoom('fourth-101', 2);
+    const stay = await dynamicStays.createStay({ memberId, joinedOn: '2026-10-01',
+      initialRoomId: room.roomId, actorRole: 'admin' });
+    assert.equal(stay.memberId, memberId);
+    await dynamicRooms.createFeePlan({ memberId, effectiveFromMonth: '2026-10',
+      amountPaise: 250000, actorRole: 'admin' });
+    const issued = await dynamicRooms.issueCharges('2026-10', 'admin');
+    const charge = issued.charges.find((item) => item.memberId === memberId);
+    assert.ok(charge);
+    const payment = await dynamicRooms.recordPayment({ chargeId: charge.chargeId, amountPaise: 250000,
+      method: 'upi', idempotencyKey: randomUUID(), actorRole: 'admin' });
+    assert.equal(payment.memberId, memberId);
+    await MonthlyMealRate.create({ month: '2026-10', morningPricePaise: 10000, nightPricePaise: 0 });
+    await PaymentSettings.create({ key: 'primary', receiverName: 'Hostel Admin', upiId: 'hostel@upi' });
+    const dynamicMeals = createMealService({ repository: mealRepository, students: studentResolver, stays: null });
+    await dynamicMeals.changeStatus({ date: '2026-10-05', mealType: 'morning', memberId,
+      status: 'taking', actorRole: 'admin' });
+    const dynamicPayments = createPaymentService({ students: studentResolver,
+      boundary: financialBoundaryService, now: fixedIntegrationNow });
+    const prepared = await dynamicPayments.preparePayment({ month: '2026-10', memberId,
+      actorRole: 'member', actorMemberId: memberId });
+    assert.ok(prepared.amountPaise > 0);
+    await assert.rejects(dynamicPayments.preparePayment({ month: '2026-10', memberId,
+      actorRole: 'member', actorMemberId: 'gaurav' }), (error) => error.statusCode === 403);
+    const messPayment = await dynamicPayments.recordPayment({ month: '2026-10', memberId,
+      amountPaise: prepared.amountPaise, idempotencyKey: randomUUID(), actorRole: 'member',
+      actorMemberId: memberId });
+    assert.equal(messPayment.data.memberId, memberId);
+    const expense = await expenseService.createExpense({ date: '2026-10-05', title: 'Four person groceries',
+      category: 'groceries', amountPaise: 101, paidByMemberId: 'gaurav', splitType: 'equal',
+      participants: ['gaurav', 'nikhil', 'devansh', memberId], actorRole: 'admin' });
+    assert.equal(expense.allocations.length, 4);
+    assert.equal(expense.allocations.reduce((sum, item) => sum + item.amountPaise, 0), 101);
+    const reimbursement = await expenseService.recordReimbursement({ expenseId: expense.expenseId,
+      fromMemberId: memberId, amountPaise: expense.allocations.find((item) => item.memberId === memberId).amountPaise,
+      idempotencyKey: randomUUID(), actorRole: 'admin' });
+    assert.equal(reimbursement.fromMemberId, memberId);
+    await Student.updateOne({ studentId: memberId }, { $set: { status: 'ARCHIVED', archivedAt: new Date() } });
+    assert.equal((await dynamicRooms.getMemberHistory(memberId)).memberId, memberId);
+    assert.equal((await dynamicStays.getMemberStayOverview(memberId)).memberId, memberId);
   });
 
   it('persists a fourth student meal with exact sharing and retains archived identity in an isolated replica set', async () => {
     const ids = ['gaurav', 'nikhil', 'devansh', 'student_0123456789abcdef0123456789abcdef'];
-    await Student.insertMany(ids.map((studentId, rosterOrder) => ({
-      studentId, displayName: studentId, rosterOrder, status: 'ACTIVE', mealEligibilityFrom: '2026-11-01',
-    })));
+    await Student.create({ studentId: ids[3], displayName: ids[3], rosterOrder: 3,
+      status: 'ACTIVE', mealEligibilityFrom: '2026-11-01' });
     const service = createMealService({ repository: mealRepository, students: studentResolver, stays: null });
     const date = '2026-11-03';
     const shared = await service.setAllocation({
@@ -2848,13 +2925,7 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
 
   describe('Canonical member-account persistence', () => {
     it('concurrent provisioning cannot create duplicate identities and audit rolls back with the loser', async () => {
-      await Student.create({
-        studentId: 'gaurav',
-        displayName: 'Gaurav',
-        status: 'ACTIVE',
-        mealEligibilityFrom: '2026-10-01',
-        rosterOrder: 0,
-      });
+      await Student.updateOne({ studentId: 'gaurav' }, { $set: { displayName: 'Gaurav', mealEligibilityFrom: '2026-10-01' } });
       const accounts = createMemberAccountService({
         verifyActorPassword: async () => {},
         now: () => new Date('2026-10-21T06:30:00.000Z'),
@@ -3924,13 +3995,7 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
     });
 
     it('Checkout No-Dues consistency under a concurrent meal participation change', async () => {
-      await Student.create({
-        studentId: 'gaurav',
-        displayName: 'Gaurav',
-        status: 'ACTIVE',
-        mealEligibilityFrom: '2026-10-01',
-        rosterOrder: 0,
-      });
+      await Student.updateOne({ studentId: 'gaurav' }, { $set: { displayName: 'Gaurav', mealEligibilityFrom: '2026-10-01' } });
       const room = await ensureRoom('207-meal-change', 2);
       const stay = await stayService.createStay({
         memberId: 'gaurav',

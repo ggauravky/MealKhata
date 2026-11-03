@@ -478,6 +478,12 @@ describe('MealKhata 3.0 student API and authorization', () => {
 
     await request(createStudentApi('member')).get('/api/students').expect(403);
     await request(createStudentApi('viewer')).get('/api/students').expect(401);
+    const memberRoster = await request(createStudentApi('member')).get('/api/students/roster').expect(200);
+    assert.deepEqual(memberRoster.body.data, [{ studentId: 'gaurav', displayName: baseStudent.displayName,
+      status: 'ACTIVE', rosterOrder: baseStudent.rosterOrder }]);
+    assert.equal(JSON.stringify(memberRoster.body).includes('passwordHash'), false);
+    assert.equal(JSON.stringify(memberRoster.body).includes('email'), false);
+    await request(createStudentApi('viewer')).get('/api/students/roster').expect(401);
   });
 
   test('registers /api/students in the application router', async () => {

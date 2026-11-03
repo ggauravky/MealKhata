@@ -13,8 +13,8 @@ import { ErrorState } from '../components/ui/ErrorState.jsx';
 import { Skeleton } from '../components/ui/skeleton.jsx';
 import { useAuth } from '../hooks/useAuth.js';
 import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
+import { useOperationalStudents } from '../hooks/useOperationalStudents.js';
 import { useMyStay, useMyStayHistory, useStayDetails, useStayLifetimeSummary } from '../hooks/useStays.js';
-import { ROOMMATES } from '../lib/constants.js';
 import { getMyStayLifecycleState } from '../lib/stayContracts.js';
 
 export function MyStayPage() {
@@ -25,8 +25,9 @@ export function MyStayPage() {
   const [selectedStayId, setSelectedStayId] = useState(null);
 
   const isMember = auth.role === 'member';
+  const roster = useOperationalStudents({ includeArchived: true, enabled: !isMember && auth.authenticated });
   const selectedMemberId = isMember ? null : searchParams.get('memberId');
-  const hasValidSelection = isMember || ROOMMATES.some((member) => member.id === selectedMemberId);
+  const hasValidSelection = isMember || roster.data.some((member) => member.id === selectedMemberId);
   const myStayQuery = useMyStay(selectedMemberId, { enabled: hasValidSelection });
   const historyQuery = useMyStayHistory(selectedMemberId, { enabled: hasValidSelection });
 
@@ -82,7 +83,7 @@ export function MyStayPage() {
                 className="block min-w-56 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950"
               >
                 <option value="">Select a member</option>
-                {ROOMMATES.map((member) => (
+                {roster.data.map((member) => (
                   <option key={member.id} value={member.id}>{member.name}</option>
                 ))}
               </select>

@@ -1,6 +1,7 @@
 import { HostelStay } from '../stays/stay.model.js';
 import { STAY_STATUSES } from '../stays/stay.constants.js';
 import { lastDateOfMonth } from '../utils/month.js';
+import { financialBoundaryService } from './financialBoundary.service.js';
 
 function transactionRequiredError() {
   const error = new Error('Database transaction support is required. No records were changed.');
@@ -31,13 +32,23 @@ export async function guardFinancialMutation({
   effectiveMonth = null,
   stayId = null,
   actorRole = null,
+  allowPartialMonth = false,
+  boundary = financialBoundaryService,
   session,
 }) {
   if (!session) throw transactionRequiredError();
+  if (effectiveDate) await boundary.assertOperationalFinancialDate(effectiveDate, { session });
+  if (effectiveMonth) {
+    if (allowPartialMonth) await boundary.assertOperationalMonth(effectiveMonth, { session });
+    else await boundary.assertFullOperationalMonth(effectiveMonth, { session });
+  }
 
   const affectedMemberIds = [...new Set([memberId, ...memberIds].filter(Boolean))];
   const query = stayId ? { stayId } : { memberId: { $in: affectedMemberIds } };
   const stays = await HostelStay.find(query).session(session).lean();
+  if (stayId && !effectiveDate && !effectiveMonth) {
+    for (const stay of stays) await boundary.assertOperationalFinancialDate(stay.joinedOn, { session });
+  }
   if (stayId && stays.some((stay) => stay.status === STAY_STATUSES.SUPERSEDED)) {
     const error = new Error('This Stay has been superseded and its financial history is immutable.');
     error.statusCode = 409;
@@ -71,6 +82,8 @@ export async function guardCheckoutFinancialSnapshot({
   session,
 }) {
   if (!session) throw transactionRequiredError();
+  const stay = await HostelStay.findOne({ stayId }).session(session).lean();
+  if (stay) await financialBoundaryService.assertOperationalFinancialDate(stay.joinedOn, { session });
   const query = { stayId, status: { $ne: STAY_STATUSES.CANCELLED } };
   if (Number.isInteger(expectedFinancialRevision)) {
     query.financialRevision = expectedFinancialRevision;

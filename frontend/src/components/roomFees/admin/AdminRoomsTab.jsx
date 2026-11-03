@@ -14,11 +14,10 @@ import { Input } from '../../ui/input.jsx';
 import { Label } from '../../ui/label.jsx';
 import { Select } from '../../ui/select.jsx';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../ui/table.jsx';
-import { ROOMMATES } from '../../../lib/constants.js';
 import { api } from '../../../lib/api.js';
 import { getIndiaCurrentLogicalMonth } from '../../../lib/logicalDate.js';
 
-export function AdminRoomsTab({ rooms = [], onRefresh, role, loading = false, error = '' }) {
+export function AdminRoomsTab({ rooms = [], onRefresh, role, loading = false, error = '', roster = [] }) {
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
@@ -39,7 +38,7 @@ export function AdminRoomsTab({ rooms = [], onRefresh, role, loading = false, er
   const [editError, setEditError] = useState('');
 
   // Assign member state
-  const [assignMemberId, setAssignMemberId] = useState('nikhil');
+  const [assignMemberId, setAssignMemberId] = useState('');
   const [assignRoomId, setAssignRoomId] = useState('');
   const [assignFromMonth, setAssignFromMonth] = useState(() => getIndiaCurrentLogicalMonth());
   const [assignUntilMonth, setAssignUntilMonth] = useState('');
@@ -105,6 +104,10 @@ export function AdminRoomsTab({ rooms = [], onRefresh, role, loading = false, er
   const handleAssignMember = async (e) => {
     e.preventDefault();
     setFormError('');
+    if (!assignMemberId || !roster.some((member) => member.id === assignMemberId)) {
+      setFormError('Select a student before assigning a room.');
+      return;
+    }
     setSubmitting(true);
     try {
       await api.post('/api/room-fees/assignments', {
@@ -241,7 +244,7 @@ export function AdminRoomsTab({ rooms = [], onRefresh, role, loading = false, er
                         ) : (
                           <div className="flex items-center gap-1.5 flex-wrap">
                             {occupants.map((occ) => {
-                              const r = ROOMMATES.find((m) => m.id === occ.memberId);
+                              const r = roster.find((m) => m.id === occ.memberId);
                               return (
                                 <Badge key={occ.memberId} variant="secondary" className="text-xs py-0 px-2 font-medium">
                                   {r?.name || occ.name || occ.memberId}
@@ -453,7 +456,8 @@ export function AdminRoomsTab({ rooms = [], onRefresh, role, loading = false, er
                 value={assignMemberId}
                 onChange={(e) => setAssignMemberId(e.target.value)}
               >
-                {ROOMMATES.map((m) => (
+                <option value="">Select a student</option>
+                {roster.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name}
                   </option>

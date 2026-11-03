@@ -5,7 +5,9 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import mongoose from 'mongoose';
-import { MEMBER_IDS } from '../config/members.js';
+import { isSafeStudentId } from '../students/studentId.js';
+import { studentResolver } from '../students/studentResolver.service.js';
+import { financialBoundaryService } from '../finance/financialBoundary.service.js';
 import { canEditDate, isValidLogicalDate, getLogicalDateInTimeZone, getPreviousLogicalDate } from '../utils/date.js';
 import { ROLES } from '../auth/permissions.js';
 import { isValidLogicalMonth, lastDateOfMonth } from '../utils/month.js';
@@ -52,6 +54,8 @@ export class StayDomainError extends Error {
 
 export function createStayService({
   repository = stayRepository,
+  students = null,
+  boundary = null,
   roomFees = roomFeeService,
   finance = financialOverviewService,
   deposits = depositService,
@@ -631,12 +635,14 @@ export function createStayService({
       allowUnverifiedPreAssignmentPeriod = false,
     }) {
       const monthlyFeePaise = rawMonthlyFee ?? monthlyRatePaise ?? null;
-      if (!MEMBER_IDS.includes(memberId)) {
+      if (!isSafeStudentId(memberId)) {
         throw new StayDomainError(`Invalid member ID: ${memberId}`, 400);
       }
       if (!joinedOn || !isValidLogicalDate(joinedOn)) {
         throw new StayDomainError('Valid joining date in YYYY-MM-DD format is required.', 400);
       }
+      if (students) await students.assertKnown(memberId);
+      if (boundary) await boundary.assertOperationalFinancialDate(joinedOn);
       if (expectedLeaveOn && !isValidLogicalDate(expectedLeaveOn)) {
         throw new StayDomainError('Expected leave date must be in YYYY-MM-DD format.', 400);
       }
@@ -928,9 +934,10 @@ export function createStayService({
      * a Stay record is registered, so callers must not infer one from the other.
      */
     async getMemberStayOverview(memberId) {
-      if (!MEMBER_IDS.includes(memberId)) {
+      if (!isSafeStudentId(memberId)) {
         throw new StayDomainError(`Invalid member ID: ${memberId}`, 400);
       }
+      if (students) await students.assertKnown(memberId);
 
       const activeStay = await repository.findActiveStayForMember(memberId);
       let stay = activeStay;
@@ -2236,4 +2243,4 @@ export function createStayService({
   };
 }
 
-export const stayService = createStayService();
+export const stayService = createStayService({ students: studentResolver, boundary: financialBoundaryService });

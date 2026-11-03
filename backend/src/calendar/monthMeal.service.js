@@ -36,6 +36,15 @@ function serializeMonthDay(document, date, { timezone = env.appTimezone, partici
 
   return {
     date,
+    schemaVersion: serialized.schemaVersion ?? document?.schemaVersion ?? null,
+    calculationVersion: serialized.calculationVersion ?? null,
+    participantOrder: serialized.participantOrder ?? [...new Set([
+      ...Object.keys(serialized.meals?.morning ?? {}),
+      ...Object.keys(serialized.meals?.night ?? {}),
+    ])],
+    financialClassification: document?.financialClassification ?? null,
+    cutoverClassificationSource: document?.cutoverClassificationSource ?? null,
+    importedFromLegacy: document?.importedFromLegacy ?? Boolean(snapshot),
     saved: serialized.saved,
     hasMealActivity,
     hasCustomAllocation,

@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
-import { MEMBERS } from '../config/members.js';
+import { studentResolver } from '../students/studentResolver.service.js';
+import { financialBoundaryService } from '../finance/financialBoundary.service.js';
 import { broadcastExpensesUpdated } from '../socket.js';
 import {
   EXPENSE_CATEGORIES,
@@ -42,8 +43,17 @@ export class ExpenseDomainError extends Error {
 }
 
 export class ExpenseService {
-  constructor(repository = defaultExpenseRepository) {
+  constructor(repository = defaultExpenseRepository, { students = null, boundary = null } = {}) {
     this.repository = repository;
+    this.students = students;
+    this.boundary = boundary;
+  }
+
+  async assertKnownSplitStudents({ paidByMemberId, allocations }) {
+    if (!this.students) return;
+    for (const studentId of new Set([paidByMemberId, ...allocations.map((item) => item.memberId)])) {
+      await this.students.assertKnown(studentId);
+    }
   }
 
   /**
@@ -57,6 +67,7 @@ export class ExpenseService {
       participants,
       customAllocations,
     });
+    await this.assertKnownSplitStudents({ paidByMemberId, allocations: split.allocations });
 
     return {
       amountPaise: split.amountPaise,
@@ -91,6 +102,7 @@ export class ExpenseService {
     if (!isValidLogicalDate(date)) {
       throw new ExpenseDomainError('Expense date must be in valid YYYY-MM-DD format.', 400);
     }
+    if (this.boundary) await this.boundary.assertOperationalFinancialDate(date);
 
     const month = date.slice(0, 7);
 
@@ -126,6 +138,7 @@ export class ExpenseService {
       participants,
       customAllocations,
     });
+    await this.assertKnownSplitStudents({ paidByMemberId, allocations: splitResult.allocations });
 
     const expenseId = crypto.randomUUID();
     const revision = new Date().toISOString();
@@ -252,6 +265,11 @@ export class ExpenseService {
     if (!reason || typeof reason !== 'string' || !reason.trim() || reason.length > MAX_VOID_REASON_LENGTH) {
       throw new ExpenseDomainError('A mandatory void reason is required (up to 300 characters).', 400);
     }
+    if (this.boundary) {
+      const existing = await this.repository.findExpenseById(expenseId);
+      if (!existing) throw new ExpenseDomainError('Expense not found.', 404);
+      await this.boundary.assertOperationalFinancialDate(existing.date);
+    }
 
     let updated;
     if (typeof this.repository.executeAtomicExpenseVoid === 'function') {
@@ -325,6 +343,8 @@ export class ExpenseService {
       throw new ExpenseDomainError('Expense not found.', 404);
     }
 
+    if (this.boundary) await this.boundary.assertOperationalFinancialDate(expense.date);
+
     if (expense.status === EXPENSE_STATUSES.VOIDED) {
       throw new ExpenseDomainError('Cannot edit or correct a voided expense.', 409);
     }
@@ -350,6 +370,7 @@ export class ExpenseService {
     if (!isValidLogicalDate(newDate)) {
       throw new ExpenseDomainError('Expense date must be in valid YYYY-MM-DD format.', 400);
     }
+    if (this.boundary) await this.boundary.assertOperationalFinancialDate(newDate);
     const newMonth = newDate.slice(0, 7);
 
     if (typeof newTitle !== 'string' || !newTitle || newTitle.length > MAX_EXPENSE_TITLE_LENGTH) {
@@ -397,6 +418,7 @@ export class ExpenseService {
         participants: newParticipants,
         customAllocations: newCustomAllocations,
       });
+      await this.assertKnownSplitStudents({ paidByMemberId: newPaidByMemberId, allocations: splitResult.allocations });
       finalAllocations = splitResult.allocations;
       finalSplitType = splitResult.splitType;
       finalAmountPaise = splitResult.amountPaise;
@@ -515,6 +537,11 @@ export class ExpenseService {
 
     if (!REIMBURSEMENT_METHODS.includes(method)) {
       throw new ExpenseDomainError(`Invalid reimbursement method: ${method}`, 400);
+    }
+    if (this.boundary) {
+      const existingExpense = await this.repository.findExpenseById(expenseId);
+      if (!existingExpense) throw new ExpenseDomainError('Expense not found.', 404);
+      await this.boundary.assertOperationalFinancialDate(existingExpense.date);
     }
 
     if (reference && reference.length > MAX_REIMBURSEMENT_REF_LENGTH) {
@@ -729,7 +756,12 @@ export class ExpenseService {
     }
 
     const memberBreakdown = {};
-    for (const m of MEMBERS) {
+    const members = this.students
+      ? (await this.students.listAll()).map((student) => ({ id: student.studentId, name: student.displayName }))
+      : [...new Set(activeExpenses.flatMap((expense) => [
+        expense.paidByMemberId, ...(expense.allocations ?? []).map((allocation) => allocation.memberId),
+      ]))].map((id) => ({ id, name: id }));
+    for (const m of members) {
       memberBreakdown[m.id] = {
         memberId: m.id,
         memberName: m.name,
@@ -785,5 +817,5 @@ export class ExpenseService {
   }
 }
 
-export const defaultExpenseService = new ExpenseService();
+export const defaultExpenseService = new ExpenseService(defaultExpenseRepository, { students: studentResolver, boundary: financialBoundaryService });
 export const expenseService = defaultExpenseService;

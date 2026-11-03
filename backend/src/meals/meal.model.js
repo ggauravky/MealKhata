@@ -177,6 +177,9 @@ const mealDaySchema = new mongoose.Schema(
       required: false,
       enum: [3],
     },
+    financialClassification: { type: String, enum: ['historical', 'operational'], default: null },
+    cutoverClassificationSource: { type: String, enum: ['migration-manifest'], default: null },
+    importedFromLegacy: { type: Boolean, default: false, immutable: true },
     participantOrder: {
       type: [String],
       required: function requiredForV3() { return this.schemaVersion === 3; },

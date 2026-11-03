@@ -1,6 +1,6 @@
 import { Router } from 'express';
 
-import { requireAdminOrAbove, requireSuperAdmin } from '../middleware/authorize.js';
+import { requireAdminOrAbove, requireAuthenticated, requireSuperAdmin } from '../middleware/authorize.js';
 import { studentService } from '../students/student.service.js';
 import { studentResolver } from '../students/studentResolver.service.js';
 import { STUDENT_PROFILE_FIELDS } from '../students/student.constants.js';
@@ -100,6 +100,20 @@ export function createStudentRouter({
   resolver = studentResolver,
 } = {}) {
   const router = Router();
+
+  router.get('/roster', requireAuthenticated, async (_req, res, next) => {
+    try {
+      const students = await resolver.listAll();
+      return res.json({ success: true, data: students.map((student) => ({
+        studentId: student.studentId,
+        displayName: student.displayName,
+        status: student.status,
+        rosterOrder: student.rosterOrder,
+      })) });
+    } catch (error) {
+      return next(error);
+    }
+  });
 
   router.get('/', requireAdminOrAbove, async (_req, res, next) => {
     try {

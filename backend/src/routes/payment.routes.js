@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { ROLES, isAuthenticatedRole } from '../auth/permissions.js';
-import { MEMBER_IDS } from '../config/members.js';
+import { isSafeStudentId } from '../students/studentId.js';
 import { requireAuthenticated, requireSuperAdmin } from '../middleware/authorize.js';
 import { authorizeMemberResource } from '../middleware/memberAuthorization.js';
 import {
@@ -31,7 +31,7 @@ function validatePaymentInput({ requireIdempotency }) {
       return res.status(400).json({ success: false, message: 'Payment details are required.' });
     }
     if (!isValidLogicalMonth(body.month)) return res.status(400).json({ success: false, message: 'Invalid payment month.' });
-    if (!MEMBER_IDS.includes(body.memberId)) return res.status(400).json({ success: false, message: 'Invalid member.' });
+    if (!isSafeStudentId(body.memberId)) return res.status(400).json({ success: false, message: 'Invalid member.' });
     if (!isValidPaymentAmount(body.amountPaise)) return res.status(400).json({ success: false, message: 'Invalid payment amount.' });
     if (requireIdempotency && !isValidUuid(body.idempotencyKey)) {
       return res.status(400).json({ success: false, message: 'A valid idempotency key is required.' });
@@ -57,7 +57,7 @@ function validatePrepareInput(req, res, next) {
     return res.status(400).json({ success: false, message: 'Payment month and member are required.' });
   }
   if (!isValidLogicalMonth(body.month)) return res.status(400).json({ success: false, message: 'Invalid payment month.' });
-  if (!MEMBER_IDS.includes(body.memberId)) return res.status(400).json({ success: false, message: 'Invalid member.' });
+  if (!isSafeStudentId(body.memberId)) return res.status(400).json({ success: false, message: 'Invalid member.' });
   req.paymentInput = { month: body.month, memberId: body.memberId };
   return next();
 }
@@ -93,7 +93,9 @@ export function createPaymentRouter({
           });
         }
 
-        const data = await service.preparePayment(req.paymentInput);
+        const data = await service.preparePayment({ ...req.paymentInput,
+          actorRole: req.auth.role,
+          actorMemberId: req.auth.role === ROLES.MEMBER ? req.auth.memberId : null });
         res.json({ success: true, data });
       } catch (error) {
         next(error);

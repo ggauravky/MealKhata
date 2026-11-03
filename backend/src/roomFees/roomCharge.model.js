@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { MEMBER_IDS } from '../config/members.js';
+import { isSafeStudentId } from '../students/studentId.js';
 import {
   MAX_REASON_LENGTH,
   MAX_ROOM_FEE_PAISE,
@@ -55,7 +55,7 @@ export const roomChargeSchema = new mongoose.Schema(
     memberId: {
       type: String,
       required: true,
-      enum: MEMBER_IDS,
+      validate: isSafeStudentId,
     },
     roomId: {
       type: String,

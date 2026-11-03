@@ -43,13 +43,13 @@ describe('MealKhata 2.0: Other Expenses & Shared Spending (Phase 2)', () => {
       assert.equal(split.amountPaise, 30000);
       assert.equal(split.allocations.length, 3);
       assert.deepEqual(split.allocations, [
+        { memberId: 'devansh', amountPaise: 10000 },
         { memberId: 'gaurav', amountPaise: 10000 },
         { memberId: 'nikhil', amountPaise: 10000 },
-        { memberId: 'devansh', amountPaise: 10000 },
       ]);
       assert.deepEqual(split.reimbursementObligations, [
-        { fromMemberId: 'nikhil', toMemberId: 'gaurav', amountPaise: 10000 },
         { fromMemberId: 'devansh', toMemberId: 'gaurav', amountPaise: 10000 },
+        { fromMemberId: 'nikhil', toMemberId: 'gaurav', amountPaise: 10000 },
       ]);
       assert.equal(split.totalInitialReceivablePaise, 20000);
     });
@@ -66,9 +66,9 @@ describe('MealKhata 2.0: Other Expenses & Shared Spending (Phase 2)', () => {
       const sum = split.allocations.reduce((acc, a) => acc + a.amountPaise, 0);
       assert.equal(sum, 10000);
 
-      assert.equal(split.allocations.find((a) => a.memberId === 'gaurav').amountPaise, 3334);
+      assert.equal(split.allocations.find((a) => a.memberId === 'gaurav').amountPaise, 3333);
       assert.equal(split.allocations.find((a) => a.memberId === 'nikhil').amountPaise, 3333);
-      assert.equal(split.allocations.find((a) => a.memberId === 'devansh').amountPaise, 3333);
+      assert.equal(split.allocations.find((a) => a.memberId === 'devansh').amountPaise, 3334);
     });
 
     test('Scenario B: ₹180 samosas split between 2 members (nikhil and devansh, paid by nikhil)', () => {
@@ -81,8 +81,8 @@ describe('MealKhata 2.0: Other Expenses & Shared Spending (Phase 2)', () => {
 
       assert.equal(split.amountPaise, 18000);
       assert.deepEqual(split.allocations, [
-        { memberId: 'nikhil', amountPaise: 9000 },
         { memberId: 'devansh', amountPaise: 9000 },
+        { memberId: 'nikhil', amountPaise: 9000 },
       ]);
       assert.deepEqual(split.reimbursementObligations, [
         { fromMemberId: 'devansh', toMemberId: 'nikhil', amountPaise: 9000 },
@@ -177,7 +177,7 @@ describe('MealKhata 2.0: Other Expenses & Shared Spending (Phase 2)', () => {
         () =>
           calculateExpenseSplit({
             amountPaise: 30000,
-            paidByMemberId: 'unknown_user',
+            paidByMemberId: '$where',
             splitType: 'equal',
             participants: ['gaurav'],
           }),

@@ -54,6 +54,7 @@ export const paymentRepository = Object.freeze({
       await guardFinancialMutation({
         memberId: payment.memberId,
         effectiveMonth: payment.month,
+        allowPartialMonth: true,
         actorRole: payment.recordedByRole,
         session,
       });
@@ -77,6 +78,7 @@ export const paymentRepository = Object.freeze({
       await guardFinancialMutation({
         memberId: payment.memberId,
         effectiveMonth: payment.month,
+        allowPartialMonth: true,
         actorRole: voidedByRole,
         session,
       });

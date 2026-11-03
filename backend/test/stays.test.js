@@ -418,7 +418,7 @@ describe('MealKhata 2.0 — Phase 4: Complete Hostel Lifecycle, Security Deposit
         .set('Origin', ORIGIN)
         .set('Cookie', await cookieFor(ROLES.ADMIN))
         .send({
-          memberId: 'stranger',
+          memberId: '$where',
           joinedOn: '2026-07-15',
           initialRoomId: room204Id,
         });

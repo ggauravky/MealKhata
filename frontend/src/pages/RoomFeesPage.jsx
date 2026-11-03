@@ -14,12 +14,12 @@ import { Skeleton } from '../components/ui/skeleton.jsx';
 import { useAuth } from '../hooks/useAuth.js';
 import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
 import { usePwa } from '../hooks/usePwa.js';
+import { useOperationalStudents } from '../hooks/useOperationalStudents.js';
 import { useMyRoomFeeHistory, useMyRoomFees } from '../hooks/useRoomFees.js';
 import { useServerToday } from '../hooks/useServerToday.js';
 import { addLogicalMonths, formatLogicalMonth, isValidLogicalMonth } from '../lib/logicalMonth.js';
 
 import { getIndiaCurrentLogicalMonth } from '../lib/logicalDate.js';
-import { ROOMMATES } from '../lib/constants.js';
 
 export function RoomFeesPage() {
   useDocumentTitle('Room Fees');
@@ -37,12 +37,14 @@ export function RoomFeesPage() {
     (isValidLogicalMonth(queryMonth) ? queryMonth : currentLogicalMonth);
 
   const canAccessAdmin = auth.role === 'admin' || auth.role === 'superadmin';
+  const studentRoster = useOperationalStudents({ includeArchived: true, enabled: canAccessAdmin });
+  const roster = studentRoster.data;
   const requestedMemberId = searchParams.get('memberId');
-  const selectedMemberId = canAccessAdmin && ROOMMATES.some((member) => member.id === requestedMemberId)
-    ? requestedMemberId
-    : canAccessAdmin ? ROOMMATES[0].id : null;
-  const { loading: feeLoading, error: feeError, data: feeData, refresh: refreshFee } = useMyRoomFees(month, selectedMemberId);
-  const { loading: historyLoading, error: historyError, data: historyData, refresh: refreshHistory } = useMyRoomFeeHistory(selectedMemberId);
+  const selectedMemberId = canAccessAdmin && roster.some((member) => member.id === requestedMemberId)
+    ? requestedMemberId : null;
+  const enabled = !canAccessAdmin || Boolean(selectedMemberId);
+  const { loading: feeLoading, error: feeError, data: feeData, refresh: refreshFee } = useMyRoomFees(month, selectedMemberId, { enabled });
+  const { loading: historyLoading, error: historyError, data: historyData, refresh: refreshHistory } = useMyRoomFeeHistory(selectedMemberId, { enabled });
 
   const selectMember = (memberId) => {
     const next = new URLSearchParams(searchParams);
@@ -118,15 +120,21 @@ export function RoomFeesPage() {
             <label htmlFor="roomFeeMember" className="text-xs font-semibold text-slate-700 dark:text-slate-300">Viewing member</label>
             <select
               id="roomFeeMember"
-              value={selectedMemberId}
+              value={selectedMemberId ?? ''}
               onChange={(event) => selectMember(event.target.value)}
               className="h-8 rounded-md border border-slate-200 bg-white px-3 text-xs dark:border-slate-800 dark:bg-slate-950"
             >
-              {ROOMMATES.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
+              <option value="">Select a student</option>
+              {roster.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
             </select>
-            <span className="text-[11px] text-slate-500">Stable ID: {selectedMemberId}</span>
+            {selectedMemberId && <span className="text-[11px] text-slate-500">Stable ID: {selectedMemberId}</span>}
           </CardContent>
         </Card>
+      )}
+
+      {canAccessAdmin && studentRoster.error && <ErrorState title="Students unavailable" message={studentRoster.error} />}
+      {canAccessAdmin && !studentRoster.loading && !selectedMemberId && !studentRoster.error && (
+        <p className="text-sm text-slate-500">Select a student to view room fees.</p>
       )}
 
       {/* Month Selector Card */}

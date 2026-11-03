@@ -19,6 +19,7 @@ import { RoomFeeOverviewCard } from './RoomFeeOverviewCard.jsx';
 import { RoomPaymentInstructionsCard } from './RoomPaymentInstructionsCard.jsx';
 import { RoomFeeMonthDetailsDialog } from './RoomFeeMonthDetailsDialog.jsx';
 import { useAuth } from '../../hooks/useAuth.js';
+import { useOperationalStudents } from '../../hooks/useOperationalStudents.js';
 import { usePwa } from '../../hooks/usePwa.js';
 import {
   useAdminRoomFeeSummary,
@@ -26,7 +27,6 @@ import {
   useMyRoomFees,
   useRoomPaymentSettings,
 } from '../../hooks/useRoomFees.js';
-import { ROOMMATES } from '../../lib/constants.js';
 import { formatLogicalMonth } from '../../lib/logicalMonth.js';
 import { formatPaise } from '../../lib/money.js';
 
@@ -45,12 +45,13 @@ export function RoomFeesPaymentTab({ month }) {
   const auth = useAuth();
   const { isOnline } = usePwa();
   const canAccessAdmin = auth.role === 'admin' || auth.role === 'superadmin';
+  const studentRoster = useOperationalStudents({ includeArchived: true, enabled: canAccessAdmin });
 
   // Member data
   const { loading: memberLoading, error: memberError, data: memberData, refresh: refreshMember } = useMyRoomFees(
     auth.role === 'member' ? month : null,
   );
-  const { data: memberHistoryData } = useMyRoomFeeHistory();
+  const { data: memberHistoryData } = useMyRoomFeeHistory(null, { enabled: auth.role === 'member' });
 
   // Admin data
   const { loading: adminLoading, error: adminError, data: adminSummary, refresh: refreshAdmin } = useAdminRoomFeeSummary(
@@ -183,7 +184,7 @@ export function RoomFeesPaymentTab({ month }) {
             ) : (
               <div className="divide-y divide-slate-100 dark:divide-slate-800">
                 {payments.map((p) => {
-                  const roommate = ROOMMATES.find((m) => m.id === p.memberId);
+                  const roommate = studentRoster.data.find((m) => m.id === p.memberId);
                   const isVoided = p.status === 'voided';
                   return (
                     <div key={p.roomPaymentId} className={`flex items-center justify-between py-3 ${isVoided ? 'opacity-50' : ''}`}>

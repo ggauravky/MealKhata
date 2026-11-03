@@ -512,6 +512,15 @@ describe('MealKhata 2.0: Room Fees & Management Domain (Phase 1)', () => {
   });
 
   describe('Role-Based Authorization & Privacy Isolation', () => {
+    test('Admin with a linked student identity still selects the intended student explicitly', async () => {
+      const cookie = await cookieFor(ROLES.ADMIN, 'gaurav');
+      const missing = await request(testApp).get('/api/room-fees/me/history').set('Cookie', cookie);
+      assert.equal(missing.status, 400);
+      const selected = await request(testApp).get('/api/room-fees/me/history?memberId=nikhil').set('Cookie', cookie);
+      assert.equal(selected.status, 200);
+      assert.equal(selected.body.data.memberId, 'nikhil');
+    });
+
     test('Scenario G: Member can only view own room fees, not other members (returns 403)', async () => {
       // Nikhil requests Gaurav's room fee profile
       const res = await request(testApp)

@@ -9,7 +9,7 @@ import { financialOverviewService } from '../finance/financialOverview.service.j
 import { depositService } from './deposit.service.js';
 import { roomFeeService } from '../roomFees/roomFee.service.js';
 import { getPreviousLogicalMonth, isValidLogicalMonth } from '../utils/month.js';
-import { MEMBERS } from '../config/members.js';
+import { studentResolver } from '../students/studentResolver.service.js';
 import { STAY_STATUSES } from './stay.constants.js';
 
 import { createStayAttributionService, defaultStayAttributionService } from './stayAttribution.service.js';
@@ -38,6 +38,7 @@ export function createLifetimeReportService({
   deposits = depositService,
   roomFees = roomFeeService,
   stayAttribution = null,
+  students = null,
 } = {}) {
   const attributionService =
     stayAttribution ||
@@ -54,10 +55,8 @@ export function createLifetimeReportService({
         throw new Error('Hostel stay not found');
       }
 
-      const member = MEMBERS.find((m) => m.id === stay.memberId) || {
-        id: stay.memberId,
-        name: stay.memberId,
-      };
+      const student = students ? await students.assertKnown(stay.memberId) : null;
+      const member = { id: stay.memberId, name: student?.displayName ?? stay.memberId };
 
       const startMonth = stay.joinedOn.slice(0, 7);
       const currentMonth = getLogicalDateInTimeZone(new Date(), 'Asia/Kolkata').slice(0, 7);
@@ -160,4 +159,4 @@ export function createLifetimeReportService({
   };
 }
 
-export const lifetimeReportService = createLifetimeReportService();
+export const lifetimeReportService = createLifetimeReportService({ students: studentResolver });

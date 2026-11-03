@@ -1,12 +1,12 @@
 import mongoose from 'mongoose';
-import { MEMBER_IDS } from '../config/members.js';
+import { isSafeStudentId } from '../students/studentId.js';
 import { DEPOSIT_METHODS, MAX_DEPOSIT_PAISE, MAX_NOTE_LENGTH, MAX_REFERENCE_LENGTH } from './stay.constants.js';
 
 const allocationSchema = new mongoose.Schema(
   {
     allocationId: { type: String, required: true },
     category: { type: String, required: true, enum: ['UNALLOCATED_CREDIT'] },
-    memberId: { type: String, required: true, enum: MEMBER_IDS },
+    memberId: { type: String, required: true, validate: isSafeStudentId },
     targetAccount: { type: String, required: true, trim: true, maxlength: 120 },
     amountPaise: { type: Number, required: true, min: 1, max: MAX_DEPOSIT_PAISE },
     destinationRecordId: { type: String, required: true, trim: true },
@@ -20,7 +20,7 @@ const paymentReclassificationSchema = new mongoose.Schema(
     sourceDepositTransactionId: { type: String, required: true, unique: true, trim: true },
     sourceDepositAccountId: { type: String, required: true, trim: true, index: true },
     sourceStayId: { type: String, required: true, trim: true, index: true },
-    memberId: { type: String, required: true, enum: MEMBER_IDS, index: true },
+    memberId: { type: String, required: true, validate: isSafeStudentId, index: true },
     amountPaise: { type: Number, required: true, min: 1, max: MAX_DEPOSIT_PAISE },
     paymentDate: { type: Date, required: true },
     paymentMethod: { type: String, required: true, enum: Object.values(DEPOSIT_METHODS) },
@@ -56,7 +56,7 @@ const unallocatedCreditSchema = new mongoose.Schema(
     reclassificationId: { type: String, required: true, trim: true, index: true },
     allocationId: { type: String, required: true, unique: true, trim: true },
     sourceDepositTransactionId: { type: String, required: true, trim: true, index: true },
-    memberId: { type: String, required: true, enum: MEMBER_IDS, index: true },
+    memberId: { type: String, required: true, validate: isSafeStudentId, index: true },
     targetAccount: { type: String, required: true, trim: true, maxlength: 120 },
     amountPaise: { type: Number, required: true, min: 1, max: MAX_DEPOSIT_PAISE },
     allocatedAmountPaise: { type: Number, required: true, default: 0, min: 0, max: MAX_DEPOSIT_PAISE },
@@ -78,7 +78,7 @@ const creditAllocationSchema = new mongoose.Schema(
     creditId: { type: String, required: true, trim: true, index: true },
     reclassificationId: { type: String, required: true, trim: true, index: true },
     sourceDepositTransactionId: { type: String, required: true, trim: true, index: true },
-    memberId: { type: String, required: true, enum: MEMBER_IDS, index: true },
+    memberId: { type: String, required: true, validate: isSafeStudentId, index: true },
     destinationType: {
       type: String,
       required: true,

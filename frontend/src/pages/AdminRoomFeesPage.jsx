@@ -10,7 +10,7 @@ import {
   ShieldCheck,
   Users,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/common/PageHeader.jsx';
 import { AdminFeePlansTab } from '../components/roomFees/admin/AdminFeePlansTab.jsx';
@@ -21,9 +21,11 @@ import { AdminRoomsTab } from '../components/roomFees/admin/AdminRoomsTab.jsx';
 import { AdminSettingsTab } from '../components/roomFees/admin/AdminSettingsTab.jsx';
 import { Button } from '../components/ui/button.jsx';
 import { Card, CardHeader } from '../components/ui/card.jsx';
+import { ErrorState } from '../components/ui/ErrorState.jsx';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs.jsx';
 import { useAuth } from '../hooks/useAuth.js';
 import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
+import { useOperationalStudents } from '../hooks/useOperationalStudents.js';
 import {
   useAdminRoomFeeSummary,
   useMemberFeePlans,
@@ -39,6 +41,9 @@ const VALID_TABS = ['overview', 'rooms', 'plans', 'charges', 'payments', 'settin
 export function AdminRoomFeesPage() {
   useDocumentTitle('Room Fee Administration');
   const auth = useAuth();
+  const studentRoster = useOperationalStudents({ includeArchived: true });
+  const roster = studentRoster.data;
+  const studentIds = useMemo(() => roster.map((student) => student.id), [roster]);
   const serverToday = useServerToday();
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -81,7 +86,7 @@ export function AdminRoomFeesPage() {
     error: plansError,
     memberErrors: plansMemberErrors,
     refresh: refreshPlans,
-  } = useMemberFeePlans(['gaurav', 'nikhil', 'devansh'], month);
+  } = useMemberFeePlans(studentIds, month);
 
   const {
     settings,
@@ -99,6 +104,7 @@ export function AdminRoomFeesPage() {
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
+      {studentRoster.error && <ErrorState title="Students unavailable" message={studentRoster.error} />}
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <PageHeader
@@ -175,6 +181,7 @@ export function AdminRoomFeesPage() {
 
         <TabsContent value="overview">
           <AdminOverviewTab
+            roster={roster}
             summary={summary}
             month={month}
             onSwitchTab={setActiveTab}
@@ -186,6 +193,7 @@ export function AdminRoomFeesPage() {
 
         <TabsContent value="rooms">
           <AdminRoomsTab
+            roster={roster.filter((student) => student.status === 'ACTIVE')}
             rooms={rooms}
             onRefresh={handleRefreshAll}
             role={auth.role}
@@ -196,6 +204,7 @@ export function AdminRoomFeesPage() {
 
         <TabsContent value="plans">
           <AdminFeePlansTab
+            roster={roster.filter((student) => student.status === 'ACTIVE')}
             plans={plans}
             rooms={rooms}
             onRefresh={handleRefreshAll}
@@ -209,6 +218,7 @@ export function AdminRoomFeesPage() {
 
         <TabsContent value="charges">
           <AdminMonthlyChargesTab
+            roster={roster}
             month={month}
             summary={summary}
             onRefresh={handleRefreshAll}
@@ -220,6 +230,7 @@ export function AdminRoomFeesPage() {
 
         <TabsContent value="payments">
           <AdminPaymentsTab
+            roster={roster}
             month={month}
             summary={summary}
             onRefresh={handleRefreshAll}

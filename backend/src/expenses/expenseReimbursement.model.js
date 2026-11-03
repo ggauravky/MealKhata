@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { isSafeStudentId } from '../students/studentId.js';
 import { REIMBURSEMENT_METHODS, REIMBURSEMENT_STATUSES } from './expense.constants.js';
 
 const expenseReimbursementSchema = new mongoose.Schema(
@@ -27,12 +28,14 @@ const expenseReimbursementSchema = new mongoose.Schema(
       required: true,
       index: true,
       trim: true,
+      validate: isSafeStudentId,
     },
     toMemberId: {
       type: String,
       required: true,
       index: true,
       trim: true,
+      validate: isSafeStudentId,
     },
     amountPaise: {
       type: Number,
@@ -106,6 +109,7 @@ const expenseReimbursementSchema = new mongoose.Schema(
   {
     timestamps: true,
     collection: 'expense_reimbursements',
+    strict: 'throw',
   },
 );
 

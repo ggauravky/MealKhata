@@ -12,7 +12,7 @@ import {
 import { Input } from '../ui/input.jsx';
 import { Label } from '../ui/label.jsx';
 import { api } from '../../lib/api.js';
-import { ROOMMATES } from '../../lib/constants.js';
+import { useOperationalStudents } from '../../hooks/useOperationalStudents.js';
 import { formatPaise, paymentRupeesToPaise } from '../../lib/money.js';
 
 export function RecordReimbursementDialog({
@@ -22,6 +22,7 @@ export function RecordReimbursementDialog({
   initialFromMemberId,
   onSuccess,
 }) {
+  const roster = useOperationalStudents({ includeArchived: true, enabled: open }).data;
   const [fromMemberId, setFromMemberId] = useState('');
   const [amountRupees, setAmountRupees] = useState('');
   const [method, setMethod] = useState('upi');
@@ -31,7 +32,7 @@ export function RecordReimbursementDialog({
 
   const payerId = expense?.paidByMemberId;
   const payerName = payerId
-    ? ROOMMATES.find((m) => m.id === payerId)?.name || payerId
+    ? roster.find((m) => m.id === payerId)?.name || payerId
     : '';
 
   // Filter members who owe on this expense
@@ -39,7 +40,7 @@ export function RecordReimbursementDialog({
     .filter((s) => !s.isPayer && s.remainingOwedPaise > 0)
     .map((s) => ({
       ...s,
-      name: ROOMMATES.find((m) => m.id === s.memberId)?.name || s.memberId,
+      name: roster.find((m) => m.id === s.memberId)?.name || s.memberId,
     }));
 
   useEffect(() => {

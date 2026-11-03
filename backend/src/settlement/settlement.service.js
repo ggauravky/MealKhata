@@ -7,12 +7,14 @@ import { monthlySettlementRepository } from './monthlySettlement.repository.js';
 import { serializeSettlement, serializeSettlementHistory } from './monthlySettlement.serializer.js';
 import { studentResolver } from '../students/studentResolver.service.js';
 import { MEMBER_NAMES } from '../config/members.js';
+import { financialBoundaryService } from '../finance/financialBoundary.service.js';
 
 export function createSettlementService({
   reports = reportService,
   summaries = paymentSummaryService,
   repository = monthlySettlementRepository,
   students = null,
+  boundary = null,
   now = () => new Date(),
 } = {}) {
   return Object.freeze({
@@ -57,6 +59,13 @@ export function createSettlementService({
       ]);
 
       const blockers = [];
+      if (boundary) {
+        const settings = await boundary.getFinancialBoundary();
+        if (!settings.financialStartDate) blockers.push({ type: 'boundary_unset', message: 'Financial start date is not configured.' });
+        else if ((await boundary.getMonthScope(month)).kind === 'historical') {
+          blockers.push({ type: 'historical_month', message: 'Historical months cannot be closed as operational settlements.' });
+        }
+      }
 
       if (report.periodType === 'future') {
         blockers.push({
@@ -123,6 +132,7 @@ export function createSettlementService({
       if (!isValidLogicalMonth(month)) {
         throw new HttpError(400, 'Month must be a valid calendar month in YYYY-MM format.');
       }
+      if (boundary) await boundary.assertOperationalMonth(month);
 
       const isClosed = await this.isMonthClosed(month);
       if (isClosed) {
@@ -142,13 +152,13 @@ export function createSettlementService({
 
       const members = {};
       const studentIds = [...new Set([
-        ...Object.keys(report.toDate?.members ?? {}),
+        ...Object.keys(report.operationalToDate?.members ?? report.toDate?.members ?? {}),
         ...Object.keys(summary.members ?? {}),
       ])];
       const knownStudents = students ? await students.listAll() : [];
       const studentNames = Object.fromEntries(knownStudents.map((student) => [student.studentId, student.displayName]));
       for (const memberId of studentIds) {
-        const toDateMember = report.toDate?.members[memberId] || { morningCount: 0, nightCount: 0, totalMeals: 0, amountPaise: 0 };
+        const toDateMember = (report.operationalToDate ?? report.toDate)?.members[memberId] || { morningCount: 0, nightCount: 0, totalMeals: 0, amountPaise: 0 };
         const summaryMember = summary.members[memberId] || { paidAmountPaise: 0 };
 
         const morningParticipation = toDateMember.morningParticipationCount ?? toDateMember.morningCount ?? 0;
@@ -174,7 +184,7 @@ export function createSettlementService({
         };
       }
 
-      const toDateRoom = report.toDate?.room || { morningCount: 0, nightCount: 0, totalMeals: 0, amountPaise: 0 };
+      const toDateRoom = (report.operationalToDate ?? report.toDate)?.room || { morningCount: 0, nightCount: 0, totalMeals: 0, amountPaise: 0 };
       const roomMorningPlates = toDateRoom.morningPhysicalPlates ?? toDateRoom.morningCount ?? 0;
       const roomNightPlates = toDateRoom.nightPhysicalPlates ?? toDateRoom.nightCount ?? 0;
       const roomTotalPlates = toDateRoom.totalPhysicalPlates ?? toDateRoom.totalPlates ?? (roomMorningPlates + roomNightPlates);
@@ -258,4 +268,4 @@ export function createSettlementService({
   });
 }
 
-export const settlementService = createSettlementService({ students: studentResolver });
+export const settlementService = createSettlementService({ students: studentResolver, boundary: financialBoundaryService });

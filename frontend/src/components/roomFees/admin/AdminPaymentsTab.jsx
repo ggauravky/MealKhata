@@ -14,7 +14,6 @@ import { Input } from '../../ui/input.jsx';
 import { Label } from '../../ui/label.jsx';
 import { Select } from '../../ui/select.jsx';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../ui/table.jsx';
-import { ROOMMATES } from '../../../lib/constants.js';
 import { formatLogicalMonth } from '../../../lib/logicalMonth.js';
 import { formatPaise, rupeesToPaise } from '../../../lib/money.js';
 import { api } from '../../../lib/api.js';
@@ -42,7 +41,7 @@ function formatPaymentTime(value) {
   }).format(new Date(value));
 }
 
-export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
+export function AdminPaymentsTab({ month, summary, onRefresh, role, roster = [] }) {
   const [recordDialogOpen, setRecordDialogOpen] = useState(false);
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
   const [voidDialogOpen, setVoidDialogOpen] = useState(false);
@@ -51,7 +50,7 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
   const { payments, loading: paymentsLoading, error: paymentsError, refresh: refreshPayments } = useRoomPayments(month);
 
   // Record payment form
-  const [memberId, setMemberId] = useState('nikhil');
+  const [memberId, setMemberId] = useState('');
   const [amountRupees, setAmountRupees] = useState('');
   const [method, setMethod] = useState('upi');
   const [reference, setReference] = useState('');
@@ -74,7 +73,7 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
   const isFullyPaid = isChargeEligible && remainingAmountPaise === 0;
 
   const openRecordDialog = () => {
-    const initialMember = 'nikhil';
+    const initialMember = membersList.find((item) => item.charge?.remainingAmountPaise > 0)?.memberId ?? '';
     setMemberId(initialMember);
     const mSummary = membersList.find((m) => m.memberId === initialMember);
     const rem = mSummary?.charge?.remainingAmountPaise ?? 0;
@@ -183,7 +182,7 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
     }
   };
 
-  const selectedMemberName = ROOMMATES.find((m) => m.id === memberId)?.name || memberId;
+  const selectedMemberName = roster.find((m) => m.id === memberId)?.name || memberId;
 
   return (
     <div className="space-y-6">
@@ -251,7 +250,7 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
               </TableHeader>
               <TableBody>
                 {payments.map((payment) => {
-                  const roommate = ROOMMATES.find((m) => m.id === payment.memberId);
+                  const roommate = roster.find((m) => m.id === payment.memberId);
                   const isVoided = payment.status === 'voided';
 
                   return (
@@ -345,7 +344,8 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
                 value={memberId}
                 onChange={(e) => handleMemberChange(e.target.value)}
               >
-                {ROOMMATES.map((m) => (
+                <option value="">Select a student</option>
+                {roster.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name}
                   </option>
@@ -514,7 +514,7 @@ export function AdminPaymentsTab({ month, summary, onRefresh, role }) {
 
             {selectedPayment && (
               <div className="p-3 bg-slate-50 rounded border text-xs">
-                <div>Resident: <strong>{ROOMMATES.find((m) => m.id === selectedPayment.memberId)?.name || selectedPayment.memberId}</strong></div>
+                <div>Resident: <strong>{roster.find((m) => m.id === selectedPayment.memberId)?.name || selectedPayment.memberId}</strong></div>
                 <div>Amount: <strong>{formatPaise(selectedPayment.amountPaise)}</strong></div>
                 <div>Recorded: {formatPaymentTime(selectedPayment.recordedAt)}</div>
               </div>

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { ROLES, roleMeetsRequirement } from '../auth/permissions.js';
-import { MEMBER_IDS } from '../config/members.js';
+import { isSafeStudentId } from '../students/studentId.js';
 import { requireAdminOrAbove, requireAuthenticated, requireSuperAdmin } from '../middleware/authorize.js';
 import { stayService } from '../stays/stay.service.js';
 import { depositService } from '../stays/deposit.service.js';
@@ -105,7 +105,7 @@ export function createStayRouter({
         });
       }
 
-      if (!targetMemberId || !MEMBER_IDS.includes(targetMemberId)) {
+      if (!targetMemberId || !isSafeStudentId(targetMemberId)) {
         return res.status(403).json({ success: false, message: 'Valid member identity required.' });
       }
 
@@ -135,7 +135,7 @@ export function createStayRouter({
         });
       }
 
-      if (!targetMemberId || !MEMBER_IDS.includes(targetMemberId)) {
+      if (!targetMemberId || !isSafeStudentId(targetMemberId)) {
         return res.status(403).json({ success: false, message: 'Valid member identity required.' });
       }
 
@@ -153,7 +153,7 @@ export function createStayRouter({
         return res.status(400).json({ success: false, message: 'Select a member before requesting checkout.' });
       }
 
-      if (!targetMemberId || !MEMBER_IDS.includes(targetMemberId)) {
+      if (!targetMemberId || !isSafeStudentId(targetMemberId)) {
         return res.status(403).json({ success: false, message: 'Valid member identity required.' });
       }
 
@@ -186,7 +186,7 @@ export function createStayRouter({
         return res.status(400).json({ success: false, message: 'Select a member before cancelling checkout.' });
       }
 
-      if (!targetMemberId || !MEMBER_IDS.includes(targetMemberId)) {
+      if (!targetMemberId || !isSafeStudentId(targetMemberId)) {
         return res.status(403).json({ success: false, message: 'Valid member identity required.' });
       }
 

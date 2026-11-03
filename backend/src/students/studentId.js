@@ -22,6 +22,10 @@ export function assertSafeStudentId(value) {
   return value;
 }
 
+export function isSafeStudentId(value) {
+  try { assertSafeStudentId(value); return true; } catch { return false; }
+}
+
 export function generateStudentId() {
   return `student_${randomUUID().replaceAll('-', '')}`;
 }

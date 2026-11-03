@@ -2,11 +2,10 @@ import { AlertCircle, BedDouble, CheckCircle2, CircleDollarSign, Clock, Users, W
 import { Badge } from '../../ui/badge.jsx';
 import { Card, CardContent, CardHeader, CardTitle } from '../../ui/card.jsx';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../ui/table.jsx';
-import { ROOMMATES } from '../../../lib/constants.js';
 import { formatLogicalMonth } from '../../../lib/logicalMonth.js';
 import { formatPaise } from '../../../lib/money.js';
 
-export function AdminOverviewTab({ summary, month, onSwitchTab, loading = false, error = '', onRefresh }) {
+export function AdminOverviewTab({ summary, month, onSwitchTab, loading = false, error = '', onRefresh, roster = [] }) {
   if (loading) {
     return (
       <Card className="border-slate-200 dark:border-slate-800 p-8 text-center">
@@ -132,7 +131,7 @@ export function AdminOverviewTab({ summary, month, onSwitchTab, loading = false,
               </TableRow>
             </TableHeader>
             <TableBody>
-              {ROOMMATES.map((roommate) => {
+              {roster.map((roommate) => {
                 const memberData = memberMap.get(roommate.id);
                 const charge = memberData?.charge;
                 const hasCharge = Boolean(charge && charge.status !== 'cancelled');

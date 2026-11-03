@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { isSafeStudentId } from '../students/studentId.js';
 import { EXPENSE_CATEGORIES, EXPENSE_STATUSES, SPLIT_TYPES } from './expense.constants.js';
 
 const expenseAllocationSchema = new mongoose.Schema(
@@ -7,6 +8,7 @@ const expenseAllocationSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
+      validate: isSafeStudentId,
     },
     amountPaise: {
       type: Number,
@@ -14,7 +16,7 @@ const expenseAllocationSchema = new mongoose.Schema(
       min: 1,
     },
   },
-  { _id: false },
+  { _id: false, strict: 'throw' },
 );
 
 const expenseCorrectionSchema = new mongoose.Schema(
@@ -45,7 +47,7 @@ const expenseCorrectionSchema = new mongoose.Schema(
       date: { type: String, required: true },
       month: { type: String, required: true },
       amountPaise: { type: Number, required: true },
-      paidByMemberId: { type: String, required: true },
+      paidByMemberId: { type: String, required: true, validate: isSafeStudentId },
       splitType: { type: String, required: true },
       allocations: [expenseAllocationSchema],
       description: { type: String, default: '' },
@@ -56,7 +58,7 @@ const expenseCorrectionSchema = new mongoose.Schema(
       date: { type: String, default: null },
       month: { type: String, default: null },
       amountPaise: { type: Number, default: null },
-      paidByMemberId: { type: String, default: null },
+      paidByMemberId: { type: String, default: null, validate: { validator: (value) => value == null || isSafeStudentId(value) } },
       splitType: { type: String, default: null },
       allocations: [expenseAllocationSchema],
       description: { type: String, default: '' },
@@ -66,7 +68,7 @@ const expenseCorrectionSchema = new mongoose.Schema(
       default: null,
     },
   },
-  { _id: false },
+  { _id: false, strict: 'throw' },
 );
 
 const expenseSchema = new mongoose.Schema(
@@ -118,6 +120,7 @@ const expenseSchema = new mongoose.Schema(
       required: true,
       trim: true,
       index: true,
+      validate: isSafeStudentId,
     },
     splitType: {
       type: String,
@@ -158,6 +161,7 @@ const expenseSchema = new mongoose.Schema(
       type: String,
       default: null,
       trim: true,
+      validate: { validator: (value) => value == null || isSafeStudentId(value) },
     },
     voidedAt: {
       type: Date,
@@ -185,6 +189,7 @@ const expenseSchema = new mongoose.Schema(
   {
     timestamps: true,
     collection: 'expenses',
+    strict: 'throw',
   },
 );
 

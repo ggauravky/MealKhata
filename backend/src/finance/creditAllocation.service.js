@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { MEMBER_IDS } from '../config/members.js';
+import { isSafeStudentId } from '../students/studentId.js';
+import { studentResolver } from '../students/studentResolver.service.js';
 import { HttpError } from '../utils/HttpError.js';
 import { isValidLogicalMonth } from '../utils/month.js';
 import { financialOverviewService } from './financialOverview.service.js';
@@ -61,6 +62,7 @@ function validateRequest(request, actorRole) {
 export function createCreditAllocationService({
   repository = creditAllocationRepository,
   overview = financialOverviewService,
+  students = null,
 } = {}) {
   async function loadMessSnapshot(credit, request, actorRole) {
     if (request.destinationType !== 'MESS') return null;
@@ -88,7 +90,8 @@ export function createCreditAllocationService({
   return Object.freeze({
     async listCredits({ memberId = null, status = null, actorRole }) {
       if (actorRole !== 'superadmin') throw new HttpError(403, 'Only Super Admin can review unallocated credits.');
-      if (memberId && !MEMBER_IDS.includes(memberId)) throw new HttpError(400, 'Invalid member ID.');
+      if (memberId && !isSafeStudentId(memberId)) throw new HttpError(400, 'Invalid member ID.');
+      if (memberId && students) await students.assertKnown(memberId);
       const credits = await repository.listCredits({ memberId, status });
       return Promise.all(credits.map(async (credit) => ({
         ...credit,
@@ -228,4 +231,4 @@ export function createCreditAllocationService({
   });
 }
 
-export const creditAllocationService = createCreditAllocationService();
+export const creditAllocationService = createCreditAllocationService({ students: studentResolver });

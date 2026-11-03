@@ -1,7 +1,5 @@
-import { MEMBERS } from '../config/members.js';
+import { isSafeStudentId } from '../students/studentId.js';
 import { isSafeIntegerPaise, SPLIT_TYPES } from './expense.constants.js';
-
-const VALID_MEMBER_IDS = new Set(MEMBERS.map((m) => m.id));
 
 export class ExpenseSplitError extends Error {
   constructor(message, statusCode = 400) {
@@ -44,7 +42,7 @@ export function calculateExpenseSplit({
     throw new ExpenseSplitError('Expense amount must be a positive integer in paise.', 400);
   }
 
-  if (!VALID_MEMBER_IDS.has(paidByMemberId)) {
+  if (!isSafeStudentId(paidByMemberId)) {
     throw new ExpenseSplitError(`Invalid merchant payer member ID: ${paidByMemberId}`, 400);
   }
 
@@ -59,7 +57,7 @@ export function calculateExpenseSplit({
       throw new ExpenseSplitError('Personal expense requires exactly one beneficiary.', 400);
     }
     const targetMemberId = participants[0];
-    if (!VALID_MEMBER_IDS.has(targetMemberId)) {
+    if (!isSafeStudentId(targetMemberId)) {
       throw new ExpenseSplitError(`Invalid beneficiary member ID: ${targetMemberId}`, 400);
     }
     allocations = [{ memberId: targetMemberId, amountPaise }];
@@ -73,13 +71,12 @@ export function calculateExpenseSplit({
     }
 
     for (const id of participants) {
-      if (!VALID_MEMBER_IDS.has(id)) {
+      if (!isSafeStudentId(id)) {
         throw new ExpenseSplitError(`Invalid participant member ID: ${id}`, 400);
       }
     }
 
-    // Sort participants in canonical order (matching MEMBERS)
-    const sorted = MEMBERS.filter((m) => participants.includes(m.id)).map((m) => m.id);
+    const sorted = [...participants].sort();
 
     const count = sorted.length;
     const baseShare = Math.floor(amountPaise / count);
@@ -98,7 +95,7 @@ export function calculateExpenseSplit({
     let sum = 0;
 
     for (const alloc of customAllocations) {
-      if (!alloc || !VALID_MEMBER_IDS.has(alloc.memberId)) {
+      if (!alloc || !isSafeStudentId(alloc.memberId)) {
         throw new ExpenseSplitError(`Invalid member ID in custom allocation: ${alloc?.memberId}`, 400);
       }
       if (seenMembers.has(alloc.memberId)) {
@@ -131,11 +128,7 @@ export function calculateExpenseSplit({
       }
     }
 
-    // Order canonical
-    allocations = MEMBERS.filter((m) => seenMembers.has(m.id)).map((m) => ({
-      memberId: m.id,
-      amountPaise: customAllocations.find((a) => a.memberId === m.id).amountPaise,
-    }));
+    allocations = [...customAllocations].sort((left, right) => left.memberId.localeCompare(right.memberId));
   }
 
   // Exact Sum Invariant Check

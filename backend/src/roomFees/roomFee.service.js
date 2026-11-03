@@ -1,6 +1,8 @@
 import mongoose from 'mongoose';
 import { createHash, randomUUID } from 'node:crypto';
-import { MEMBER_IDS, MEMBERS } from '../config/members.js';
+import { isSafeStudentId } from '../students/studentId.js';
+import { studentResolver } from '../students/studentResolver.service.js';
+import { financialBoundaryService } from '../finance/financialBoundary.service.js';
 import { HttpError } from '../utils/HttpError.js';
 import { isValidLogicalMonth, getPreviousLogicalMonth, compareLogicalMonths, getClampedDueDate, lastDateOfMonth } from '../utils/month.js';
 import { getLogicalDateInTimeZone, getPreviousLogicalDate, isValidLogicalDate } from '../utils/date.js';
@@ -122,9 +124,21 @@ import {
 
 export function createRoomFeeService({
   repository,
+  students = null,
+  boundary = null,
   timezone = 'Asia/Kolkata',
   now = () => new Date(),
 }) {
+  const getMembers = async () => {
+    if (students) return (await students.listAll()).map((student) => ({ id: student.studentId, name: student.displayName }));
+    const assignments = await repository.findAllAssignments?.() ?? [];
+    return [...new Set(assignments.map((assignment) => assignment.memberId))]
+      .filter(isSafeStudentId).sort().map((id) => ({ id, name: id }));
+  };
+  const assertKnownMember = async (memberId) => {
+    if (!isSafeStudentId(memberId)) throw new HttpError(400, 'Invalid member ID.');
+    if (students) await students.assertKnown(memberId);
+  };
   function getCurrentMonth() {
     return getLogicalDateInTimeZone(now(), timezone).slice(0, 7);
   }
@@ -133,7 +147,7 @@ export function createRoomFeeService({
     if (actorRole !== 'superadmin') {
       throw new HttpError(403, 'Only Super Admin can reconcile Fee Plans.');
     }
-    if (!MEMBER_IDS.includes(memberId)) {
+    if (!isSafeStudentId(memberId)) {
       throw new HttpError(400, 'Invalid member ID.');
     }
     if (typeof reason !== 'string' || !reason.trim() || reason.trim().length > MAX_REASON_LENGTH) {
@@ -453,8 +467,12 @@ export function createRoomFeeService({
         throw new HttpError(403, 'Permission denied to assign rooms for this period.');
       }
 
-      if (!MEMBER_IDS.includes(memberId)) {
+      if (!isSafeStudentId(memberId)) {
         throw new HttpError(400, 'Invalid member ID.');
+      }
+      await assertKnownMember(memberId);
+      if (boundary && effectiveFromMonth) {
+        await boundary.assertOperationalFinancialDate(effectiveFromDate ?? `${effectiveFromMonth}-01`);
       }
 
       if (!isValidLogicalMonth(effectiveFromMonth)) {
@@ -586,7 +604,7 @@ export function createRoomFeeService({
     },
 
     async getAssignmentsForMember(memberId) {
-      if (!MEMBER_IDS.includes(memberId)) {
+      if (!isSafeStudentId(memberId)) {
         throw new HttpError(400, 'Invalid member ID.');
       }
       const assignments = await repository.findAssignmentsForMember(memberId);
@@ -664,7 +682,7 @@ export function createRoomFeeService({
       if (actorRole !== 'superadmin') {
         throw new HttpError(403, 'Only Super Admin can correct admission room artifacts.');
       }
-      if (!MEMBER_IDS.includes(memberId) || !isValidLogicalDate(effectiveFromDate)) {
+      if (!isSafeStudentId(memberId) || !isValidLogicalDate(effectiveFromDate)) {
         throw new HttpError(400, 'A valid member and admission date are required.');
       }
       if (!roomId || !roomId.trim()) {
@@ -774,7 +792,7 @@ export function createRoomFeeService({
       assignmentId = null,
       session = null,
     }) {
-      if (!MEMBER_IDS.includes(memberId)) throw new HttpError(400, 'Invalid member ID.');
+      if (!isSafeStudentId(memberId)) throw new HttpError(400, 'Invalid member ID.');
       if (!isValidLogicalDate(occupancyFromDate)) {
         throw new HttpError(400, 'occupancyFromDate must be a valid YYYY-MM-DD date.');
       }
@@ -1032,8 +1050,12 @@ export function createRoomFeeService({
         throw new HttpError(403, 'Permission denied to manage fee plans for this period.');
       }
 
-      if (!MEMBER_IDS.includes(memberId)) {
+      if (!isSafeStudentId(memberId)) {
         throw new HttpError(400, 'Invalid member ID.');
+      }
+      await assertKnownMember(memberId);
+      if (boundary && isValidLogicalMonth(effectiveFromMonth)) {
+        await boundary.assertFullOperationalMonth(effectiveFromMonth);
       }
 
       if (!isValidRoomFeeAmount(amountPaise)) {
@@ -1140,9 +1162,10 @@ export function createRoomFeeService({
     },
 
     async getFeePlansForMember(memberId) {
-      if (!MEMBER_IDS.includes(memberId)) {
+      if (!isSafeStudentId(memberId)) {
         throw new HttpError(400, 'Invalid member ID.');
       }
+      await assertKnownMember(memberId);
       const plans = await repository.findFeePlansForMember(memberId);
       return plans.map(serializeFeePlan);
     },
@@ -1153,10 +1176,12 @@ export function createRoomFeeService({
     },
 
     async previewFeePlanReconciliation({ memberId, schedule, reason, actorRole }) {
+      await assertKnownMember(memberId);
       return buildFeePlanReconciliationPreview({ memberId, schedule, reason, actorRole });
     },
 
     async reconcileFeePlans({ memberId, schedule, reason, actorRole, previewToken }) {
+      await assertKnownMember(memberId);
       if (typeof previewToken !== 'string' || !/^[a-f0-9]{64}$/.test(previewToken)) {
         throw new HttpError(400, 'A valid reconciliation previewToken is required.');
       }
@@ -1256,7 +1281,7 @@ export function createRoomFeeService({
       const rooms = await repository.findAllRooms();
       const roomMap = new Map(rooms.map((r) => [r.roomId, r]));
 
-      for (const member of MEMBERS) {
+      for (const member of await getMembers()) {
         const memberId = member.id;
 
         // Check if member has completed hostel stay prior to this month
@@ -1373,6 +1398,7 @@ export function createRoomFeeService({
       if (!isValidLogicalMonth(month)) {
         throw new HttpError(400, 'month must be in YYYY-MM format.');
       }
+      if (boundary) await boundary.assertFullOperationalMonth(month);
 
       const issueWithinTransaction = async (session = null) => {
         const rooms = await repository.findAllRooms({ session });
@@ -1380,7 +1406,7 @@ export function createRoomFeeService({
         const issuedCharges = [];
         let skippedCount = 0;
 
-        for (const member of MEMBERS) {
+        for (const member of await getMembers()) {
           const memberId = member.id;
 
           // Check if member has completed hostel stay prior to this month
@@ -1613,6 +1639,8 @@ export function createRoomFeeService({
         targetMemberId = targetMemberId || charge.memberId;
         targetMonth = targetMonth || charge.month;
       }
+      await assertKnownMember(targetMemberId);
+      if (boundary) await boundary.assertFullOperationalMonth(targetMonth);
 
       // Idempotency: return existing payment if previously recorded with this key
       const existingKey = await repository.findPaymentByIdempotencyKey(idempotencyKey);
@@ -1773,9 +1801,10 @@ export function createRoomFeeService({
 
     // --- Member-Specific Data Queries ---
     async getMemberAccommodation(memberId, targetDate = null) {
-      if (!MEMBER_IDS.includes(memberId)) {
+      if (!isSafeStudentId(memberId)) {
         throw new HttpError(400, 'Invalid member ID.');
       }
+      await assertKnownMember(memberId);
 
       const date = targetDate || getLogicalDateInTimeZone(now(), timezone);
       if (!isValidLogicalDate(date)) {
@@ -1796,9 +1825,10 @@ export function createRoomFeeService({
     },
 
     async getMemberOverview({ memberId, targetMonth = null }) {
-      if (!MEMBER_IDS.includes(memberId)) {
+      if (!isSafeStudentId(memberId)) {
         throw new HttpError(400, 'Invalid member ID.');
       }
+      await assertKnownMember(memberId);
 
       const month = targetMonth || getCurrentMonth();
       const assignment = await repository.findActiveAssignment(memberId, month);
@@ -1864,9 +1894,10 @@ export function createRoomFeeService({
     },
 
     async getMemberHistory(memberId) {
-      if (!MEMBER_IDS.includes(memberId)) {
+      if (!isSafeStudentId(memberId)) {
         throw new HttpError(400, 'Invalid member ID.');
       }
+      await assertKnownMember(memberId);
 
       const charges = await repository.findChargesForMember(memberId);
       const payments = await repository.findPaymentsForMember(memberId);
@@ -1906,9 +1937,10 @@ export function createRoomFeeService({
     },
 
     async getMemberPayments(memberId) {
-      if (!MEMBER_IDS.includes(memberId)) {
+      if (!isSafeStudentId(memberId)) {
         throw new HttpError(400, 'Invalid member ID.');
       }
+      await assertKnownMember(memberId);
       const payments = await repository.findPaymentsForMember(memberId);
       return payments.map(serializeRoomPayment);
     },
@@ -1934,7 +1966,7 @@ export function createRoomFeeService({
       let membersPaidCount = 0;
       let membersPendingCount = 0;
 
-      for (const member of MEMBERS) {
+      for (const member of await getMembers()) {
         const memberId = member.id;
         const assignment = await repository.findActiveAssignment(memberId, month);
         const room = assignment ? roomMap.get(assignment.roomId) : null;
@@ -2035,4 +2067,4 @@ export function createRoomFeeService({
 }
 
 import { roomRepository } from './room.repository.js';
-export const roomFeeService = createRoomFeeService({ repository: roomRepository });
+export const roomFeeService = createRoomFeeService({ repository: roomRepository, students: studentResolver, boundary: financialBoundaryService });

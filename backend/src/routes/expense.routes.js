@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { ROLES } from '../auth/permissions.js';
-import { MEMBER_IDS } from '../config/members.js';
+import { isSafeStudentId } from '../students/studentId.js';
 import { ExpenseDomainError, defaultExpenseService } from '../expenses/expense.service.js';
 import { isValidLogicalMonth } from '../utils/month.js';
 import { getLogicalDateInTimeZone } from '../utils/date.js';
@@ -111,7 +111,7 @@ export function createExpenseRouter({ service = defaultExpenseService } = {}) {
 
       // If Admin or Super Admin, check if memberId is specifically requested
       if (req.query.memberId) {
-        if (!MEMBER_IDS.includes(req.query.memberId)) {
+        if (!isSafeStudentId(req.query.memberId)) {
           return res.status(400).json({ success: false, message: 'Invalid member ID.' });
         }
         const summary = await service.getMemberExpenseSummary(month, req.query.memberId);

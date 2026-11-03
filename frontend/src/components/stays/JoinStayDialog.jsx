@@ -1,7 +1,6 @@
 import { AlertCircle, BedDouble, House, PlusCircle, ShieldCheck } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api.js';
-import { ROOMMATES } from '../../lib/constants.js';
 import { rupeesToPaise } from '../../lib/money.js';
 import {
   buildStayAdmissionPayload,
@@ -25,8 +24,9 @@ export function JoinStayDialog({
   onSubmitStay,
   isSuperAdmin = false,
   initialMemberId = null,
+  roster = [],
 }) {
-  const [memberId, setMemberId] = useState('gaurav');
+  const [memberId, setMemberId] = useState('');
   const [joinedOn, setJoinedOn] = useState('');
   const [rooms, setRooms] = useState([]);
   const [initialRoomId, setInitialRoomId] = useState('');
@@ -51,7 +51,7 @@ export function JoinStayDialog({
       .catch(() => setRooms([]));
 
     const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
-    setMemberId(initialMemberId || 'gaurav');
+    setMemberId(initialMemberId || '');
     setJoinedOn(todayStr);
     setError('');
     setHistoricalReason('');
@@ -183,7 +183,8 @@ export function JoinStayDialog({
               }}
               className="w-full rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-teal-500"
             >
-              {ROOMMATES.map((m) => (
+              <option value="">Select a student</option>
+              {roster.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.name}
                 </option>
@@ -199,7 +200,7 @@ export function JoinStayDialog({
             ) : (
               <div className="space-y-1">
                 <p className="font-semibold text-slate-900 dark:text-slate-100">
-                  {ROOMMATES.find((member) => member.id === memberId)?.name || memberId}
+                  {roster.find((member) => member.id === memberId)?.name || memberId}
                 </p>
                 <p>Current room: <strong>{existingAssignment ? `Room ${existingAssignment.roomNumber || existingAssignment.roomId}` : 'Not assigned'}</strong></p>
                 <p>Room Assignment: <strong>{existingAssignment ? 'Already configured' : 'New assignment required'}</strong></p>

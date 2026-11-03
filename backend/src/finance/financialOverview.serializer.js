@@ -4,13 +4,8 @@
  */
 
 import { FINANCIAL_CURRENCY, FINANCIAL_TIMEZONE } from './financialConstants.js';
-import { MEMBERS } from '../config/members.js';
-
-const MEMBER_MAP = new Map(MEMBERS.map((m) => [m.id, m]));
 
 export function serializeMemberOverview(overview) {
-  const memberConfig = MEMBER_MAP.get(overview.memberId) || { id: overview.memberId, name: overview.memberId };
-
   return {
     month: overview.month,
     currency: FINANCIAL_CURRENCY,
@@ -18,9 +13,9 @@ export function serializeMemberOverview(overview) {
     generatedAt: overview.generatedAt || new Date().toISOString(),
     periodType: overview.periodType,
     member: {
-      memberId: memberConfig.id,
-      displayName: overview.displayName ?? memberConfig.name,
-      avatarColor: memberConfig.color || null,
+      memberId: overview.memberId,
+      displayName: overview.displayName ?? overview.memberId,
+      avatarColor: overview.avatarColor ?? null,
     },
     mess: {
       billPaise: overview.mess.billPaise,

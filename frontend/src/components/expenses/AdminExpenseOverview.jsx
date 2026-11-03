@@ -1,6 +1,6 @@
 import { ArrowDownLeft, ArrowUpRight, CheckCircle2, IndianRupee, Layers, ShoppingBag, Users } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card.jsx';
-import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_CONFIG, ROOMMATES } from '../../lib/constants.js';
+import { EXPENSE_CATEGORIES, EXPENSE_CATEGORY_CONFIG } from '../../lib/constants.js';
 import { formatPaise } from '../../lib/money.js';
 
 export function AdminExpenseOverview({ summary }) {
@@ -69,7 +69,8 @@ export function AdminExpenseOverview({ summary }) {
         </CardHeader>
         <CardContent className="p-4 pt-1">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {ROOMMATES.map((m) => {
+            {Object.values(members).map((member) => {
+              const m = { id: member.memberId, name: member.memberName ?? member.memberId };
               const memData = members[m.id] || {};
               const share = memData.spendingSharePaise || 0;
               const paidMerchants = memData.paidMerchantsPaise || 0;

@@ -46,7 +46,6 @@ import {
 } from '../hooks/useExpenses.js';
 import { api } from '../lib/api.js';
 import { useServerToday } from '../hooks/useServerToday.js';
-import { ROOMMATES } from '../lib/constants.js';
 import { addLogicalMonths, formatLogicalMonth } from '../lib/logicalMonth.js';
 import { formatPaise } from '../lib/money.js';
 import { getIndiaCurrentLogicalMonth } from '../lib/logicalDate.js';
@@ -194,8 +193,9 @@ export function AdminExpensesPage() {
     }
   }
 
+  const roster = Object.values(summary?.members ?? {}).map((member) => ({ id: member.memberId, name: member.memberName }));
   const getMemberName = (id) => {
-    const found = ROOMMATES.find((m) => m.id === id);
+    const found = roster.find((m) => m.id === id);
     return found ? found.name : id ? id.charAt(0).toUpperCase() + id.slice(1) : 'Unknown';
   };
 
@@ -321,7 +321,7 @@ export function AdminExpensesPage() {
                 className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
               >
                 <option value="">All Roommates</option>
-                {ROOMMATES.map((m) => (
+                {roster.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name}
                   </option>
@@ -446,7 +446,7 @@ export function AdminExpensesPage() {
         open={addExpenseOpen}
         onOpenChange={setAddExpenseOpen}
         onSuccess={refreshAll}
-        initialPayerId={auth.memberId || 'gaurav'}
+        initialPayerId={auth.memberId || null}
       />
 
       {/* Edit Expense Dialog (Super Admin) */}

@@ -874,6 +874,7 @@ export function AdminStaysPage() {
 
       {/* Join/Admission Dialog */}
       <JoinStayDialog
+        roster={memberRoster.data.map((member) => ({ id: member.memberId, name: member.name }))}
         open={joinModalOpen}
         onOpenChange={setJoinModalOpen}
         onSubmitStay={handleCreateStay}

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { ROLES, isAuthenticatedRole } from '../auth/permissions.js';
-import { MEMBER_IDS } from '../config/members.js';
+import { isSafeStudentId } from '../students/studentId.js';
 import { requireAdminOrAbove, requireAuthenticated, requireSuperAdmin } from '../middleware/authorize.js';
 import { roomFeeService } from '../roomFees/roomFee.service.js';
 import { broadcastRoomFeesUpdated } from '../socket.js';
@@ -38,14 +38,11 @@ export function createRoomFeeRouter({
   // --- Member Endpoints (Isolated to authenticated member) ---
   router.get('/me', requireAuthenticated, async (req, res, next) => {
     try {
-      // If member, strictly use req.auth.memberId. If Admin/Super Admin, allow ?memberId or first member.
-      let targetMemberId = req.auth.memberId;
-      if (!targetMemberId && (req.auth.role === ROLES.ADMIN || req.auth.role === ROLES.SUPERADMIN)) {
-        targetMemberId = req.query.memberId || MEMBER_IDS[0];
-      }
+      // Members are pinned to their own identity; administrators select explicitly.
+      const targetMemberId = req.auth.role === ROLES.MEMBER ? req.auth.memberId : req.query.memberId;
 
-      if (!targetMemberId || !MEMBER_IDS.includes(targetMemberId)) {
-        return res.status(403).json({ success: false, message: 'Member access required.' });
+      if (!targetMemberId || !isSafeStudentId(targetMemberId)) {
+        return res.status(400).json({ success: false, message: 'Select a valid student.' });
       }
 
       const month = req.query.month && isValidLogicalMonth(req.query.month) ? req.query.month : null;
@@ -58,13 +55,10 @@ export function createRoomFeeRouter({
 
   router.get('/me/history', requireAuthenticated, async (req, res, next) => {
     try {
-      let targetMemberId = req.auth.memberId;
-      if (!targetMemberId && (req.auth.role === ROLES.ADMIN || req.auth.role === ROLES.SUPERADMIN)) {
-        targetMemberId = req.query.memberId || MEMBER_IDS[0];
-      }
+      const targetMemberId = req.auth.role === ROLES.MEMBER ? req.auth.memberId : req.query.memberId;
 
-      if (!targetMemberId || !MEMBER_IDS.includes(targetMemberId)) {
-        return res.status(403).json({ success: false, message: 'Member access required.' });
+      if (!targetMemberId || !isSafeStudentId(targetMemberId)) {
+        return res.status(400).json({ success: false, message: 'Select a valid student.' });
       }
 
       const history = await service.getMemberHistory(targetMemberId);
@@ -76,13 +70,10 @@ export function createRoomFeeRouter({
 
   router.get('/me/payments', requireAuthenticated, async (req, res, next) => {
     try {
-      let targetMemberId = req.auth.memberId;
-      if (!targetMemberId && (req.auth.role === ROLES.ADMIN || req.auth.role === ROLES.SUPERADMIN)) {
-        targetMemberId = req.query.memberId || MEMBER_IDS[0];
-      }
+      const targetMemberId = req.auth.role === ROLES.MEMBER ? req.auth.memberId : req.query.memberId;
 
-      if (!targetMemberId || !MEMBER_IDS.includes(targetMemberId)) {
-        return res.status(403).json({ success: false, message: 'Member access required.' });
+      if (!targetMemberId || !isSafeStudentId(targetMemberId)) {
+        return res.status(400).json({ success: false, message: 'Select a valid student.' });
       }
 
       const payments = await service.getMemberPayments(targetMemberId);
@@ -96,7 +87,7 @@ export function createRoomFeeRouter({
   router.get('/members/:memberId', requireAuthenticated, async (req, res, next) => {
     try {
       const { memberId } = req.params;
-      if (!MEMBER_IDS.includes(memberId)) {
+      if (!isSafeStudentId(memberId)) {
         return res.status(400).json({ success: false, message: 'Invalid member ID.' });
       }
 

@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { MEMBER_IDS } from '../config/members.js';
+import { isSafeStudentId } from '../students/studentId.js';
 
 export const roomAssignmentSchema = new mongoose.Schema(
   {
@@ -16,7 +16,7 @@ export const roomAssignmentSchema = new mongoose.Schema(
     memberId: {
       type: String,
       required: true,
-      enum: MEMBER_IDS,
+      validate: isSafeStudentId,
       index: true,
     },
     effectiveFromMonth: {

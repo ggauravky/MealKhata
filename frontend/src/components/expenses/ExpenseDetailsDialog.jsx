@@ -34,7 +34,8 @@ import { Input } from '../ui/input.jsx';
 import { Label } from '../ui/label.jsx';
 import { RecordReimbursementDialog } from './RecordReimbursementDialog.jsx';
 import { api } from '../../lib/api.js';
-import { EXPENSE_CATEGORY_CONFIG, ROOMMATES } from '../../lib/constants.js';
+import { EXPENSE_CATEGORY_CONFIG } from '../../lib/constants.js';
+import { useOperationalStudents } from '../../hooks/useOperationalStudents.js';
 import { formatPaise } from '../../lib/money.js';
 
 const CATEGORY_ICONS = {
@@ -58,11 +59,6 @@ function formatDisplayDate(dateStr) {
   });
 }
 
-function getMemberName(id) {
-  const found = ROOMMATES.find((m) => m.id === id);
-  return found ? found.name : id ? id.charAt(0).toUpperCase() + id.slice(1) : 'Unknown';
-}
-
 export function ExpenseDetailsDialog({
   open,
   onOpenChange,
@@ -72,6 +68,8 @@ export function ExpenseDetailsDialog({
   onUpdated,
   onEdit,
 }) {
+  const roster = useOperationalStudents({ includeArchived: true, enabled: open }).data;
+  const getMemberName = (id) => roster.find((member) => member.id === id)?.name ?? id ?? 'Unknown';
   const expenseId = propExpenseId || initialExpense?.expenseId;
   const [expense, setExpense] = useState(initialExpense);
   const [loadingDetail, setLoadingDetail] = useState(false);

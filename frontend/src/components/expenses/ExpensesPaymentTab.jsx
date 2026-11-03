@@ -24,15 +24,12 @@ import {
   useExpenses,
   useExpenseSummary,
 } from '../../hooks/useExpenses.js';
-import { ROOMMATES } from '../../lib/constants.js';
+import { useOperationalStudents } from '../../hooks/useOperationalStudents.js';
 import { formatPaise } from '../../lib/money.js';
 
-function getMemberName(id) {
-  const found = ROOMMATES.find((m) => m.id === id);
-  return found ? found.name : id ? id.charAt(0).toUpperCase() + id.slice(1) : 'Unknown';
-}
-
 export function ExpensesPaymentTab({ month }) {
+  const roster = useOperationalStudents({ includeArchived: true }).data;
+  const getMemberName = (id) => roster.find((member) => member.id === id)?.name ?? id ?? 'Unknown';
   const auth = useAuth();
   const isAdmin = auth.role === 'admin' || auth.role === 'superadmin';
   const memberId = auth.memberId;

@@ -256,7 +256,7 @@ describe('UPI payment preparation', () => {
     await configureSettings();
     const invalidBodies = [
       { month: '2026-13', memberId: 'nikhil' },
-      { month: MONTH, memberId: 'other' },
+      { month: MONTH, memberId: '$where' },
       { month: MONTH, memberId: 'nikhil', amountPaise: 1 },
     ];
     for (const body of invalidBodies) {
@@ -310,7 +310,7 @@ describe('payment recording and idempotency', () => {
 
   test('rejects future, invalid member, invalid amount, and missing rates', async () => {
     assert.equal((await record(ROLES.ADMIN, { month: '2026-10' })).status, 409);
-    assert.equal((await record(ROLES.ADMIN, { memberId: 'other' })).status, 400);
+    assert.equal((await record(ROLES.ADMIN, { memberId: '$where' })).status, 400);
     assert.equal((await record(ROLES.ADMIN, { amountPaise: 0 })).status, 400);
     reports.ratesConfigured = false;
     assert.equal((await record()).status, 409);

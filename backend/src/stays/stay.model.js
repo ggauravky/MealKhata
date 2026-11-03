@@ -3,7 +3,7 @@
  */
 
 import mongoose from 'mongoose';
-import { MEMBER_IDS } from '../config/members.js';
+import { isSafeStudentId } from '../students/studentId.js';
 import {
   CLEARANCE_STATUSES,
   CLEARANCE_VALIDITY_STATUSES,
@@ -46,7 +46,7 @@ export const hostelStaySchema = new mongoose.Schema(
     memberId: {
       type: String,
       required: true,
-      enum: MEMBER_IDS,
+      validate: isSafeStudentId,
       index: true,
     },
     joinedOn: {
@@ -247,7 +247,7 @@ export const hostelDepositAccountSchema = new mongoose.Schema(
     memberId: {
       type: String,
       required: true,
-      enum: MEMBER_IDS,
+      validate: isSafeStudentId,
       index: true,
     },
     expectedDepositPaise: {
@@ -322,7 +322,7 @@ export const hostelDepositTransactionSchema = new mongoose.Schema(
     memberId: {
       type: String,
       required: true,
-      enum: MEMBER_IDS,
+      validate: isSafeStudentId,
       index: true,
     },
     type: {
@@ -443,7 +443,7 @@ export const hostelClearanceSchema = new mongoose.Schema(
     memberId: {
       type: String,
       required: true,
-      enum: MEMBER_IDS,
+      validate: isSafeStudentId,
       index: true,
     },
     sequence: {

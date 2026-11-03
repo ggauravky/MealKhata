@@ -7,7 +7,7 @@ import { mapMemberRoomFeeOverview, roomFeeRequestKey } from '../lib/roomFeeContr
 /**
  * Hook for a Member to view their current month room fee statement & assignment
  */
-export function useMyRoomFees(month, memberId = null) {
+export function useMyRoomFees(month, memberId = null, { enabled = true } = {}) {
   const [state, setState] = useState({ key: null, loading: true, error: '', data: null });
   const [version, setVersion] = useState(0);
 
@@ -17,7 +17,7 @@ export function useMyRoomFees(month, memberId = null) {
   }, []);
 
   useEffect(() => {
-    if (!month) return undefined;
+    if (!month || !enabled) return undefined;
     const controller = new AbortController();
     const key = roomFeeRequestKey(memberId, month);
     const query = new URLSearchParams({ month });
@@ -30,7 +30,7 @@ export function useMyRoomFees(month, memberId = null) {
         }
       });
     return () => controller.abort();
-  }, [memberId, month, version]);
+  }, [enabled, memberId, month, version]);
 
   useEffect(() => {
     const handleRoomFees = (event) => {
@@ -50,7 +50,7 @@ export function useMyRoomFees(month, memberId = null) {
 
   const isCurrent = state.key === roomFeeRequestKey(memberId, month);
   return {
-    loading: !isCurrent || state.loading,
+    loading: enabled && (!isCurrent || state.loading),
     error: isCurrent ? state.error : '',
     data: isCurrent ? state.data : null,
     refresh,
@@ -60,7 +60,7 @@ export function useMyRoomFees(month, memberId = null) {
 /**
  * Hook for a Member to view their month-wise history of issued room fees
  */
-export function useMyRoomFeeHistory(memberId = null) {
+export function useMyRoomFeeHistory(memberId = null, { enabled = true } = {}) {
   const [state, setState] = useState({ key: null, loading: true, error: '', data: null });
   const [version, setVersion] = useState(0);
 
@@ -70,6 +70,7 @@ export function useMyRoomFeeHistory(memberId = null) {
   }, []);
 
   useEffect(() => {
+    if (!enabled) return undefined;
     const controller = new AbortController();
     const key = memberId || 'self';
     const query = memberId ? `?memberId=${encodeURIComponent(memberId)}` : '';
@@ -81,7 +82,7 @@ export function useMyRoomFeeHistory(memberId = null) {
         }
       });
     return () => controller.abort();
-  }, [memberId, version]);
+  }, [enabled, memberId, version]);
 
   useEffect(() => {
     const handleRoomFees = () => refresh();
@@ -91,7 +92,7 @@ export function useMyRoomFeeHistory(memberId = null) {
 
   const isCurrent = state.key === (memberId || 'self');
   return {
-    loading: !isCurrent || state.loading,
+    loading: enabled && (!isCurrent || state.loading),
     error: isCurrent ? state.error : '',
     data: isCurrent ? state.data : null,
     refresh,
@@ -179,7 +180,7 @@ export function useRooms() {
 /**
  * Hook for Admin to view and manage Fee Plans for all members
  */
-export function useMemberFeePlans(members = ['gaurav', 'nikhil', 'devansh'], targetMonth = null) {
+export function useMemberFeePlans(members = [], targetMonth = null) {
   const [plans, setPlans] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');

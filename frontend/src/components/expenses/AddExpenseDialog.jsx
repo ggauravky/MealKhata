@@ -13,10 +13,10 @@ import { Input } from '../ui/input.jsx';
 import { Label } from '../ui/label.jsx';
 import { ExpenseSplitPreview } from './ExpenseSplitPreview.jsx';
 import { api } from '../../lib/api.js';
+import { useOperationalStudents } from '../../hooks/useOperationalStudents.js';
 import {
   EXPENSE_CATEGORIES,
   EXPENSE_CATEGORY_CONFIG,
-  ROOMMATES,
   SPLIT_TYPES,
 } from '../../lib/constants.js';
 import { formatPaise, paymentRupeesToPaise } from '../../lib/money.js';
@@ -32,20 +32,18 @@ function getTodayKolkata() {
   return `${v.year}-${v.month}-${v.day}`;
 }
 
-export function AddExpenseDialog({ open, onOpenChange, onSuccess, initialPayerId = 'gaurav' }) {
+export function AddExpenseDialog({ open, onOpenChange, onSuccess, initialPayerId = null }) {
+  const studentRoster = useOperationalStudents({ enabled: open });
+  const roster = studentRoster.data;
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('groceries');
   const [date, setDate] = useState(getTodayKolkata());
   const [amountRupees, setAmountRupees] = useState('');
   const [paidByMemberId, setPaidByMemberId] = useState(initialPayerId);
   const [splitType, setSplitType] = useState('equal');
-  const [selectedParticipants, setSelectedParticipants] = useState(ROOMMATES.map((m) => m.id));
-  const [personalBeneficiary, setPersonalBeneficiary] = useState('gaurav');
-  const [customAmounts, setCustomAmounts] = useState({
-    gaurav: '',
-    nikhil: '',
-    devansh: '',
-  });
+  const [selectedParticipants, setSelectedParticipants] = useState([]);
+  const [personalBeneficiary, setPersonalBeneficiary] = useState('');
+  const [customAmounts, setCustomAmounts] = useState({});
   const [description, setDescription] = useState('');
 
   const [preview, setPreview] = useState(null);
@@ -61,17 +59,17 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess, initialPayerId
       setCategory('groceries');
       setDate(getTodayKolkata());
       setAmountRupees('');
-      setPaidByMemberId(initialPayerId || 'gaurav');
+      setPaidByMemberId(initialPayerId || roster[0]?.id || '');
       setSplitType('equal');
-      setSelectedParticipants(ROOMMATES.map((m) => m.id));
-      setPersonalBeneficiary(initialPayerId || 'gaurav');
-      setCustomAmounts({ gaurav: '', nikhil: '', devansh: '' });
+      setSelectedParticipants(roster.map((m) => m.id));
+      setPersonalBeneficiary(initialPayerId || roster[0]?.id || '');
+      setCustomAmounts(Object.fromEntries(roster.map((m) => [m.id, ''])));
       setDescription('');
       setPreview(null);
       setPreviewError('');
       setSubmitError('');
     }
-  }, [open, initialPayerId]);
+  }, [open, initialPayerId, roster]);
 
   // Compute total paise from amount input
   const totalAmountPaise = paymentRupeesToPaise(amountRupees) || 0;
@@ -79,7 +77,7 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess, initialPayerId
   // Custom split sum validation
   let customSumPaise = 0;
   if (splitType === 'custom') {
-    for (const m of ROOMMATES) {
+    for (const m of roster) {
       const p = paymentRupeesToPaise(customAmounts[m.id]) || 0;
       customSumPaise += p;
     }
@@ -116,7 +114,7 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess, initialPayerId
       };
     } else if (splitType === 'custom') {
       const customAllocations = [];
-      for (const m of ROOMMATES) {
+    for (const m of roster) {
         const p = paymentRupeesToPaise(customAmounts[m.id]) || 0;
         if (p > 0) {
           customAllocations.push({ memberId: m.id, amountPaise: p });
@@ -174,6 +172,7 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess, initialPayerId
     personalBeneficiary,
     customAmounts,
     customSumPaise,
+    roster,
   ]);
 
   const toggleParticipant = (memberId) => {
@@ -191,6 +190,10 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess, initialPayerId
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSubmitError('');
+    if (studentRoster.loading || studentRoster.error || !roster.some((member) => member.id === paidByMemberId)) {
+      setSubmitError(studentRoster.error || 'Select a valid student who paid.');
+      return;
+    }
 
     if (!title.trim()) {
       setSubmitError('What was purchased? Title is required.');
@@ -231,7 +234,7 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess, initialPayerId
     } else if (splitType === 'personal') {
       payload.participants = [personalBeneficiary];
     } else if (splitType === 'custom') {
-      payload.customAllocations = ROOMMATES.map((m) => ({
+      payload.customAllocations = roster.map((m) => ({
         memberId: m.id,
         amountPaise: paymentRupeesToPaise(customAmounts[m.id]) || 0,
       })).filter((a) => a.amountPaise > 0);
@@ -263,6 +266,8 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess, initialPayerId
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4 pt-1">
+          {studentRoster.loading && <p className="text-xs text-slate-500">Loading students…</p>}
+          {studentRoster.error && <p className="text-xs text-rose-700">{studentRoster.error}</p>}
           {submitError && (
             <div className="flex items-start gap-2 p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs dark:bg-rose-950/40 dark:border-rose-900 dark:text-rose-400">
               <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
@@ -349,7 +354,8 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess, initialPayerId
                 onChange={(e) => setPaidByMemberId(e.target.value)}
                 className="w-full h-9 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100"
               >
-                {ROOMMATES.map((m) => (
+                <option value="">Select a student</option>
+                {roster.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name}
                   </option>
@@ -391,7 +397,7 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess, initialPayerId
                 Share equally between:
               </Label>
               <div className="grid grid-cols-3 gap-2">
-                {ROOMMATES.map((m) => {
+                {roster.map((m) => {
                   const isChecked = selectedParticipants.includes(m.id);
                   return (
                     <button
@@ -425,9 +431,9 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess, initialPayerId
                 onChange={(e) => setPersonalBeneficiary(e.target.value)}
                 className="w-full h-9 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-600 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100"
               >
-                {ROOMMATES.map((m) => (
+                {roster.map((m) => (
                   <option key={m.id} value={m.id}>
-                    {m.name} {m.id === paidByMemberId ? '(Paid for self)' : `(Owes ${ROOMMATES.find((r) => r.id === paidByMemberId)?.name})`}
+                    {m.name} {m.id === paidByMemberId ? '(Paid for self)' : `(Owes ${roster.find((r) => r.id === paidByMemberId)?.name})`}
                   </option>
                 ))}
               </select>
@@ -443,7 +449,7 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess, initialPayerId
                 </span>
               </div>
               <div className="grid grid-cols-3 gap-2">
-                {ROOMMATES.map((m) => (
+                {roster.map((m) => (
                   <div key={m.id} className="space-y-1">
                     <Label htmlFor={`custom-${m.id}`} className="text-[10px] text-slate-600 dark:text-slate-400">
                       {m.name}
@@ -496,6 +502,7 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess, initialPayerId
             <ExpenseSplitPreview
               preview={preview}
               paidByMemberId={paidByMemberId}
+              roster={roster}
             />
           )}
 
@@ -513,7 +520,7 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess, initialPayerId
             <Button
               type="submit"
               size="sm"
-              disabled={submitting || !preview || Boolean(previewError)}
+              disabled={submitting || studentRoster.loading || Boolean(studentRoster.error) || !preview || Boolean(previewError)}
               className="bg-teal-700 hover:bg-teal-800 text-white dark:bg-teal-600 dark:hover:bg-teal-700 text-xs"
             >
               {submitting ? (

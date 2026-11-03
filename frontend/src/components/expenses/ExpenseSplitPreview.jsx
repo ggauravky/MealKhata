@@ -1,14 +1,13 @@
 import { ArrowRight, CheckCircle2, Users } from 'lucide-react';
 import { formatPaise } from '../../lib/money.js';
-import { ROOMMATES } from '../../lib/constants.js';
 
-export function ExpenseSplitPreview({ preview, paidByMemberId }) {
+export function ExpenseSplitPreview({ preview, paidByMemberId, roster = [] }) {
   if (!preview) return null;
 
   const { amountPaise, allocations = [], reimbursementObligations = [] } = preview;
 
   const getMemberName = (id) => {
-    const found = ROOMMATES.find((m) => m.id === id);
+    const found = roster.find((m) => m.id === id);
     return found ? found.name : id.charAt(0).toUpperCase() + id.slice(1);
   };
 

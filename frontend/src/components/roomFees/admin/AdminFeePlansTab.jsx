@@ -14,7 +14,6 @@ import { Input } from '../../ui/input.jsx';
 import { Label } from '../../ui/label.jsx';
 import { Select } from '../../ui/select.jsx';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../ui/table.jsx';
-import { ROOMMATES } from '../../../lib/constants.js';
 import { formatLogicalMonth } from '../../../lib/logicalMonth.js';
 import { formatPaise, rupeesToPaise } from '../../../lib/money.js';
 import { api } from '../../../lib/api.js';
@@ -29,11 +28,12 @@ export function AdminFeePlansTab({
   memberErrors = {},
   targetMonth = null,
   role = 'admin',
+  roster = [],
 }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
-  const [historyMemberId, setHistoryMemberId] = useState('nikhil');
-  const [selectedMemberId, setSelectedMemberId] = useState('nikhil');
+  const [historyMemberId, setHistoryMemberId] = useState('');
+  const [selectedMemberId, setSelectedMemberId] = useState('');
   const [rupeesAmount, setRupeesAmount] = useState('2800');
   const [effectiveFromMonth, setEffectiveFromMonth] = useState(() => targetMonth || getIndiaCurrentLogicalMonth());
   const [dueDay, setDueDay] = useState('5');
@@ -41,7 +41,7 @@ export function AdminFeePlansTab({
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
   const [reconcileOpen, setReconcileOpen] = useState(false);
-  const [reconcileMemberId, setReconcileMemberId] = useState('gaurav');
+  const [reconcileMemberId, setReconcileMemberId] = useState('');
   const [reconcileSchedule, setReconcileSchedule] = useState([]);
   const [reconcileReason, setReconcileReason] = useState('');
   const [reconcilePreview, setReconcilePreview] = useState(null);
@@ -188,7 +188,7 @@ export function AdminFeePlansTab({
   }
 
   const historyPlans = plans[historyMemberId]?.allPlans || [];
-  const historyMemberName = ROOMMATES.find((m) => m.id === historyMemberId)?.name || historyMemberId;
+  const historyMemberName = roster.find((m) => m.id === historyMemberId)?.name || historyMemberId;
 
   return (
     <div className="space-y-6">
@@ -217,7 +217,7 @@ export function AdminFeePlansTab({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {ROOMMATES.map((roommate) => {
+              {roster.map((roommate) => {
                 const plan = plans[roommate.id];
                 const memberErr = memberErrors[roommate.id];
                 const activePlan = plan?.activePlan;
@@ -362,7 +362,7 @@ export function AdminFeePlansTab({
         <DialogContent className="max-w-md w-full p-6">
           <DialogHeader>
             <DialogTitle className="text-base font-bold text-slate-900 dark:text-slate-100">
-              Configure Room Fee Plan — {ROOMMATES.find((m) => m.id === selectedMemberId)?.name}
+              Configure Room Fee Plan — {roster.find((m) => m.id === selectedMemberId)?.name}
             </DialogTitle>
             <DialogDescription className="text-xs text-slate-500">
               Individual fee plans take effect from the chosen month without retroactively altering historical bills.
@@ -448,7 +448,7 @@ export function AdminFeePlansTab({
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base font-bold text-slate-900 dark:text-slate-100">
               <Scale className="h-4 w-4 text-amber-600" />
-              Reconcile Fee Plan history — {ROOMMATES.find((member) => member.id === reconcileMemberId)?.name}
+              Reconcile Fee Plan history — {roster.find((member) => member.id === reconcileMemberId)?.name}
             </DialogTitle>
             <DialogDescription className="text-xs text-slate-500">
               Enter the verified schedule. Existing plans remain in history; only their active status changes. Issued charges remain linked to their original plans.

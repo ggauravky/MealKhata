@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { MEMBER_IDS } from '../config/members.js';
+import { financialBoundaryService } from '../finance/financialBoundary.service.js';
+import { studentResolver } from '../students/studentResolver.service.js';
+import { assertSafeStudentId } from '../students/studentId.js';
 import { reportService } from '../reports/report.service.js';
 import { HttpError } from '../utils/HttpError.js';
 import { isValidLogicalMonth } from '../utils/month.js';
@@ -70,7 +72,7 @@ export function normalizeVoidReason(value) {
 }
 
 function assertMember(memberId) {
-  if (!MEMBER_IDS.includes(memberId)) throw new HttpError(400, 'Invalid member.');
+  try { assertSafeStudentId(memberId); } catch { throw new HttpError(400, 'Invalid member.'); }
 }
 
 function assertMonth(month) {
@@ -92,7 +94,9 @@ function assertSettings(settings) {
 function assertReportPayable(report, memberId) {
   if (report.periodType === 'future') throw new HttpError(409, 'Future months are not payable yet.');
   if (!report.rates.configured) throw new HttpError(409, 'Meal rates are not set for this month.');
-  const billAmountPaise = report.toDate.members[memberId].amountPaise;
+  const billAmountPaise = report.operationalToDate
+    ? (report.operationalToDate.members?.[memberId]?.amountPaise ?? 0)
+    : (report.toDate?.members?.[memberId]?.amountPaise ?? 0);
   if (billAmountPaise === 0) throw new HttpError(409, 'There is no payment due for this member.');
   return billAmountPaise;
 }
@@ -107,6 +111,8 @@ export function createPaymentService({
   summaries = paymentSummaryService,
   settings = paymentSettingsService,
   settlements = null,
+  students = null,
+  boundary = null,
   now = () => new Date(),
   uuid = randomUUID,
 } = {}) {
@@ -125,9 +131,12 @@ export function createPaymentService({
       return repository.findByPaymentId(paymentId);
     },
 
-    async preparePayment({ month, memberId }) {
+    async preparePayment({ month, memberId, actorRole = null, actorMemberId = null }) {
       assertMonth(month);
       assertMember(memberId);
+      if (actorRole === 'member' && actorMemberId !== memberId) throw new HttpError(403, 'Members can only prepare their own payments.');
+      if (students && !(await students.assertKnown(memberId))) throw new HttpError(404, 'Student was not found.');
+      if (boundary) await boundary.assertOperationalMonth(month);
 
       if (settlements && (await settlements.isMonthClosed(month))) {
         throw new HttpError(409, 'This month is closed. Reopen the month before making financial changes.');
@@ -138,7 +147,7 @@ export function createPaymentService({
       const member = summary.members[memberId];
       if (summary.periodType === 'future') throw new HttpError(409, 'Future months are not payable yet.');
       if (!summary.ratesConfigured) throw new HttpError(409, 'Meal rates are not set for this month.');
-      if (member.status === 'no_due' || member.remainingAmountPaise === 0) {
+      if (!member || member.status === 'no_due' || member.remainingAmountPaise === 0) {
         throw new HttpError(409, 'There is no remaining payment due for this member.');
       }
       const amountPaise = member.remainingAmountPaise;
@@ -161,6 +170,9 @@ export function createPaymentService({
       assertMonth(month);
       assertMember(memberId);
       assertAmount(amountPaise);
+      if (students && !(await students.assertKnown(memberId))) throw new HttpError(404, 'Student was not found.');
+      if (boundary) await boundary.assertOperationalMonth(month);
+      if (actorRole === 'member' && actorMemberId !== memberId) throw new HttpError(403, 'Members can only record their own payments.');
 
       if (settlements && (await settlements.isMonthClosed(month))) {
         throw new HttpError(409, 'This month is closed. Reopen the month before recording payments.');
@@ -220,16 +232,20 @@ export function createPaymentService({
       } catch (error) {
         if (error instanceof HttpError) throw error;
         if (error?.statusCode) {
-          throw new HttpError(error.statusCode, error.message, error.details || {});
+          const wrapped = new HttpError(error.statusCode, error.message, { cause: error });
+          wrapped.details = error.details;
+          throw wrapped;
         }
         throw new HttpError(503, 'Unable to record the payment. Please try again.', { cause: error });
       }
     },
 
     async voidPayment({ paymentId, reason, actorRole }) {
+      if (actorRole !== 'superadmin') throw new HttpError(403, 'Only Super Admin can void a payment.');
       try {
         const current = await repository.findByPaymentId(paymentId);
         if (!current) throw new HttpError(404, 'Payment not found.');
+        if (boundary) await boundary.assertOperationalMonth(current.month);
 
         if (settlements && (await settlements.isMonthClosed(current.month))) {
           throw new HttpError(409, 'This month is closed. Reopen the month before voiding payments.');
@@ -252,10 +268,15 @@ export function createPaymentService({
         return { changed: false, data: serializePayment(raced, { includeReference: true }) };
       } catch (error) {
         if (error instanceof HttpError) throw error;
+        if (error?.statusCode) {
+          const wrapped = new HttpError(error.statusCode, error.message, { cause: error });
+          wrapped.details = error.details;
+          throw wrapped;
+        }
         throw new HttpError(503, 'Unable to void the payment. Please try again.', { cause: error });
       }
     },
   });
 }
 
-export const paymentService = createPaymentService();
+export const paymentService = createPaymentService({ students: studentResolver, boundary: financialBoundaryService });

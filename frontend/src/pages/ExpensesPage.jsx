@@ -290,7 +290,7 @@ export function ExpensesPage() {
         open={addExpenseOpen}
         onOpenChange={setAddExpenseOpen}
         onSuccess={handleRefreshAll}
-        initialPayerId={auth.memberId || 'gaurav'}
+        initialPayerId={auth.memberId || null}
       />
 
       {/* Expense Details Dialog */}

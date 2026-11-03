@@ -34,6 +34,7 @@ export function createPaymentSummaryService({ reports = reportService, repositor
         const memberIds = new Set([
           ...Object.keys(report.projection?.members ?? {}),
           ...Object.keys(report.toDate?.members ?? {}),
+          ...Object.keys(report.operationalToDate?.members ?? {}),
         ]);
         const paidByMember = {};
         const paymentOnlyNames = {};
@@ -64,34 +65,40 @@ export function createPaymentSummaryService({ reports = reportService, repositor
         const members = Object.fromEntries([...memberIds].map((memberId) => {
           const billAmountPaise = report.periodType === 'future'
             ? null
-            : report.toDate?.members?.[memberId]?.amountPaise ?? 0;
+            : report.operationalToDate
+              ? (report.operationalToDate.members?.[memberId]?.amountPaise ?? 0)
+              : (report.toDate?.members?.[memberId]?.amountPaise ?? 0);
           const paidAmountPaise = paidByMember[memberId] ?? 0;
+          const historicalMealCostPaise = report.operationalToDate
+            ? Math.max((report.toDate?.members?.[memberId]?.amountPaise ?? 0) - billAmountPaise, 0)
+            : 0;
+          const amounts = derivePaymentAmounts({ billAmountPaise, paidAmountPaise,
+            periodType: report.periodType, ratesConfigured });
           return [memberId, {
             displayName: report.toDate?.members?.[memberId]?.displayName
               ?? report.projection?.members?.[memberId]?.displayName
               ?? paymentOnlyNames[memberId] ?? memberId,
             billAmountPaise,
             paidAmountPaise,
-            ...derivePaymentAmounts({
-              billAmountPaise,
-              paidAmountPaise,
-              periodType: report.periodType,
-              ratesConfigured,
-            }),
+            historicalMealCostPaise,
+            operationalMessBillPaise: billAmountPaise,
+            operationalMessPaidPaise: paidAmountPaise,
+            operationalMessRemainingPaise: amounts.remainingAmountPaise,
+            ...amounts,
             projectedBillAmountPaise: report.projection.members?.[memberId]?.amountPaise ?? 0,
           }];
         }));
 
         const roomBillAmountPaise = report.periodType === 'future'
           ? null
-          : report.toDate?.room.amountPaise ?? null;
+          : report.operationalToDate?.room.amountPaise ?? report.toDate?.room.amountPaise ?? null;
         const roomPaidAmountPaise = Object.values(paidByMember).reduce((total, value) => total + value, 0);
 
         return {
           month,
           periodType: report.periodType,
           today: report.today,
-          payable: report.periodType !== 'future' && ratesConfigured,
+          payable: report.periodType !== 'future' && ratesConfigured && (!report.operationalToDate || report.financialBoundary !== null),
           ratesConfigured,
           members,
           room: {
