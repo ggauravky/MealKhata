@@ -28,7 +28,7 @@ describe('MealKhata 2.0 Phase 3: Unified Financial Dashboard & Reports (Frontend
 
     test('useMemberFinance protects against unauthenticated and viewer access', async () => {
       const content = await fs.readFile(useFinancePath, 'utf8');
-      assert.match(content, /role === 'viewer'/);
+      assert.match(content, /canLoadMemberFinance\(\{ month, authenticated, role, targetMemberId \}\)/);
       assert.match(content, /\/api\/finance\/me\/\$\{month\}/);
       assert.match(content, /\/api\/finance\/members\/\$\{targetMemberId\}\/\$\{month\}/);
     });
@@ -175,7 +175,7 @@ describe('MealKhata 2.0 Phase 3: Unified Financial Dashboard & Reports (Frontend
   describe('Dashboard Page Integration (DashboardPage.jsx)', () => {
     test('integrates FinancialOverviewCard and FinancialHouseholdSummary with useFinance hooks', async () => {
       const content = await fs.readFile(dashboardPagePath, 'utf8');
-      assert.match(content, /import \{ useFinance, useMemberFinance, useHouseholdFinance \} from '\.\.\/hooks\/useFinance\.js';/);
+      assert.match(content, /import \{ useMemberFinance, useHouseholdFinance \} from '\.\.\/hooks\/useFinance\.js';/);
       assert.match(content, /import \{ FinancialOverviewCard \} from '\.\.\/components\/finance\/FinancialOverviewCard\.jsx';/);
       assert.match(content, /import \{ FinancialHouseholdSummary \} from '\.\.\/components\/finance\/FinancialHouseholdSummary\.jsx';/);
       assert.match(content, /<FinancialOverviewCard/);

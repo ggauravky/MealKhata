@@ -86,6 +86,7 @@ async function seedDatabase(uri, backendPort) {
     { UserAccount },
     { Student },
     { StudentAuditEvent },
+    { SystemSettings },
     { roomFeeService },
     { stayService },
     { expenseService },
@@ -93,6 +94,7 @@ async function seedDatabase(uri, backendPort) {
     import('../src/auth/userAccount.model.js'),
     import('../src/students/student.model.js'),
     import('../src/students/studentAuditEvent.model.js'),
+    import('../src/settings/systemSettings.model.js'),
     import('../src/roomFees/roomFee.service.js'),
     import('../src/stays/stay.service.js'),
     import('../src/expenses/expense.service.js'),
@@ -135,6 +137,8 @@ async function seedDatabase(uri, backendPort) {
       rosterOrder: 20,
     },
   ]);
+  await SystemSettings.create({ settingsId: 'system', financialStartDate: '2026-10-01',
+    configuredAt: new Date(), configuredBy: 'isolated-e2e-fixture' });
 
   const passwordHash = await bcrypt.hash(testPassword, 12);
   await UserAccount.create([
@@ -194,13 +198,13 @@ async function seedDatabase(uri, backendPort) {
       roomId,
       effectiveFromMonth: '2026-10',
       effectiveFromDate: '2026-10-01',
-      actorRole: 'admin',
+      actorRole: 'superadmin',
     });
     await roomFeeService.createFeePlan({
       memberId,
       amountPaise: memberId === 'gaurav' ? 280000 : 260000,
       effectiveFromMonth: '2026-10',
-      actorRole: 'admin',
+      actorRole: 'superadmin',
     });
   }
 
@@ -215,7 +219,7 @@ async function seedDatabase(uri, backendPort) {
     historicalReason: 'Controlled isolated browser fixture',
   });
 
-  await roomFeeService.issueCharges('2026-10', 'admin');
+  await roomFeeService.issueCharges('2026-10', 'superadmin');
   await expenseService.createExpense({
     date: '2026-10-20',
     title: 'E2E Shared Groceries',

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { getRoleLabel, ROLE_LABELS, ROOMMATES } from '../src/lib/constants.js';
+import { getRoleLabel, ROLE_LABELS } from '../src/lib/constants.js';
+import { resolveDayParticipants } from '../src/lib/operationalRoster.js';
 import { canInitiatePayment } from '../src/lib/paymentFlow.js';
 import { getSafeNextPath } from '../src/lib/navigation.js';
 
@@ -18,10 +19,10 @@ describe('Phase 7 Frontend: Role Labels & Display', () => {
     assert.equal(getRoleLabel('unknown'), 'Viewer');
   });
 
-  test('roommates list contains exactly the canonical three members', () => {
-    assert.equal(ROOMMATES.length, 3);
-    const ids = ROOMMATES.map((r) => r.id);
-    assert.deepEqual(ids, ['gaurav', 'nikhil', 'devansh']);
+  test('saved historical day retains its participants after a fourth student joins', () => {
+    const roster = [{ id: 'gaurav', name: 'Gaurav' }, { id: 'student_fourth', name: 'Fourth Student' }];
+    assert.deepEqual(resolveDayParticipants({ participantOrder: ['gaurav', 'nikhil'], saved: true }, roster),
+      [{ id: 'gaurav', name: 'Gaurav' }, { id: 'nikhil', name: 'nikhil' }]);
   });
 });
 

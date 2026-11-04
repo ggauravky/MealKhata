@@ -1,12 +1,6 @@
 export const APP_NAME = 'MealKhata';
 export const APP_TAGLINE = 'Meals tracked. Bills sorted.';
 
-export const ROOMMATES = Object.freeze([
-  Object.freeze({ id: 'gaurav', name: 'Gaurav', initial: 'G' }),
-  Object.freeze({ id: 'nikhil', name: 'Nikhil', initial: 'N' }),
-  Object.freeze({ id: 'devansh', name: 'Devansh', initial: 'D' }),
-]);
-
 export const MEAL_TYPES = Object.freeze([
   Object.freeze({ id: 'morning', name: 'Morning' }),
   Object.freeze({ id: 'night', name: 'Night' }),

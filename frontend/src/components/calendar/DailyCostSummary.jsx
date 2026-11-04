@@ -1,9 +1,8 @@
 import { Users } from 'lucide-react';
-import { ROOMMATES } from '../../lib/constants.js';
 import { formatPaise } from '../../lib/money.js';
 import { MemberAvatar } from '../ui/avatar.jsx';
 
-export function DailyCostSummary({ summary, counts }) {
+export function DailyCostSummary({ summary, counts, participants = [] }) {
   const roomData = summary?.room ?? {
     morningAmountPaise: 0,
     nightAmountPaise: 0,
@@ -30,20 +29,22 @@ export function DailyCostSummary({ summary, counts }) {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 sm:gap-3">
-        {ROOMMATES.map((member) => {
-          const memberCost = summary?.members?.[member.id] ?? {
+        {Object.entries(summary?.members ?? {}).map(([memberId, memberCost]) => {
+          const member = participants.find((item) => item.id === memberId)
+            ?? { id: memberId, name: memberId };
+          const amounts = memberCost ?? {
             morningAmountPaise: 0,
             nightAmountPaise: 0,
             totalAmountPaise: 0,
           };
 
-          const isZero = memberCost.totalAmountPaise === 0;
+          const isZero = amounts.totalAmountPaise === 0;
 
           return (
             <div
               key={member.id}
               className="rounded-lg border border-slate-200/90 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/40 p-2.5 sm:p-3 flex flex-col justify-between"
-              aria-label={`${member.name} daily total, ${formatPaise(memberCost.totalAmountPaise)}`}
+              aria-label={`${member.name} daily total, ${formatPaise(amounts.totalAmountPaise)}`}
             >
               <div className="flex items-center gap-1.5 mb-1.5">
                 <MemberAvatar memberId={member.id} name={member.name} size="xs" />
@@ -54,18 +55,18 @@ export function DailyCostSummary({ summary, counts }) {
 
               <div>
                 <div className="text-base sm:text-lg font-bold text-slate-900 dark:text-slate-100 tracking-tight">
-                  {formatPaise(memberCost.totalAmountPaise)}
+                  {formatPaise(amounts.totalAmountPaise)}
                 </div>
                 <div className="text-[10px] sm:text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 flex items-center gap-1.5 flex-wrap">
                   {isZero ? (
                     <span>No meal</span>
                   ) : (
                     <>
-                      <span>M {formatPaise(memberCost.morningAmountPaise)}</span>
+                      <span>M {formatPaise(amounts.morningAmountPaise)}</span>
                       <span aria-hidden="true" className="text-slate-300 dark:text-slate-600">
                         ·
                       </span>
-                      <span>N {formatPaise(memberCost.nightAmountPaise)}</span>
+                      <span>N {formatPaise(amounts.nightAmountPaise)}</span>
                     </>
                   )}
                 </div>

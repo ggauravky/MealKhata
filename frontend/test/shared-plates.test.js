@@ -10,6 +10,8 @@ import {
   validatePlateAllocation,
 } from '../src/lib/plates.js';
 
+const legacyParticipants = ['gaurav', 'nikhil', 'devansh'];
+
 describe('Shared Plate Frontend Architecture', () => {
   describe('Fraction Formatter', () => {
     test('formats base sixth fractions cleanly', () => {
@@ -102,6 +104,7 @@ describe('Shared Plate Frontend Architecture', () => {
   describe('Preset Allocations', () => {
     test('creates 1 Plate / 2 People preset', () => {
       const preset = createPresetAllocation(PRESET_NAMES.ONE_PLATE_TWO_SHARED, {
+        participants: legacyParticipants,
         members: ['gaurav', 'nikhil'],
       });
       assert.equal(preset.plates.length, 1);
@@ -111,7 +114,7 @@ describe('Shared Plate Frontend Architecture', () => {
     });
 
     test('creates 2 Plates / 3 Equal preset', () => {
-      const preset = createPresetAllocation(PRESET_NAMES.TWO_PLATES_THREE_EQUAL);
+      const preset = createPresetAllocation(PRESET_NAMES.TWO_PLATES_THREE_EQUAL, { participants: legacyParticipants });
       assert.equal(preset.plates.length, 2);
       const units = calculateMemberShareUnits(preset);
       assert.equal(units.gaurav, 4);
@@ -121,6 +124,7 @@ describe('Shared Plate Frontend Architecture', () => {
 
     test('creates 2 Plates / 1 Full + 2 Half preset', () => {
       const preset = createPresetAllocation(PRESET_NAMES.TWO_PLATES_ONE_FULL_TWO_HALF, {
+        participants: legacyParticipants,
         fullMemberId: 'gaurav',
       });
       assert.equal(preset.plates.length, 2);
@@ -197,7 +201,7 @@ describe('Shared Plate Frontend Architecture', () => {
     });
 
     test('Case 5: 2 plates shared equally by 3 people', () => {
-      const allocation = createPresetAllocation(PRESET_NAMES.TWO_PLATES_THREE_EQUAL);
+      const allocation = createPresetAllocation(PRESET_NAMES.TWO_PLATES_THREE_EQUAL, { participants: legacyParticipants });
       const morning = splitMealCost({ date: '2026-10-01', mealType: 'morning', effectiveAllocation: allocation });
       const mSum = morning.members.gaurav.amountPaise + morning.members.nikhil.amountPaise + morning.members.devansh.amountPaise;
       assert.equal(mSum, 10000);
@@ -211,6 +215,7 @@ describe('Shared Plate Frontend Architecture', () => {
 
     test('Case 6: 2 plates: 1 full + 2 half', () => {
       const allocation = createPresetAllocation(PRESET_NAMES.TWO_PLATES_ONE_FULL_TWO_HALF, {
+        participants: legacyParticipants,
         fullMemberId: 'gaurav',
       });
       const morning = splitMealCost({ date: '2026-10-01', mealType: 'morning', effectiveAllocation: allocation });
@@ -227,8 +232,8 @@ describe('Shared Plate Frontend Architecture', () => {
     });
 
     test('Case 7: 3 plates, 3 full', () => {
-      const allocation = createPresetAllocation(PRESET_NAMES.THREE_PLATES_THREE_FULL);
-      const morning = splitMealCost({ date: '2026-10-01', mealType: 'morning', effectiveAllocation: allocation });
+      const allocation = createPresetAllocation(PRESET_NAMES.THREE_PLATES_THREE_FULL, { participants: legacyParticipants });
+      const morning = splitMealCost({ date: '2026-10-01', mealType: 'morning', effectiveAllocation: allocation, participants: legacyParticipants });
       assert.equal(morning.members.gaurav.amountPaise, 5000);
       assert.equal(morning.members.nikhil.amountPaise, 5000);
       assert.equal(morning.members.devansh.amountPaise, 5000);
@@ -237,7 +242,7 @@ describe('Shared Plate Frontend Architecture', () => {
 
     test('Case 8: 0 plates, everyone skips', () => {
       const allocation = { mode: 'default', plates: [] };
-      const morning = splitMealCost({ date: '2026-10-01', mealType: 'morning', effectiveAllocation: allocation });
+      const morning = splitMealCost({ date: '2026-10-01', mealType: 'morning', effectiveAllocation: allocation, participants: legacyParticipants });
       assert.equal(morning.physicalPlates, 0);
       assert.equal(morning.roomAmountPaise, 0);
       assert.equal(morning.members.gaurav.amountPaise, 0);

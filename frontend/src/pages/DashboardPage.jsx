@@ -15,25 +15,29 @@ import { ErrorState } from '../components/ui/ErrorState.jsx';
 import { Skeleton } from '../components/ui/skeleton.jsx';
 import { useAuth } from '../hooks/useAuth.js';
 import { useDashboard } from '../hooks/useDashboard.js';
+import { useOperationalStudents } from '../hooks/useOperationalStudents.js';
 import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
-import { useFinance, useMemberFinance, useHouseholdFinance } from '../hooks/useFinance.js';
+import { useMemberFinance, useHouseholdFinance } from '../hooks/useFinance.js';
 import { FinancialOverviewCard } from '../components/finance/FinancialOverviewCard.jsx';
 import { FinancialHouseholdSummary } from '../components/finance/FinancialHouseholdSummary.jsx';
 import { DashboardStayCard } from '../components/dashboard/DashboardStayCard.jsx';
 import { usePwa } from '../hooks/usePwa.js';
 import { api } from '../lib/api.js';
 import { formatLogicalDate, getIndiaCurrentLogicalMonth } from '../lib/logicalDate.js';
+import { resolveDayParticipants } from '../lib/operationalRoster.js';
 
 export function DashboardPage() {
   useDocumentTitle('Dashboard');
   const auth = useAuth();
   const { isOnline } = usePwa();
   const dashboard = useDashboard();
+  const studentRoster = useOperationalStudents({ includeArchived: true, enabled: auth.authenticated && auth.role !== 'viewer' });
   const [pendingRow, setPendingRow] = useState('');
   const [saveMessage, setSaveMessage] = useState('');
   const [saveError, setSaveError] = useState('');
 
   const data = dashboard.data;
+  const dayParticipants = resolveDayParticipants(data?.meals, studentRoster.data);
 
   const handleMealChange = async (mealType, memberId, status) => {
     if (!isOnline) {
@@ -57,6 +61,7 @@ export function DashboardPage() {
 
       if (response.data) {
         dashboard.applyMealDayUpdate(response.data);
+        dashboard.refresh();
       }
 
       if (response.allocationReset) {
@@ -115,6 +120,11 @@ export function DashboardPage() {
           actionLabel="Try again"
           onAction={dashboard.refresh}
         />
+      )}
+
+      {studentRoster.error && (
+        <ErrorState compact title="Student names unavailable" message={studentRoster.error}
+          actionLabel="Try again" onAction={studentRoster.refresh} />
       )}
 
       {data && (
@@ -178,22 +188,26 @@ export function DashboardPage() {
           {isAdminOrSuper && data.meals && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <MealCard
+                participants={dayParticipants}
                 mealType="morning"
                 title="Morning"
                 meals={data.meals.morning}
                 allocation={data.meals.allocations?.morning}
                 allocationDetails={data.meals.allocationDetails?.morning}
+                pricing={data.meals.pricing?.morning}
                 editable={Boolean(data.meals.permissions?.canEdit) && isOnline}
                 editableMemberIds={data.meals.permissions?.editableMemberIds}
                 pendingRow={pendingRow}
                 onChange={handleMealChange}
               />
               <MealCard
+                participants={dayParticipants}
                 mealType="night"
                 title="Night"
                 meals={data.meals.night}
                 allocation={data.meals.allocations?.night}
                 allocationDetails={data.meals.allocationDetails?.night}
+                pricing={data.meals.pricing?.night}
                 editable={Boolean(data.meals.permissions?.canEdit) && isOnline}
                 editableMemberIds={data.meals.permissions?.editableMemberIds}
                 pendingRow={pendingRow}

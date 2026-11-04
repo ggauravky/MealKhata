@@ -1,6 +1,6 @@
 import { Check, Minus, Moon, Settings2, SunMedium, Tag, Users } from 'lucide-react';
-import { ROOMMATES } from '../../lib/constants.js';
 import { formatPaise } from '../../lib/money.js';
+import { canEditMealParticipant } from '../../lib/operationalRoster.js';
 import {
   formatPlateCount,
   formatPlateFraction,
@@ -26,6 +26,7 @@ export function MealCard({
   allocation = null,
   allocationDetails = null,
   pricing = null,
+  participants = [],
   editable = false,
   editableMemberIds = null,
   pendingRow,
@@ -52,6 +53,10 @@ export function MealCard({
   if (allocationDetails) {
     physicalPlates = allocationDetails.physicalPlates ?? takingCount;
     isShared = Boolean(allocationDetails.isShared);
+  } else if (allocation?.cost) {
+    physicalPlates = allocation.cost.physicalPlates ?? takingCount;
+    isShared = allocation.mode === 'custom' || allocation.source === 'custom'
+      || Object.values(allocation.cost.members ?? {}).some((member) => member.shareUnits > 0 && member.shareUnits < 6);
   } else if (allocation && allocation.mode === 'custom' && Array.isArray(allocation.plates)) {
     physicalPlates = allocation.plates.length;
     isShared = true;
@@ -196,15 +201,18 @@ export function MealCard({
       </CardHeader>
 
       <CardContent>
+        {participants.length === 0 && (
+          <p className="py-3 text-center text-xs text-slate-500 dark:text-slate-400">
+            No students eligible for this date.
+          </p>
+        )}
         <div className="space-y-0">
-          {ROOMMATES.map((member, index) => {
+          {participants.map((member, index) => {
             const rawStatus = meals[member.id];
             const currentStatus = rawStatus === 'taking' || rawStatus === 'skip' ? rawStatus : 'not_set';
             const rowId = `${mealType}:${member.id}`;
             const pending = pendingRow === rowId;
-            const isRowEditable = Boolean(
-              onChange && (editableMemberIds ? editableMemberIds.includes(member.id) : editable),
-            );
+            const isRowEditable = canEditMealParticipant({ editable, onChange, editableMemberIds, memberId: member.id });
 
             const shareUnits = getMemberShareUnits(member.id, currentStatus);
             const hasFractionalShare = isShared && shareUnits > 0 && shareUnits < 6;

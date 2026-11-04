@@ -5,7 +5,7 @@ import {
   getEffectiveMealAllocation,
   splitMealCost,
 } from './plateAllocation.service.js';
-import { MEAL_PRICES } from './plateAllocation.constants.js';
+import { MEAL_PRICES, resolvePhysicalPlateLimit } from './plateAllocation.constants.js';
 import { calculateStoredShareUnits, extractMealParticipantIds, normalizeParticipantIds, toPlainMealValue } from './mealParticipants.js';
 
 function serializeDate(value) {
@@ -99,6 +99,7 @@ export function serializeMealDay(
     timezone,
     saved: Boolean(document),
     revision: source.revision,
+    maxPhysicalPlates: resolvePhysicalPlateLimit(participantIds.length),
     meals: {
       morning: { ...(source.meals?.morning ?? {}) },
       night: { ...(source.meals?.night ?? {}) },

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
 import { getSocket } from '../lib/socket.js';
+import { canLoadMemberFinance } from '../lib/financePermissions.js';
 import { useAuth } from './useAuth.js';
 
 export function useMemberFinance(month, targetMemberId = null) {
@@ -10,7 +11,9 @@ export function useMemberFinance(month, targetMemberId = null) {
   const [error, setError] = useState(null);
 
   const fetchFinance = useCallback(async () => {
-    if (!month || !authenticated || role === 'viewer') {
+    if (!canLoadMemberFinance({ month, authenticated, role, targetMemberId })) {
+      setData(null);
+      setError(null);
       setLoading(false);
       return;
     }
@@ -30,7 +33,7 @@ export function useMemberFinance(month, targetMemberId = null) {
     } finally {
       setLoading(false);
     }
-  }, [month, targetMemberId, authenticated]);
+  }, [month, targetMemberId, authenticated, role]);
 
   useEffect(() => {
     fetchFinance();

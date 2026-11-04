@@ -100,7 +100,7 @@ export function createDashboardService({
         ...(todayDay?.participantOrder ?? []),
         ...Object.keys(morningMeals),
         ...Object.keys(nightMeals),
-        ...currentStudents.map((student) => student.studentId),
+        ...(!todayDay ? currentStudents.map((student) => student.studentId) : []),
       ])];
       const historical = todayDay?.calculationVersion?.startsWith('legacy-');
 
@@ -474,11 +474,12 @@ export function createDashboardService({
           date: today,
           saved: Boolean(todayDay?.saved),
           revision: todayDay?.revision ?? 0,
+          participantOrder: participantIds,
           morning: morningMeals,
           night: nightMeals,
           allocations: {
-            morning: morningAllocation,
-            night: nightAllocation,
+            morning: { ...morningAllocation, cost: morningCost },
+            night: { ...nightAllocation, cost: nightCost },
           },
           permissions: {
             canEdit,

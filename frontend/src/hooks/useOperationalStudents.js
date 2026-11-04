@@ -8,7 +8,10 @@ export function useOperationalStudents({ includeArchived = false, enabled = true
   const refresh = useCallback(() => setVersion((current) => current + 1), []);
 
   useEffect(() => {
-    if (!enabled) return undefined;
+    if (!enabled) {
+      setState({ loading: false, error: '', data: [] });
+      return undefined;
+    }
     const controller = new AbortController();
     api.get('/api/students/roster', { signal: controller.signal })
       .then((response) => setState({ loading: false, error: '',
@@ -19,5 +22,5 @@ export function useOperationalStudents({ includeArchived = false, enabled = true
     return () => controller.abort();
   }, [enabled, includeArchived, version]);
 
-  return { ...state, refresh };
+  return enabled ? { ...state, refresh } : { loading: false, error: '', data: [], refresh };
 }
