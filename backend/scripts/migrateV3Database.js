@@ -35,6 +35,8 @@ Protected environment inputs:
 Use --snapshot-sidecar PATH when the source archive lacks legacy-v2 snapshots.
 Use --stage pre-cutover|post-cutover with --verify. Final replay requires a
 second encrypted frozen source archive, its manifest, and --write-free-confirmed.
+If v2-only source collections changed before the freeze, --non-meal-review PATH
+must bind their exact counts and checksums to both archives. No old finance is imported.
 
 --apply restores and verifies the complete source archive into an empty disposable
 database before writing the empty v3 target. No source database is modified.
@@ -109,8 +111,11 @@ Use --report PATH to write the machine-readable migration/rollback report.`);
       const finalSourceManifest = JSON.parse(await fs.readFile(argument('--final-manifest'), 'utf8'));
       const finalSnapshotSidecar = argument('--final-snapshot-sidecar')
         ? JSON.parse(await fs.readFile(argument('--final-snapshot-sidecar'), 'utf8')) : undefined;
+      const nonMealChangeReview = argument('--non-meal-review')
+        ? JSON.parse(await fs.readFile(argument('--non-meal-review'), 'utf8')) : undefined;
       result = await replayFinalMealDelta({ ...common, targetConnection: target,
         targetClassification, finalArchive, finalSourceManifest, finalSnapshotSidecar,
+        nonMealChangeReview,
         sourceWritesStopped: true });
     } else {
       result = await applyV3Migration({ ...common, targetConnection: target,

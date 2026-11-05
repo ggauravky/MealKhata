@@ -41,6 +41,8 @@ const INDEX_MODELS = [Student, StudentAuditEvent, MealDay, MealHistorySnapshot,
   MealHistoricalCorrection, MonthlyMealRate, UserAccount, SystemSettings];
 const ORIGINAL_IDS = ['gaurav', 'nikhil', 'devansh'];
 const MIGRATION_ID = 'mealkhata-v3-blue-green';
+const MAX_FINAL_DELTA_DOCUMENTS = 256;
+const MAX_FINAL_DELTA_BYTES = 8 * 1024 * 1024;
 
 function isValidAccountHash(value) {
   try { return typeof value === 'string' && bcrypt.getRounds(value) === 12; }
@@ -326,8 +328,13 @@ export async function verifyV3Migration(options) {
   }
   const targetSnapshots = (await db.collection('meal_history_snapshots').find({}).toArray()).map(toExtendedJson);
   const targetCorrections = (await db.collection('meal_history_corrections').find({}).toArray()).map(toExtendedJson);
+  const frozenCorrectionIds = new Set(plan.collections.meal_history_corrections.map(documentId));
+  const frozenTargetCorrections = targetCorrections.filter(record => frozenCorrectionIds.has(documentId(record)));
+  const currentHistoricalAuthorities = {};
+  let targetMealDays = [];
   for (const name of V3_HISTORY_COLLECTIONS) {
     const actual = (await db.collection(name).find({}).sort({ _id: 1 }).toArray()).map(toExtendedJson);
+    if (name === 'meal_days') targetMealDays = actual;
     const expected = [...plan.collections[name]].sort((a, b) => documentId(a).localeCompare(documentId(b)));
     if (postCutover && name === 'students') {
       const actualIds = new Set(actual.map(student => student.studentId));
@@ -346,7 +353,7 @@ export async function verifyV3Migration(options) {
       for (const day of actual) {
         if (postCutover && !sourceByDate.has(day.date)) continue;
         try {
-          const targetAuthority = authoritativeDay(day, targetSnapshots, targetCorrections);
+          const targetAuthority = authoritativeDay(day, targetSnapshots, frozenTargetCorrections);
           const sourceAuthority = authoritativeDay(sourceByDate.get(day.date),
             verified.rawData.meal_history_snapshots ?? [], verified.rawData.meal_history_corrections ?? []);
           if (checksumValue(targetAuthority) !== checksumValue(sourceAuthority)
@@ -360,8 +367,32 @@ export async function verifyV3Migration(options) {
             dailyCostSummary: captured.dailyCostSummary }) !== checksumValue(sourceAuthority)) {
             issues.push(`meal_days ${day.date}: archived calendar baseline differs from source authority`);
           }
+          if (postCutover && day.schemaVersion !== 3) {
+            currentHistoricalAuthorities[day.date] = checksumValue(authoritativeDay(day,
+              targetSnapshots, targetCorrections));
+          }
         } catch { issues.push(`meal_days ${day.date}: authoritative calculation failed`); }
       }
+    }
+  }
+  if (postCutover) {
+    try {
+      checkCorrectionChains({ meal_days: targetMealDays,
+        meal_history_snapshots: targetSnapshots,
+        meal_history_corrections: targetCorrections });
+      for (const correction of targetCorrections) {
+        if (frozenCorrectionIds.has(documentId(correction))) continue;
+        const appended = fromExtendedJson(correction);
+        if (appended.actorRole !== 'superadmin'
+          || typeof appended.reason !== 'string' || appended.reason.trim().length < 3
+          || !['status', 'allocation', 'clearAllocation', 'price', 'clearPrice'].includes(appended.operation)
+          || !['morning', 'night'].includes(appended.mealType)
+          || !(appended.createdAt instanceof Date) || Number.isNaN(appended.createdAt.getTime())) {
+          issues.push(`meal_history_corrections ${correction.date}: appended correction lacks authorized audit metadata`);
+        }
+      }
+    } catch {
+      issues.push('Appended historical correction chain or exact integer-paise authority is invalid');
     }
   }
   for (const name of await targetCollectionNames(db)) {
@@ -414,7 +445,7 @@ export async function verifyV3Migration(options) {
   for (const [date, delta] of Object.entries(finalDeltas)) {
     const actual = await db.collection('meal_days').findOne({ date });
     let authorityChecksum = null;
-    try { if (actual) authorityChecksum = checksumValue(authoritativeDay(toExtendedJson(actual), targetSnapshots, targetCorrections)); }
+    try { if (actual) authorityChecksum = checksumValue(authoritativeDay(toExtendedJson(actual), targetSnapshots, frozenTargetCorrections)); }
     catch { /* Invalid authority is reported below. */ }
     if (!actual || checksumValue(toExtendedJson(actual)) !== delta.dayChecksum
       || authorityChecksum !== delta.authorityChecksum) {
@@ -431,6 +462,7 @@ export async function verifyV3Migration(options) {
   }
   return { passed: issues.length === 0, issues, verificationStage, counts: plan.counts,
     sourceChecksum: originalPlan.sourceChecksum, finalSourceChecksum: migration?.finalSourceChecksum ?? null,
+    currentHistoricalAuthorityChecksum: postCutover ? checksumValue(currentHistoricalAuthorities) : null,
     targetDatabase: db.databaseName };
 }
 
@@ -537,10 +569,42 @@ export async function replayFinalMealDelta(options) {
     sourceManifest: finalSourceManifest, encryptionKey,
     snapshotSidecar: options.finalSnapshotSidecar });
   const collectionNames = new Set([...Object.keys(baseArchive.rawData), ...Object.keys(finalArchiveData.rawData)]);
-  for (const name of collectionNames) {
-    if (!domain.includes(name) && checksumValue(baseArchive.rawData[name] ?? [])
-      !== checksumValue(finalArchiveData.rawData[name] ?? [])) {
-      throw new Error(`Final source changed outside the verified meal domain: ${name}`);
+  const nonMealChanges = [...collectionNames].filter(name => !domain.includes(name)
+    && (checksumValue(baseArchive.rawData[name] ?? [])
+      !== checksumValue(finalArchiveData.rawData[name] ?? [])
+      || checksumValue(baseArchive.manifest.collectionMetadata?.[name]?.indexes ?? [])
+        !== checksumValue(finalArchiveData.manifest.collectionMetadata?.[name]?.indexes ?? []))).sort();
+  if (nonMealChanges.length) {
+    const review = options.nonMealChangeReview;
+    if (!review) throw new Error(`Final source changed outside the verified meal domain: ${nonMealChanges.join(', ')}`);
+    if (review.format !== 'mealkhata-v3-nonmeal-review-v1'
+      || review.baseArchiveSha256 !== base.sourceChecksum
+      || review.finalArchiveSha256 !== final.sourceChecksum
+      || review.decision !== 'acknowledge-excluded-v2-only'
+      || typeof review.reason !== 'string' || review.reason.trim().length < 10
+      || !Array.isArray(review.changes) || review.changes.length !== nonMealChanges.length
+      || Object.keys(review).some(key => !['format', 'baseArchiveSha256',
+        'finalArchiveSha256', 'decision', 'reason', 'changes'].includes(key))) {
+      throw new Error('Non-meal source change review is missing or bound to the wrong archive fingerprint');
+    }
+    const reviewedNames = new Set();
+    for (const item of review.changes) {
+      if (!item || !nonMealChanges.includes(item.collection) || reviewedNames.has(item.collection)
+        || Object.keys(item).some(key => !['collection', 'baseChecksum', 'finalChecksum',
+          'baseCount', 'finalCount', 'baseIndexesChecksum', 'finalIndexesChecksum'].includes(key))) {
+        throw new Error('Non-meal source change review has an unexpected collection');
+      }
+      reviewedNames.add(item.collection);
+      const before = baseArchive.manifest.collectionMetadata?.[item.collection];
+      const after = finalArchiveData.manifest.collectionMetadata?.[item.collection];
+      if (item.baseChecksum !== (before?.sha256Checksum ?? checksumValue([]))
+        || item.finalChecksum !== (after?.sha256Checksum ?? checksumValue([]))
+        || item.baseCount !== (before?.count ?? 0)
+        || item.finalCount !== (after?.count ?? 0)
+        || item.baseIndexesChecksum !== checksumValue(before?.indexes ?? [])
+        || item.finalIndexesChecksum !== checksumValue(after?.indexes ?? [])) {
+        throw new Error(`Non-meal source change review checksum or count differs: ${item.collection}`);
+      }
     }
   }
   for (const name of domain) {
@@ -570,6 +634,11 @@ export async function replayFinalMealDelta(options) {
   const changed = Object.fromEntries(domain.map(name => [name,
     final.collections[name].filter(doc => checksumValue(doc)
       !== checksumValue(baseDocs[name].get(documentId(doc)) ?? null))]));
+  const deltaCount = domain.reduce((total, name) => total + changed[name].length, 0);
+  if (deltaCount > MAX_FINAL_DELTA_DOCUMENTS
+    || Buffer.byteLength(JSON.stringify(changed)) > MAX_FINAL_DELTA_BYTES) {
+    throw new Error('Final meal delta exceeds one safe transaction; take a new base archive and target');
+  }
   const changedDates = new Set(changed.meal_days.map(doc => doc.date));
   for (const name of ['meal_history_snapshots', 'meal_history_corrections']) {
     for (const doc of changed[name]) changedDates.add(doc.date);

@@ -132,3 +132,119 @@ test('checks embedded charge adjustments and clearance snapshots by effective da
   assert.ok(result.issues.some(issue => issue.includes('clearance-old') && issue.includes('boundary')));
   assert.equal(result.issues.some(issue => issue.includes('clearance-valid')), false);
 });
+
+async function auditWhileCommitting(triggerCollection, delayedCollection, write) {
+  const db = connection.db;
+  let triggerRead;
+  let writeFinished;
+  const afterTrigger = new Promise(resolve => { triggerRead = resolve; });
+  const afterWrite = new Promise(resolve => { writeFinished = resolve; });
+  const observedDb = {
+    client: db.client,
+    collection(name) {
+      const collection = db.collection(name);
+      if (name !== triggerCollection && name !== delayedCollection) return collection;
+      return { find(query, options) {
+        const cursor = collection.find(query, options);
+        return { async toArray() {
+          if (name === delayedCollection) await afterWrite;
+          const rows = await cursor.toArray();
+          if (name === triggerCollection) triggerRead();
+          return rows;
+        } };
+      } };
+    },
+  };
+  const writer = (async () => {
+    await afterTrigger;
+    const session = await connection.startSession();
+    try { await session.withTransaction(() => write(db, session)); }
+    finally { await session.endSession(); writeFinished(); }
+  })();
+  const result = await auditV3OperationalFinances(observedDb, boundary);
+  await writer;
+  return result;
+}
+
+test('concurrent payment and reference claim are read from one ledger snapshot', async () => {
+  const result = await auditWhileCommitting('payments', 'payment_reference_claims', async (db, session) => {
+    await db.collection('payments').insertOne({ paymentId: 'concurrent-payment', memberId: 'gaurav',
+      month: '2026-11', amountPaise: 101, recordedAt: at(boundary), upiReference: 'NEW-REF' }, { session });
+    await db.collection('payment_reference_claims').insertOne({ normalizedReference: 'NEW-REF',
+      ledger: 'MESS_PAYMENT', documentId: 'concurrent-payment', memberId: 'gaurav' }, { session });
+  });
+  assert.equal(result.passed, true, result.issues.join('; '));
+  assert.equal(result.counts.payments, 0);
+  assert.equal(result.counts.payment_reference_claims, 0);
+});
+
+test('concurrent reimbursement cannot be paired with an earlier expense balance', async () => {
+  await connection.db.collection('expenses').insertOne({ expenseId: 'expense-race',
+    date: boundary, month: '2026-11', paidByMemberId: 'gaurav', amountPaise: 100,
+    allocations: [{ memberId: 'nikhil', amountPaise: 100 }] });
+  const result = await auditWhileCommitting('expenses', 'expense_reimbursements', async (db, session) => {
+    await db.collection('expenses').updateOne({ expenseId: 'expense-race' },
+      { $set: { amountPaise: 200, allocations: [{ memberId: 'nikhil', amountPaise: 200 }] } }, { session });
+    await db.collection('expense_reimbursements').insertOne({ reimbursementId: 'reimb-race',
+      expenseId: 'expense-race', expenseMonth: '2026-11', fromMemberId: 'nikhil',
+      toMemberId: 'gaurav', amountPaise: 200, status: 'recorded', recordedAt: at(boundary) }, { session });
+  });
+  assert.equal(result.passed, true, result.issues.join('; '));
+  assert.equal(result.counts.expense_reimbursements, 0);
+});
+
+test('concurrent deposit receipt and reference claim cannot split across reads', async () => {
+  await connection.db.collection('hostel_stays').insertOne({ stayId: 'stay-race', memberId: 'gaurav' });
+  await connection.db.collection('hostel_deposit_accounts').insertOne({
+    depositAccountId: 'deposit-race', stayId: 'stay-race', memberId: 'gaurav' });
+  const result = await auditWhileCommitting('hostel_deposit_transactions', 'payment_reference_claims',
+    async (db, session) => {
+      await db.collection('hostel_deposit_transactions').insertOne({ depositTransactionId: 'receipt-race',
+        depositAccountId: 'deposit-race', stayId: 'stay-race', memberId: 'gaurav',
+        type: 'RECEIVED', amountPaise: 100, status: 'recorded', recordedAt: at(boundary),
+        reference: 'DEPOSIT-REF' }, { session });
+      await db.collection('payment_reference_claims').insertOne({ normalizedReference: 'DEPOSIT-REF',
+        ledger: 'HOSTEL_DEPOSIT', documentId: 'receipt-race', memberId: 'gaurav' }, { session });
+    });
+  assert.equal(result.passed, true, result.issues.join('; '));
+  assert.equal(result.counts.hostel_deposit_transactions, 0);
+  assert.equal(result.counts.payment_reference_claims, 0);
+});
+
+test('concurrent credit allocation cannot see a funded ledger from another instant', async () => {
+  const db = connection.db;
+  await db.collection('hostel_stays').insertOne({ stayId: 'stay-credit', memberId: 'nikhil' });
+  await db.collection('hostel_deposit_accounts').insertOne({ depositAccountId: 'account-credit',
+    stayId: 'stay-credit', memberId: 'nikhil' });
+  await db.collection('hostel_deposit_transactions').insertOne({ depositTransactionId: 'receipt-credit',
+    depositAccountId: 'account-credit', stayId: 'stay-credit', memberId: 'nikhil',
+    type: 'RECEIVED', amountPaise: 1000, status: 'reclassified', reclassificationId: 'reclass-credit',
+    recordedAt: at(boundary) });
+  await db.collection('payment_reclassifications').insertOne({ reclassificationId: 'reclass-credit',
+    sourceDepositTransactionId: 'receipt-credit', memberId: 'nikhil', amountPaise: 1000,
+    paymentDate: at(boundary), allocations: [{ amountPaise: 1000 }] });
+  await db.collection('unallocated_credits').insertOne({ creditId: 'credit-race',
+    reclassificationId: 'reclass-credit', sourceDepositTransactionId: 'receipt-credit',
+    memberId: 'nikhil', amountPaise: 1000, allocatedAmountPaise: 0,
+    settledAmountPaise: 0, remainingAmountPaise: 1000, paymentDate: at(boundary) });
+  await db.collection('expenses').insertOne({ expenseId: 'expense-credit', date: boundary,
+    month: '2026-11', paidByMemberId: 'gaurav', amountPaise: 100,
+    allocations: [{ memberId: 'nikhil', amountPaise: 100 }] });
+  const result = await auditWhileCommitting('expense_reimbursements', 'credit_allocations',
+    async (target, session) => {
+      await target.collection('expense_reimbursements').insertOne({ reimbursementId: 'reimb-credit',
+        expenseId: 'expense-credit', expenseMonth: '2026-11', fromMemberId: 'nikhil',
+        toMemberId: 'gaurav', amountPaise: 100, status: 'recorded', recordedAt: at(boundary),
+        sourceCreditAllocationId: 'alloc-credit' }, { session });
+      await target.collection('credit_allocations').insertOne({ creditAllocationId: 'alloc-credit',
+        creditId: 'credit-race', reclassificationId: 'reclass-credit',
+        sourceDepositTransactionId: 'receipt-credit', memberId: 'nikhil',
+        destinationType: 'EXPENSE_REIMBURSEMENT', targetRecordId: 'expense-credit',
+        targetLedgerRecordId: 'reimb-credit', amountPaise: 100, completedAt: at(boundary) }, { session });
+      await target.collection('unallocated_credits').updateOne({ creditId: 'credit-race' },
+        { $set: { allocatedAmountPaise: 100, remainingAmountPaise: 900 } }, { session });
+    });
+  assert.equal(result.passed, true, result.issues.join('; '));
+  assert.equal(result.counts.expense_reimbursements, 0);
+  assert.equal(result.counts.credit_allocations, 0);
+});

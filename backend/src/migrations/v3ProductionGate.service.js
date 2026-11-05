@@ -7,7 +7,7 @@ const PLAN_FIELDS = new Set(['format', 'source', 'recovery', 'target',
 const ROLES = ['source', 'recovery', 'target'];
 const ID_FIELDS = new Set(['clusterId', 'databaseName', 'replicaSet']);
 const ACTIONS = new Set(['read-source-inventory', 'archive-source', 'restore-recovery',
-  'create-target', 'apply-history', 'freeze-source-writes', 'replay-final-meals',
+  'create-target', 'apply-history', 'freeze-source-writes', 'archive-frozen-source', 'replay-final-meals',
   'configure-financial-boundary', 'configure-operations', 'deploy-backend',
   'deploy-frontend', 'switch-connection', 'open-writes', 'rollback-connection']);
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;

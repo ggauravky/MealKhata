@@ -71,6 +71,11 @@ test('preflight CLI exposes archive-only inputs and never prints a database URI'
 });
 
 test('offline CLI writes a private report from verified files and signals inventory issues', async () => {
+  await connection.db.collection('meal_days').insertOne({ date: '2026-09-29', revision: 0,
+    meals: { morning: { gaurav: 'taking', nikhil: 'skip', devansh: 'skip' },
+      night: { gaurav: 'skip', nikhil: 'skip', devansh: 'skip' } },
+    changes: [], allocationChanges: [], priceChanges: [] });
+  await connection.db.collection('unexpected_preflight_cli').insertOne({ sentinel: true });
   const { serializedPackage: archive, manifest } = await createEncryptedBackup({
     dbConnection: connection, encryptionKey: key,
     baselineReaders: createReadOnlyMealBaselineReaders(connection.db),
@@ -90,9 +95,21 @@ test('offline CLI writes a private report from verified files and signals invent
     assert.equal(run.status, 1); // The deliberately unexpected source collection blocks cutover.
     assert.doesNotMatch(run.stdout + run.stderr, /mongodb(?:\+srv)?:\/\//i);
     assert.equal(run.stdout.includes(key), false);
+    assert.equal(run.stdout.includes('gaurav'), false);
+    assert.equal(run.stdout.includes('memberAmountsPaise'), false);
+    assert.equal(run.stdout.includes('v2_preflight_fixture'), false);
+    assert.equal(run.stdout.includes('5000'), false);
+    const summary = JSON.parse(run.stdout);
+    assert.equal(summary.passed, false);
+    assert.equal(summary.issueCount > 0, true);
+    assert.equal(summary.historicalCosts, undefined);
     const report = JSON.parse(await fs.readFile(files[3], 'utf8'));
     assert.equal(report.passed, false);
-    assert.equal(report.collections.unexpected_shadow.count, 1);
+    assert.equal(report.collections.unexpected_preflight_cli.count, 1);
+    assert.ok(report.historicalCosts.memberAmountsPaise.gaurav >= 5000);
+    if (process.platform !== 'win32') {
+      assert.equal((await fs.stat(files[3])).mode & 0o077, 0);
+    }
   } finally {
     for (const file of files) await fs.unlink(file).catch(error => {
       if (error.code !== 'ENOENT') throw error;

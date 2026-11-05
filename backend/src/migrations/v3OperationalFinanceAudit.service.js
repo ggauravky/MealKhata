@@ -21,9 +21,20 @@ function recordMap(rows, key) { return new Map(rows.map(row => [row[key], row]))
 
 /** Read-only post-cutover audit of effective financial dates and linked obligations. */
 export async function auditV3OperationalFinances(db, financialStartDate) {
-  if (!db?.collection) throw new Error('A connected target database is required');
-  const rows = Object.fromEntries(await Promise.all(COLLECTIONS.map(async name =>
-    [name, await db.collection(name).find({}).toArray()])));
+  if (!db?.collection || !db.client?.startSession) {
+    throw new Error('A connected replica-set target database is required for financial reconciliation');
+  }
+  const session = db.client.startSession();
+  let rows;
+  try {
+    rows = await session.withTransaction(async () => {
+      const snapshot = {};
+      for (const name of COLLECTIONS) {
+        snapshot[name] = await db.collection(name).find({}, { session }).toArray();
+      }
+      return snapshot;
+    }, { readConcern: { level: 'snapshot' }, readPreference: 'primary' });
+  } finally { await session.endSession(); }
   const issues = [];
   const start = isValidLogicalDate(financialStartDate) ? financialStartDate : null;
   const startMonth = start?.slice(0, 7);

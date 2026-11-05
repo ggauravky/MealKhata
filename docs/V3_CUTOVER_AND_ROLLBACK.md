@@ -21,8 +21,8 @@ For every checkbox below, the release journal must record the exact action, plan
 | 4 | `create-target` | Different allowlisted empty database; scoped credentials; no inherited operational ledgers. |
 | 5 | `apply-history` | Imported original IDs, meals, snapshots, corrections, rates and audits have exact checksums and paise. Both fresh Super Admin logins work; boundary is unset. |
 | 6 | `freeze-source-writes` | Render instances, workers, queues, push jobs, cron jobs and manual admin writes are stopped; second operator verifies no writer remains. Record freeze time. |
-| 7 | `archive-source` again | Final frozen archive, manifest and matching sidecar; compare every collection to the first archive. Only reviewed meal-domain drift may enter replay. |
-| 8 | `replay-final-meals` | Transactional full delta and checkpoint verified against frozen archive; historical daily and monthly paise equal exactly. |
+| 7 | `archive-frozen-source` | Final frozen archive, manifest and matching sidecar; compare all collection documents and indexes to the base archive. Inventory v2-only drift separately. |
+| 8 | `replay-final-meals` | An exact base/final-bound non-meal review, if needed, and separately signed replay approval; no old liability import. Transactional meal delta and checkpoint verified against frozen archive; historical daily and monthly paise equal exactly. |
 | 9 | `configure-financial-boundary` | Owner-approved future boundary and partial-month rule, recorded in release journal and target audit; historical dues remain excluded. |
 | 10 | `configure-operations` | Explicit student status/eligibility, optional accounts/Stays/rooms/rent/deposit settings; missing facts remain blocked. |
 | 11 | `deploy-backend`, then `deploy-frontend` | Reviewed immutable artifacts, protected target credentials/JWT key, `CANONICAL_ONLY_AUTH=true`, API rewrites, domain/CORS/cookie/WebSocket setup. No public traffic yet. |
@@ -43,8 +43,8 @@ At each gate, a failed check stops writes and preserves both databases and all a
 
 - [ ] Stop all source writes, including jobs, push actions, background services and manual admin edits. Record freeze time and obtain a second operator's confirmation.
 - [ ] Create a second encrypted archive and manifest from the frozen source. Generate a new sidecar if any legacy source checksum changed or new legacy day appeared.
-- [ ] Compare base and frozen source collection fingerprints. Allow only reviewed meal-domain changes; reject unrelated drift.
-- [ ] Transactionally replay all changed meal days, snapshot/correction chains and monthly rates with original IDs, timestamps and audit actors. Verify checkpoint and independent final archive comparison. A one-paisa difference is a stop condition.
+- [ ] Compare base and frozen source collection document and index fingerprints. For legitimate v2-only changes, record each collection's before/after counts, checksums, index checksums, external financial references and why it remains in v2. Obtain separate owner/operator approval for replay. Never carry old balances into v3. Unexplained drift stops the cutover.
+- [ ] Transactionally replay all changed meal days, snapshot/correction chains and monthly rates with original IDs, timestamps and audit actors. Verify checkpoint and independent final archive comparison. A one-paisa difference is a stop condition. If the delta exceeds 256 documents or 8 MiB, recapture a new base archive and prepare a fresh empty target; do not split the transaction or increase the limit ad hoc.
 - [ ] Run pre-cutover data, index, authorization and accounting audits. Retain the source checksum and rollback manifest unchanged.
 
 ## Controlled activation

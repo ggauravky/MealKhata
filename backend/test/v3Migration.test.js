@@ -15,6 +15,7 @@ import { createSessionToken, verifySessionToken } from '../src/auth/token.servic
 import { verifyDataIntegrity } from '../scripts/verifyData.js';
 import { verifyIndexes } from '../scripts/verifyIndexes.js';
 import { buildLegacyMealSnapshot } from '../src/migrations/legacyMealSnapshot.service.js';
+import { createHistoricalMealCorrectionService } from '../src/meals/mealHistoricalCorrection.service.js';
 import { checksumValue, discoverSourceInventory } from '../src/migrations/sourceInventory.service.js';
 import { createLegacySnapshotSidecar } from '../src/migrations/v3SnapshotSidecar.service.js';
 import { createReadOnlyMealBaselineReaders } from '../src/migrations/v3ArchiveBaselines.service.js';
@@ -283,6 +284,56 @@ describe('v3 blue-green migration in isolated replica set', () => {
         targetConnection: post, verificationStage: 'post-cutover' });
       assert.equal(invalidRole.passed, false);
       assert.match(invalidRole.issues.join('; '), /role|authorization|account/i);
+    } finally { await post.close(); }
+  });
+
+  test('post-cutover verifier accepts an authorized appended correction while preserving frozen authority', async () => {
+    const post = await mongoose.createConnection(replSet.getUri(), { dbName: 'mealkhata_v3_authorized_correction' }).asPromise();
+    try {
+      await applyV3Migration({ archive, encryptionKey: key, sourceManifest: manifest,
+        targetConnection: post, targetDbName: post.db.databaseName,
+        targetClassification: 'isolated-test', superAdmin: { email, password }, recoverySuperAdmin });
+      await post.db.collection('system_settings').updateOne({ settingsId: 'system' },
+        { $set: { financialStartDate: '2026-11-01' } }); // Isolated fixture only.
+      const originalDay = await post.db.collection('meal_days').findOne({ date: '2026-09-30' });
+      const originalSnapshot = await post.db.collection('meal_history_snapshots').findOne({ date: '2026-09-30' });
+      const corrections = post.db.collection('meal_history_corrections');
+      const options = { archive, encryptionKey: key, sourceManifest: manifest,
+        targetConnection: post, verificationStage: 'post-cutover' };
+      const frozenVerification = await verifyV3Migration(options);
+      assert.equal(frozenVerification.passed, true, frozenVerification.issues.join('; '));
+      const service = createHistoricalMealCorrectionService({
+        meals: { findByDate: date => post.db.collection('meal_days').findOne({ date }) },
+        snapshots: { findByDateAndVersion: (date, calculationVersion) =>
+          post.db.collection('meal_history_snapshots').findOne({ date, calculationVersion }) },
+        corrections: {
+          listByDate: date => corrections.find({ date }).sort({ revision: 1 }).toArray(),
+          create: record => corrections.insertOne(record),
+        },
+      });
+      const result = await service.correct({ date: '2026-09-30', expectedRevision: 3,
+        operation: 'price', mealType: 'morning', pricePaise: 103,
+        reason: 'Verified post-cutover correction', actorRole: 'superadmin' });
+      assert.equal(result.revision, 4);
+      assert.equal(result.dailyCostSummary.members.gaurav.morningAmountPaise, 103);
+      assert.deepEqual(await post.db.collection('meal_days').findOne({ date: '2026-09-30' }), originalDay);
+      assert.deepEqual(await post.db.collection('meal_history_snapshots').findOne({ date: '2026-09-30' }), originalSnapshot);
+      const verified = await verifyV3Migration(options);
+      assert.equal(verified.passed, true, verified.issues.join('; '));
+      assert.notEqual(verified.currentHistoricalAuthorityChecksum,
+        frozenVerification.currentHistoricalAuthorityChecksum);
+      await corrections.updateOne({ date: '2026-09-30', revision: 4 },
+        { $set: { actorRole: 'admin' } });
+      const unauthorized = await verifyV3Migration(options);
+      assert.equal(unauthorized.passed, false);
+      assert.match(unauthorized.issues.join('; '), /authorized audit metadata/i);
+      await corrections.updateOne({ date: '2026-09-30', revision: 4 },
+        { $set: { actorRole: 'superadmin' } });
+      await corrections.updateOne({ date: '2026-09-30', revision: 4 },
+        { $inc: { 'snapshot.costs.morning.memberAmountsPaise.gaurav': 1 } });
+      const tampered = await verifyV3Migration(options);
+      assert.equal(tampered.passed, false);
+      assert.match(tampered.issues.join('; '), /correction|paise|authority/i);
     } finally { await post.close(); }
   });
 
@@ -561,6 +612,38 @@ describe('v3 blue-green migration in isolated replica set', () => {
     } finally { await Promise.allSettled([old.close(), fresh.close()]); }
   });
 
+  test('oversized final meal delta stops before opening a target transaction', async () => {
+    const baseSource = await mongoose.createConnection(replSet.getUri(),
+      { dbName: 'mealkhata_v3_large_delta_source' }).asPromise();
+    const candidate = await mongoose.createConnection(replSet.getUri(),
+      { dbName: 'mealkhata_v3_large_delta_target' }).asPromise();
+    try {
+      const baseArchive = (await createEncryptedBackup({ dbConnection: baseSource, encryptionKey: key })).serializedPackage;
+      const baseManifest = JSON.parse(baseArchive).manifest;
+      await applyV3Migration({ archive: baseArchive, sourceManifest: baseManifest,
+        encryptionKey: key, targetConnection: candidate, targetDbName: candidate.db.databaseName,
+        targetClassification: 'isolated-test', superAdmin: { email, password }, recoverySuperAdmin });
+      const days = Array.from({ length: 257 }, (_, index) => ({
+        date: new Date(Date.UTC(2026, 0, 1 + index)).toISOString().slice(0, 10),
+        schemaVersion: 3, participantOrder: ['gaurav'], revision: 0,
+        meals: { morning: { gaurav: 'taking' }, night: {} },
+        allocations: { morning: null, night: null }, changes: [],
+      }));
+      await baseSource.db.collection('meal_days').insertMany(days);
+      const finalArchive = (await createEncryptedBackup({ dbConnection: baseSource,
+        encryptionKey: key })).serializedPackage;
+      const finalSourceManifest = JSON.parse(finalArchive).manifest;
+      await assert.rejects(replayFinalMealDelta({ archive: baseArchive,
+        sourceManifest: baseManifest, encryptionKey: key, finalArchive, finalSourceManifest,
+        targetConnection: candidate, targetClassification: 'isolated-test',
+        sourceWritesStopped: true }), /delta exceeds|too many.*documents/i);
+      assert.equal(await candidate.db.collection('meal_days').countDocuments(), 0);
+      const marker = await candidate.db.collection('v3_migration_manifests').findOne({
+        migrationId: 'mealkhata-v3-blue-green' });
+      assert.equal(marker.finalSourceChecksum, undefined);
+    } finally { await Promise.allSettled([baseSource.close(), candidate.close()]); }
+  });
+
   test('complete disposable migration and rollback connection rehearsal leaves frozen v2 source intact', async () => {
     const uri = replSet.getUri();
     const original = await mongoose.createConnection(uri, { dbName: 'mealkhata_v3_rehearsal_original' }).asPromise();
@@ -592,6 +675,9 @@ describe('v3 blue-green migration in isolated replica set', () => {
         meals: { morning: { nikhil: 'taking' }, night: {} },
         changes: [], allocationChanges: [], priceChanges: [] };
       await original.db.collection('meal_days').insertOne(added);
+      await original.db.collection('payments').insertOne({ paymentId: 'v2-during-prep',
+        memberId: 'nikhil', amountPaise: 125 });
+      await original.db.collection('payments').createIndex({ memberId: 1 });
       const finalArchive = (await createEncryptedBackup({ dbConnection: original, encryptionKey: key,
         baselineReaders: createReadOnlyMealBaselineReaders(original.db) })).serializedPackage;
       const finalSourceManifest = JSON.parse(finalArchive).manifest;
@@ -601,9 +687,29 @@ describe('v3 blue-green migration in isolated replica set', () => {
       const replay = { archive: oldArchive, sourceManifest: oldManifest, snapshotSidecar: sidecar,
         encryptionKey: key, finalArchive, finalSourceManifest, finalSnapshotSidecar,
         targetConnection: candidate, targetClassification: 'isolated-test', sourceWritesStopped: true };
+      await assert.rejects(replayFinalMealDelta(replay), /outside.*meal domain|review/i);
+      const nonMealChangeReview = { format: 'mealkhata-v3-nonmeal-review-v1',
+        baseArchiveSha256: oldManifest.sha256Checksum,
+        finalArchiveSha256: finalSourceManifest.sha256Checksum,
+        decision: 'acknowledge-excluded-v2-only',
+        reason: 'Verified v2 payment remains only in the frozen v2 source',
+        changes: [{ collection: 'payments',
+          baseChecksum: oldManifest.collectionMetadata.payments.sha256Checksum,
+          finalChecksum: finalSourceManifest.collectionMetadata.payments.sha256Checksum,
+          baseCount: 1, finalCount: 2,
+          baseIndexesChecksum: checksumValue(oldManifest.collectionMetadata.payments.indexes),
+          finalIndexesChecksum: checksumValue(finalSourceManifest.collectionMetadata.payments.indexes) }] };
+      await assert.rejects(replayFinalMealDelta({ ...replay,
+        nonMealChangeReview: { ...nonMealChangeReview, baseArchiveSha256: 'f'.repeat(64) } }), /review|fingerprint/i);
+      replay.nonMealChangeReview = nonMealChangeReview;
       await assert.rejects(replayFinalMealDelta({ ...replay,
         onBeforeCheckpoint: () => { throw new Error('rehearsal power loss'); } }), /rehearsal power loss/);
       assert.equal(await candidate.db.collection('meal_days').countDocuments({ date: added.date }), 0);
+      const resumed = await mongoose.createConnection(replSet.getUri(),
+        { dbName: candidate.db.databaseName }).asPromise();
+      try {
+        assert.equal((await replayFinalMealDelta({ ...replay, targetConnection: resumed })).replayed, 1);
+      } finally { await resumed.close(); }
       assert.equal((await replayFinalMealDelta(replay)).replayed, 1);
       assert.equal((await verifyV3Migration(replay)).passed, true);
       assert.equal((await verifyIndexes(candidate)).passed, true);
@@ -632,6 +738,7 @@ describe('v3 blue-green migration in isolated replica set', () => {
       assert.equal(await active.db.collection('payments').countDocuments(), 2);
       active = original; // Rehearse restoring the original connection; no source write is involved.
       assert.equal(await active.db.collection('payments').countDocuments({ paymentId: 'old-v2-payment' }), 1);
+      assert.equal(await active.db.collection('payments').countDocuments({ paymentId: 'v2-during-prep' }), 1);
       assert.equal(await active.db.collection('payments').countDocuments({
         paymentId: { $in: v3Payments.map(payment => payment.paymentId) } }), 0);
       assert.equal(await active.db.collection('meal_days').countDocuments(), 2);
