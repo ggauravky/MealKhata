@@ -28,7 +28,8 @@ function findAvailablePort(preferredPort) {
       server.unref();
       server.once('error', (error) => {
         server.close();
-        if (port === preferredPort && error.code === 'EADDRINUSE') {
+        if (port === preferredPort && error.code === 'EADDRINUSE'
+          && process.env.E2E_REQUIRE_FIXED_PORTS !== 'true') {
           probe(0);
           return;
         }
@@ -87,6 +88,7 @@ async function seedDatabase(uri, backendPort) {
     { Student },
     { StudentAuditEvent },
     { SystemSettings },
+    { buildLegacyMealSnapshot },
     { roomFeeService },
     { stayService },
     { expenseService },
@@ -95,6 +97,7 @@ async function seedDatabase(uri, backendPort) {
     import('../src/students/student.model.js'),
     import('../src/students/studentAuditEvent.model.js'),
     import('../src/settings/systemSettings.model.js'),
+    import('../src/migrations/legacyMealSnapshot.service.js'),
     import('../src/roomFees/roomFee.service.js'),
     import('../src/stays/stay.service.js'),
     import('../src/expenses/expense.service.js'),
@@ -139,6 +142,15 @@ async function seedDatabase(uri, backendPort) {
   ]);
   await SystemSettings.create({ settingsId: 'system', financialStartDate: '2026-10-01',
     configuredAt: new Date(), configuredBy: 'isolated-e2e-fixture' });
+
+  const historicalDay = {
+    date: '2026-09-30', revision: 0, financialClassification: 'historical',
+    meals: { morning: { gaurav: 'taking', nikhil: 'skip', devansh: 'skip' },
+      night: { gaurav: 'skip', nikhil: 'taking', devansh: 'skip' } },
+    changes: [], allocationChanges: [], priceChanges: [],
+  };
+  await mongoose.connection.db.collection('meal_days').insertOne(historicalDay);
+  await mongoose.connection.db.collection('meal_history_snapshots').insertOne(buildLegacyMealSnapshot(historicalDay));
 
   const passwordHash = await bcrypt.hash(testPassword, 12);
   await UserAccount.create([
@@ -289,6 +301,7 @@ async function main() {
     APP_ORIGIN: frontendOrigin,
     APP_TIMEZONE: 'Asia/Kolkata',
     AUTH_JWT_SECRET: 'isolated-e2e-jwt-secret-at-least-thirty-two-bytes',
+    CANONICAL_ONLY_AUTH: 'true',
     ENABLE_TEST_LOGS: '1',
     MEALKHATA_API_ORIGIN: backendOrigin,
     VITE_SOCKET_URL: backendOrigin,
@@ -321,7 +334,7 @@ async function main() {
   console.info(`App: ${frontendOrigin}`);
   console.info('Super Admin: superadmin@example.test');
   console.info('Member: gaurav@example.test');
-  console.info(`Password: ${testPassword}`);
+  console.info('Credentials are defined only in the isolated test fixture.');
 }
 
 process.once('SIGINT', () => void shutdown(0));

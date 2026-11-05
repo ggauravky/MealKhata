@@ -46,7 +46,7 @@ function StudentCard({ student, isSuperAdmin, onEdit, onAccountAction, onLifecyc
   const archived = student.status === 'ARCHIVED';
 
   return (
-    <Card className={archived ? 'border-slate-300 bg-slate-50/60 dark:border-slate-700 dark:bg-slate-900/40' : ''}>
+    <Card data-testid={`student-card-${student.studentId}`} className={archived ? 'border-slate-300 bg-slate-50/60 dark:border-slate-700 dark:bg-slate-900/40' : ''}>
       <CardHeader>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">

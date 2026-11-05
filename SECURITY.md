@@ -42,6 +42,7 @@ INTERNET
   - **Member**: 12-hour operational session (`43,200` seconds).
 - **Storage & Cookie Hardening**: Delivered via host-only `HttpOnly`, `Secure` (production), `SameSite=Lax`, `Path=/` session cookie named `mk_session` with explicit `Max-Age` matching the role's JWT lifetime. Sessions persist across tab/browser closures and PWA restarts.
 - **Revocation Invariants**: Sessions remain strictly subject to database account status (`active === true`), immediate `sessionVersion` invalidation on credentials change, and `AUTH_JWT_SECRET` rotation.
+- **Canonical v3 Accounts**: Student identity is resolved from the MongoDB student registry. Super Admin provisions optional accounts separately from roster admission. Archived students retain historical identity; an account with revoked login cannot authenticate, and session revocation invalidates existing cookies. `CANONICAL_ONLY_AUTH=true` rejects legacy credential fallback and userId-less tokens after both fresh Super Admin logins are verified.
 - **JWT Claims**: Issuer (`meal-khata`), Audience (`meal-khata-web`), subject, role, memberId, userId, sessionVersion, and matching expiration claim. Algorithms are restricted strictly to `HS256`.
 - **Passwords**: Hashed with `bcryptjs` cost factor 12. Password hashes are never returned by APIs or logged.
 - **Timing Attacks**: Authentication uses dummy hash evaluations on unknown emails to prevent timing-based user enumeration. Error responses remain generic: `"Invalid email or password."`.
@@ -52,7 +53,7 @@ INTERNET
 
 MealKhata defines four strict operational roles:
 1. **Viewer**: Public view-only access to schedule, kitchen plate totals, and public reports. Cannot mutate any records.
-2. **Member**: Authenticated household member (`gaurav`, `nikhil`, `devansh`).
+2. **Member**: Authenticated student with a valid registry identity and active canonical account.
    - May only update their own meals for today (`PATCH /api/meals/:date`).
    - May only prepare and record payments for their own account.
    - Prohibited from accessing other members' records or administrative settings (enforced with 403).
@@ -114,19 +115,13 @@ If a credential or secret must be rotated, follow these procedures:
 4. **Operational Impact**: All active sessions will become invalid immediately. Users will log in again. Historical data is completely unaffected.
 
 ### B. Rotating Admin or Super Admin Passwords
-1. Generate a new cost-12 bcrypt hash:
-   ```bash
-   npm run hash-password
-   ```
-2. Update `ADMIN_PASSWORD_HASH` or `SUPERADMIN_PASSWORD_HASH` in Render environment variables.
-3. Restart the service.
-4. **Operational Impact**: Future logins require the new password. Existing active JWT sessions remain valid until expiration (max 12h) unless `AUTH_JWT_SECRET` is also rotated.
+1. Use the authenticated canonical password-change flow or Super Admin account management, with the current credential and role checks.
+2. Verify the new login and `sessionVersion` change; old sessions must fail immediately.
+3. Keep the separately provisioned recovery Super Admin account independent. Legacy environment password hashes must not be used as a v3 login fallback.
 
 ### C. Rotating Member Passwords
-1. Run the member seeding script or update member account password hashes in MongoDB directly:
-   ```bash
-   MEMBER_GAURAV_PASSWORD_HASH="<new-hash>" npm run seed-members
-   ```
+1. Use the authenticated canonical password-change flow or Super Admin login-access management for that student.
+2. Verify the old session and password are revoked and that no password hash appears in the API response or audit record.
 
 ### D. Rotating MongoDB Connection URI
 1. Update `MONGODB_URI` in Render environment variables.

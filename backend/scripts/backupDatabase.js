@@ -7,8 +7,7 @@ import { env } from '../src/config/env.js';
 import { connectDatabase, disconnectDatabase } from '../src/config/db.js';
 import { createEncryptedBackup } from '../src/backup/backupEngine.js';
 import { APP_VERSION } from '../src/config/version.js';
-import { mealService } from '../src/meals/meal.service.js';
-import { reportService } from '../src/reports/report.service.js';
+import { createReadOnlyMealBaselineReaders } from '../src/migrations/v3ArchiveBaselines.service.js';
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const backupsDir = path.resolve(currentDir, '../../backups');
@@ -52,10 +51,7 @@ calendar and historical-cost baselines. It does not modify the source database.`
       dbConnection: mongoose.connection,
       encryptionKey,
       appVersion: APP_VERSION,
-      baselineReaders: {
-        readCalendarDay: (date) => mealService.getDay(date),
-        readMonthlyCostReport: (month) => reportService.getMonthlyReport(month),
-      },
+      baselineReaders: createReadOnlyMealBaselineReaders(mongoose.connection.db),
     });
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');

@@ -394,6 +394,7 @@ export function PlateSharingDialog({
                                   <button
                                     key={choice.units}
                                     type="button"
+                                    aria-label={`${r.name} ${choice.srLabel}`}
                                     onClick={() =>
                                       handleCustomShareChange(pIdx, r.id, choice.units)
                                     }

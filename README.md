@@ -2,7 +2,13 @@
 
 **Meals tracked. Bills sorted.**
 
-MealKhata is a private, production-grade meal tracking and shared-accounting progressive web application (PWA) built for three roommates: **Gaurav**, **Nikhil**, and **Devansh**.
+MealKhata is a private meal tracking and shared-accounting progressive web application (PWA) with a MongoDB-managed student roster. Gaurav, Nikhil and Devansh retain their original historical IDs; Super Admins can add further students without code changes.
+
+## MealKhata 3.0 release candidate
+
+Super Admin Student Management (`/admin/members`) supports optional login provisioning, meal eligibility, archive/reactivation and historical identity lookup. Saved historical meals retain their original participants, shares, prices, costs and audit authority. A separately configured financial start date controls fresh operational dues; old historical meals remain visible without creating new unpaid balances.
+
+The v3 migration tooling is currently restricted to **local isolated-test replica sets**. See [the migration rehearsal](./docs/migrations/v3-blue-green.md) and [cutover and rollback checklist](./docs/V3_CUTOVER_AND_ROLLBACK.md). No production migration, deployment or financial start date is implied by this branch.
 
 ---
 
@@ -159,8 +165,8 @@ All mutations capture the authenticated actor's identity (`actorRole` and `actor
 
 ## Meal Rules & Scheduling
 
-- **Default Taking**: Untouched dates default to `taking` for all three members without requiring advance database document creation.
-- **Taking vs. Skip**: `taking` corresponds to exactly 1 plate for billing; `skip` corresponds to 0 plates.
+- **Explicit Attendance**: Untouched dates show `not_set` for students eligible on that date; opening a date does not create a database document or bill.
+- **Taking vs. Skip**: `taking` contributes the student's configured plate share; `skip` contributes no meal cost. Physical plates and exact paise are calculated from saved allocations.
 - **Timezone Authority**: All date determinations, cutoff calculations, and reminders operate in `Asia/Kolkata`.
 - **Member Ownership**: Members may only modify their own meals for today. Editing other members or past/future dates is strictly rejected with `403 Forbidden`.
 - **Concurrency Control**: Meal updates use optimistic locking via document revisions (`revision` counter) to ensure concurrent edits resolve safely.
@@ -245,13 +251,10 @@ npm install
 # 2. Setup local backend configuration
 copy backend\.env.example backend\.env
 
-# 3. Generate password hashes for Admin and Super Admin
-npm run hash-password
+# 3. Configure a local MongoDB replica set and canonical account credentials
+#    in an isolated development database; see backend/.env.example.
 
-# 4. Bootstrap Member accounts in MongoDB
-npm run seed-members
-
-# 5. Start concurrent development servers
+# 4. Start concurrent development servers
 npm run dev
 ```
 
@@ -276,7 +279,9 @@ MealKhata includes non-destructive operational and maintenance scripts:
 | `npm run verify-data` | Non-destructive read-only audit validating 12 domain invariants across all collections. |
 | `npm run db:backup` | Generates a compressed, AES-256-GCM encrypted backup archive preserving BSON Extended JSON. |
 | `npm run db:backup:verify -- <file>` | Decrypts and verifies backup archive manifest, GCM auth tag, and SHA-256 payload checksum. |
-| `npm run db:restore -- <file>` | Restores a verified backup to a designated target database (`RESTORE_MONGODB_URI`). |
+| `npm run db:restore -- <file>` | Restores a verified backup only to a local replica set with `RESTORE_MONGODB_URI` and `RESTORE_TARGET_CLASSIFICATION=isolated-test`. |
+| `npm run e2e:browser` | Runs Chromium acceptance against an automatically started isolated MongoDB replica set, Express API and React frontend. |
+| `npm run migrate:v3 -- --help` | Describes local-only verified archive, sidecar, apply, delta and pre/post verification modes. |
 
 ---
 
@@ -335,3 +340,5 @@ If background push is enabled, deploy the 5-minute cron runner via [`render.push
 - **Release Checklist**: [`docs/RELEASE_CHECKLIST.md`](./docs/RELEASE_CHECKLIST.md)
 - **v1.0.0 Release Notes**: [`docs/RELEASE_NOTES_v1.0.0.md`](./docs/RELEASE_NOTES_v1.0.0.md)
 - **Changelog**: [`CHANGELOG.md`](./CHANGELOG.md)
+- **MealKhata 3.0 Migration Rehearsal**: [`docs/migrations/v3-blue-green.md`](./docs/migrations/v3-blue-green.md)
+- **MealKhata 3.0 Cutover and Rollback Checklist**: [`docs/V3_CUTOVER_AND_ROLLBACK.md`](./docs/V3_CUTOVER_AND_ROLLBACK.md)

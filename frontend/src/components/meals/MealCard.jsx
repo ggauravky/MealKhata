@@ -126,7 +126,7 @@ export function MealCard({
               </Badge>
             )}
           </div>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex items-center gap-1 flex-wrap">
+          <div className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex items-center gap-1 flex-wrap">
             <strong className="font-semibold text-slate-800 dark:text-slate-200">
               {takingCount} taking
             </strong>
@@ -158,7 +158,7 @@ export function MealCard({
                 </span>
               </>
             )}
-          </p>
+          </div>
           {isPriceOverridden && pricing?.reason && (
             <p
               className="text-[11px] text-teal-700/80 dark:text-teal-400/80 mt-0.5 truncate max-w-xs"
@@ -262,7 +262,7 @@ export function MealCard({
                           key={option.id}
                           type="button"
                           aria-pressed={currentStatus === option.id}
-                          disabled={pending}
+                          disabled={Boolean(pendingRow)}
                           onClick={() => onChange(mealType, member.id, option.id)}
                           className={`flex items-center gap-1 rounded-sm px-2.5 py-1 text-xs font-medium transition-all ${
                             currentStatus === option.id

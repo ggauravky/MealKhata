@@ -126,8 +126,8 @@ export function createFinancialOverviewService({
 
       // 3. Other Expenses Domain
       const spendingSharePaise = expenseSummary?.spendingSharePaise || 0;
-      const merchantSpendingPaise = expenseSummary?.merchantSpendingPaise || 0;
-      const owedToOthersPaise = expenseSummary?.owedToOthersPaise || 0;
+      const merchantSpendingPaise = expenseSummary?.paidMerchantsPaise || 0;
+      const owedToOthersPaise = expenseSummary?.iOweOthersPaise || 0;
       const owedToMePaise = expenseSummary?.owedToMePaise || 0;
 
       // Extract specific itemized debts and receivables for detailed view

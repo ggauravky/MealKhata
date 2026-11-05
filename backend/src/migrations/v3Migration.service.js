@@ -17,7 +17,9 @@ import { SystemSettings } from '../settings/systemSettings.model.js';
 import { Student } from '../students/student.model.js';
 import { StudentAuditEvent } from '../students/studentAuditEvent.model.js';
 import { assertSafeStudentId } from '../students/studentId.js';
+import { isValidLogicalDate } from '../utils/date.js';
 import { checksumValue } from './sourceInventory.service.js';
+import { verifyLegacySnapshotSidecar } from './v3SnapshotSidecar.service.js';
 
 export const V3_HISTORY_COLLECTIONS = Object.freeze([
   'students', 'student_audit_events', 'meal_days', 'meal_history_snapshots',
@@ -34,7 +36,7 @@ function isValidAccountHash(value) {
   catch { return false; }
 }
 
-function readVerifiedArchive({ archive, encryptionKey, sourceManifest }) {
+function readVerifiedArchive({ archive, encryptionKey, sourceManifest, snapshotSidecar }) {
   if (!sourceManifest || typeof sourceManifest !== 'object') throw new Error('An explicit source manifest is required');
   const verified = verifyAndDecryptBackup({ backupPackageString: archive, encryptionKey });
   if (checksumValue(verified.manifest) !== checksumValue(sourceManifest)) {
@@ -42,6 +44,12 @@ function readVerifiedArchive({ archive, encryptionKey, sourceManifest }) {
   }
   if (!verified.manifest.sourceDatabase || !verified.manifest.sha256Checksum) {
     throw new Error('Source archive lacks a database identity or fingerprint');
+  }
+  if (snapshotSidecar) {
+    const snapshots = verifyLegacySnapshotSidecar({ archive, encryptionKey, sourceManifest, snapshotSidecar });
+    verified.rawData.meal_history_snapshots = [
+      ...(verified.rawData.meal_history_snapshots ?? []), ...snapshots,
+    ];
   }
   return verified;
 }
@@ -173,13 +181,40 @@ export function planV3Migration(options) {
   return publicPlan;
 }
 
-function assertTarget({ targetConnection, targetDbName, sourceDatabase }) {
+export function assertIsolatedMigrationTargetUri(uri, targetClassification, sourceDatabase) {
+  let parsed;
+  try { parsed = new URL(uri); } catch { throw new Error('Invalid isolated target URI'); }
+  const name = decodeURIComponent(parsed.pathname.replace(/^\//, ''));
+  const hosts = parsed.host.split(',').map(host => host.replace(/:\d+$/, '').toLowerCase());
+  if (parsed.protocol !== 'mongodb:' || targetClassification !== 'isolated-test'
+    || !hosts.length || hosts.some(host => !['127.0.0.1', 'localhost', '[::1]'].includes(host))
+    || !name || name === sourceDatabase
+    || /(?:^|[-_])(prod|production|live|atlas)(?:[-_]|$)/i.test(name)) {
+    throw new Error('Migration URI requires isolated-test classification and a local disposable cluster');
+  }
+  return name;
+}
+
+export async function assertIsolatedMigrationTarget({ targetConnection, targetDbName, sourceDatabase, targetClassification }) {
   if (!targetConnection?.db || !targetDbName || targetConnection.db.databaseName !== targetDbName) {
     throw new Error('An explicit matching target database name and connected target are required');
   }
-  if (targetDbName === sourceDatabase || !/(?:^|[-_])(?:v3|target|restore|isolated|fixture)(?:[-_]|$)/i.test(targetDbName)) {
-    throw new Error('Source and target must be distinct, and target must be explicitly isolated');
+  if (targetDbName === sourceDatabase) {
+    throw new Error('Source and target must be distinct');
   }
+  const hosts = targetConnection.client?.options?.hosts ?? [];
+  if (targetClassification !== 'isolated-test' || !hosts.length
+    || hosts.some(host => !['127.0.0.1', 'localhost', '::1', '[::1]'].includes(host.host))
+    || /(?:^|[-_])(prod|production|live|atlas)(?:[-_]|$)/i.test(targetDbName)) {
+    throw new Error('Migration target requires isolated-test classification on a local disposable cluster');
+  }
+  const hello = await targetConnection.db.admin().command({ hello: 1 });
+  const clusterHosts = hello.hosts ?? [];
+  if (!hello.setName || !clusterHosts.length || clusterHosts.some(host =>
+    !/^(?:127\.0\.0\.1|localhost|\[::1\]):\d+$/i.test(host))) {
+    throw new Error('Migration target must identify as an isolated local replica set');
+  }
+  return checksumValue({ setName: hello.setName, hosts: [...clusterHosts].sort() });
 }
 
 async function targetCollectionNames(db) {
@@ -219,33 +254,86 @@ function documentId(value) {
   return value?._id?.$oid ?? String(value?._id ?? '');
 }
 
+async function verifyPostCutoverBoundary(db, settings, issues) {
+  const start = settings?.financialStartDate;
+  if (start != null && !isValidLogicalDate(start)) {
+    issues.push('Configured financial start boundary is invalid');
+    return;
+  }
+  const startMonth = start?.slice(0, 7);
+  const ledgers = [
+    { collection: 'payments', field: 'month', month: true },
+    { collection: 'room_charges', field: 'month', month: true, fullMonth: true },
+    { collection: 'room_payments', field: 'month', month: true },
+    { collection: 'monthly_settlements', field: 'month', month: true, fullMonth: true },
+    { collection: 'expenses', field: 'date', month: false },
+  ];
+  for (const ledger of ledgers) {
+    const rows = await db.collection(ledger.collection).find({}).toArray();
+    if (rows.length && !start) {
+      issues.push(`${ledger.collection}: operational records exist without a financial start boundary`);
+      continue;
+    }
+    for (const row of rows) {
+      const value = row[ledger.field];
+      const invalid = typeof value !== 'string' || (ledger.month
+        ? !/^\d{4}-(0[1-9]|1[0-2])$/.test(value) || value < startMonth
+          || (ledger.fullMonth && value === startMonth && !start.endsWith('-01'))
+        : !isValidLogicalDate(value) || value < start);
+      if (invalid) issues.push(`${ledger.collection}: record precedes or violates the financial start boundary`);
+    }
+  }
+}
+
 export async function verifyV3Migration(options) {
-  const verified = readVerifiedArchive(options);
-  const plan = buildPlan(verified);
+  const archived = readVerifiedArchive(options);
+  const originalPlan = buildPlan(archived);
+  const verified = options.finalArchive ? readVerifiedArchive({ archive: options.finalArchive,
+    sourceManifest: options.finalSourceManifest, encryptionKey: options.encryptionKey,
+    snapshotSidecar: options.finalSnapshotSidecar }) : archived;
+  const plan = options.finalArchive ? buildPlan(verified) : originalPlan;
   const db = options.targetConnection?.db;
   if (!db) throw new Error('A connected target database is required');
   const issues = [];
+  const verificationStage = options.verificationStage ?? 'pre-cutover';
+  if (!['pre-cutover', 'post-cutover'].includes(verificationStage)) throw new Error('Unknown migration verification stage');
+  const postCutover = verificationStage === 'post-cutover';
   const migration = await db.collection('v3_migration_manifests').findOne({ migrationId: MIGRATION_ID });
+  if (options.targetClassification) {
+    const clusterIdentity = await assertIsolatedMigrationTarget({ targetConnection: options.targetConnection,
+      targetDbName: db.databaseName, sourceDatabase: originalPlan.sourceDatabase,
+      targetClassification: options.targetClassification });
+    if (migration?.targetClusterIdentity !== clusterIdentity) issues.push('Target cluster identity changed');
+  }
   const finalDeltas = migration?.finalMealDeltas ?? {};
+  if (migration?.finalSourceChecksum && !options.finalArchive) {
+    issues.push('Final frozen source archive is required to verify replayed history');
+  }
+  if (options.finalArchive && (migration?.finalSourceChecksum !== plan.sourceChecksum
+    || plan.sourceDatabase !== originalPlan.sourceDatabase)) {
+    issues.push('Final frozen source archive identity or checksum mismatch');
+  }
   const targetSnapshots = (await db.collection('meal_history_snapshots').find({}).toArray()).map(toExtendedJson);
   const targetCorrections = (await db.collection('meal_history_corrections').find({}).toArray()).map(toExtendedJson);
   for (const name of V3_HISTORY_COLLECTIONS) {
     const actual = (await db.collection(name).find({}).sort({ _id: 1 }).toArray()).map(toExtendedJson);
     const expected = [...plan.collections[name]].sort((a, b) => documentId(a).localeCompare(documentId(b)));
-    if (name === 'meal_days' && Object.keys(finalDeltas).length) {
-      const baseActual = actual.filter(day => !finalDeltas[day.date]);
-      const baseExpected = expected.filter(day => !finalDeltas[day.date]);
-      if (checksumValue(baseActual) !== checksumValue(baseExpected)) issues.push(`${name}: base source and target document checksum differs`);
-      for (const [date, delta] of Object.entries(finalDeltas)) {
-        const targetDay = actual.find(day => day.date === date);
-        if (!targetDay || checksumValue(targetDay) !== delta.checksum) issues.push(`${name} ${date}: final delta checksum differs`);
+    if (postCutover && name === 'students') {
+      const actualIds = new Set(actual.map(student => student.studentId));
+      for (const student of expected) if (!actualIds.has(student.studentId)) issues.push(`Missing historical student ${student.studentId}`);
+    } else if (postCutover) {
+      const actualById = new Map(actual.map(doc => [documentId(doc), doc]));
+      for (const doc of expected) {
+        if (checksumValue(actualById.get(documentId(doc))) !== checksumValue(doc)) {
+          issues.push(`${name}: historical source document changed or disappeared`);
+        }
       }
     } else if (checksumValue(actual) !== checksumValue(expected)) issues.push(`${name}: source and target document checksum differs`);
     if (name === 'meal_days') {
       const expectedByDate = new Map(expected.map(day => [day.date, day]));
       const sourceByDate = new Map((verified.rawData.meal_days ?? []).map(day => [day.date, day]));
       for (const day of actual) {
-        if (finalDeltas[day.date]) continue;
+        if (postCutover && !sourceByDate.has(day.date)) continue;
         try {
           const targetAuthority = authoritativeDay(day, targetSnapshots, targetCorrections);
           const sourceAuthority = authoritativeDay(sourceByDate.get(day.date),
@@ -266,7 +354,13 @@ export async function verifyV3Migration(options) {
     }
   }
   for (const name of await targetCollectionNames(db)) {
-    if (!TARGET_COLLECTIONS.includes(name)) issues.push(`Unexpected target collection: ${name}`);
+    if (!postCutover && !TARGET_COLLECTIONS.includes(name)) issues.push(`Unexpected target collection: ${name}`);
+    if (postCutover && plan.excludedCollections.includes(name)) {
+      const archivedIds = new Set((verified.rawData[name] ?? []).map(documentId));
+      for (const record of await db.collection(name).find({}).toArray()) {
+        if (archivedIds.has(documentId(toExtendedJson(record)))) issues.push(`${name}: old operational record was imported`);
+      }
+    }
   }
   const indexAudit = await verifyIndexes(options.targetConnection);
   const requiredModels = new Set(INDEX_MODELS.map(model => model.modelName));
@@ -278,21 +372,35 @@ export async function verifyV3Migration(options) {
   const dataAudit = await verifyDataIntegrity(options.targetConnection);
   if (!dataAudit.passed) issues.push('Target data integrity audit failed', ...dataAudit.issues);
   const accounts = await db.collection('user_accounts').find({}).toArray();
-  const archivedHashes = new Set((verified.rawData.user_accounts ?? []).map(account => account.passwordHash)
-    .concat((verified.rawData.member_accounts ?? []).map(account => account.passwordHash)));
-  if (accounts.length !== 2 || accounts.some(account => account.role !== 'superadmin' || account.active !== true)
-    || new Set(accounts.map(account => account.email)).size !== 2) {
-    issues.push('Target must contain two distinct active fresh Super Admin accounts');
+  const archivedHashes = new Set((archived.rawData.user_accounts ?? []).map(account => account.passwordHash)
+    .concat((archived.rawData.member_accounts ?? []).map(account => account.passwordHash)));
+  if ((!postCutover && (accounts.length !== 2 || accounts.some(account => account.role !== 'superadmin' || account.active !== true)))
+    || accounts.filter(account => account.role === 'superadmin' && account.active === true).length < 2
+    || new Set(accounts.map(account => account.email)).size !== accounts.length
+    || new Set(accounts.filter(account => account.memberId).map(account => account.memberId)).size
+      !== accounts.filter(account => account.memberId).length) {
+    issues.push('Target account roles, recovery access or uniqueness are invalid');
   }
   if (accounts.some(account => archivedHashes.has(account.passwordHash))) issues.push('Legacy credential hash was copied');
   if (accounts.some(account => !isValidAccountHash(account.passwordHash))) issues.push('Fresh account hash policy is invalid');
   const settings = await db.collection('system_settings').find({}).toArray();
   if (settings.length !== 1 || settings[0]?.settingsId !== 'system'
-    || settings[0]?.financialStartDate != null) {
-    issues.push('Exactly one unset financial start boundary is required');
+    || (!postCutover && settings[0]?.financialStartDate != null)) {
+    issues.push('Financial start boundary state is invalid for verification stage');
   }
-  if (migration?.sourceChecksum !== plan.sourceChecksum) issues.push('Migration manifest source fingerprint mismatch');
-  for (const day of await db.collection('meal_days').find({}).toArray()) {
+  if (postCutover) await verifyPostCutoverBoundary(db, settings[0], issues);
+  if (migration?.sourceChecksum !== originalPlan.sourceChecksum) issues.push('Migration manifest source fingerprint mismatch');
+  for (const [date, delta] of Object.entries(finalDeltas)) {
+    const actual = await db.collection('meal_days').findOne({ date });
+    let authorityChecksum = null;
+    try { if (actual) authorityChecksum = checksumValue(authoritativeDay(toExtendedJson(actual), targetSnapshots, targetCorrections)); }
+    catch { /* Invalid authority is reported below. */ }
+    if (!actual || checksumValue(toExtendedJson(actual)) !== delta.dayChecksum
+      || authorityChecksum !== delta.authorityChecksum) {
+      issues.push(`meal_days ${date}: final authority or per-date checksum differs`);
+    }
+  }
+  for (const day of await db.collection('meal_days').find({ importedFromLegacy: true }).toArray()) {
     if (migration?.mealDateClassifications?.[day.date] !== 'historical'
       || day.financialClassification !== 'historical'
       || day.cutoverClassificationSource !== 'migration-manifest'
@@ -300,18 +408,21 @@ export async function verifyV3Migration(options) {
       issues.push(`meal_days ${day.date}: missing verified financial classification`);
     }
   }
-  return { passed: issues.length === 0, issues, counts: plan.counts,
-    sourceChecksum: plan.sourceChecksum, targetDatabase: db.databaseName };
+  return { passed: issues.length === 0, issues, verificationStage, counts: plan.counts,
+    sourceChecksum: originalPlan.sourceChecksum, finalSourceChecksum: migration?.finalSourceChecksum ?? null,
+    targetDatabase: db.databaseName };
 }
 
 export async function applyV3Migration(options) {
   const verified = readVerifiedArchive(options);
   const plan = buildPlan(verified);
-  const { targetConnection, targetDbName, superAdmin, recoverySuperAdmin } = options;
-  assertTarget({ targetConnection, targetDbName, sourceDatabase: plan.sourceDatabase });
+  const { targetConnection, targetDbName, targetClassification, superAdmin, recoverySuperAdmin } = options;
+  const targetClusterIdentity = await assertIsolatedMigrationTarget({ targetConnection, targetDbName,
+    sourceDatabase: plan.sourceDatabase, targetClassification });
   const db = targetConnection.db;
   const existing = await db.collection('v3_migration_manifests').findOne({ migrationId: MIGRATION_ID });
   if (existing) {
+    if (existing.targetClusterIdentity !== targetClusterIdentity) throw new Error('Migration target cluster identity changed');
     if (existing.status !== 'complete' || existing.sourceChecksum !== plan.sourceChecksum) {
       throw new Error('Partial or foreign migration target requires manual review');
     }
@@ -346,7 +457,7 @@ export async function applyV3Migration(options) {
     sourceManifestChecksum: plan.sourceManifestChecksum, counts: plan.counts,
     mealDateClassifications: plan.mealDateClassifications,
     collectionChecksums: plan.collectionChecksums, excludedCollections: plan.excludedCollections,
-    rollback, checkpoints: [], createdAt: new Date() };
+    rollback, targetClusterIdentity, checkpoints: [], createdAt: new Date() };
   await db.collection('v3_migration_manifests').insertOne(marker);
   for (const name of V3_HISTORY_COLLECTIONS) {
     const docs = plan.collections[name].map(fromExtendedJson);
@@ -385,47 +496,122 @@ export async function applyV3Migration(options) {
 }
 
 export async function replayFinalMealDelta(options) {
-  const { targetConnection, deltaDocuments, expectedSourceChecksum,
-    expectedDeltaChecksum, sourceWritesStopped } = options;
-  if (!Array.isArray(deltaDocuments) || !expectedSourceChecksum || !expectedDeltaChecksum
-    || sourceWritesStopped !== true || checksumValue(deltaDocuments) !== expectedDeltaChecksum) {
-    throw new Error('Verified final meal delta, checksum and write-free confirmation are required');
+  const { targetConnection, archive, sourceManifest, encryptionKey,
+    finalArchive, finalSourceManifest, sourceWritesStopped, targetClassification } = options;
+  if (sourceWritesStopped !== true || !finalArchive || !finalSourceManifest) {
+    throw new Error('A verified frozen final source archive and write-free confirmation are required');
   }
-  if (!targetConnection?.db) throw new Error('A connected target database is required');
-  const marker = await targetConnection.db.collection('v3_migration_manifests').findOne({ migrationId: MIGRATION_ID, status: 'complete' });
-  if (!marker || marker.sourceChecksum !== expectedSourceChecksum) throw new Error('Target source fingerprint mismatch');
-  const knownStudents = new Set((await targetConnection.db.collection('students').find({}).toArray()).map(student => student.studentId));
-  const seenDates = new Set();
-  const planned = [];
-  for (const raw of deltaDocuments) {
+  const base = buildPlan(readVerifiedArchive({ archive, sourceManifest, encryptionKey,
+    snapshotSidecar: options.snapshotSidecar }));
+  const final = buildPlan(readVerifiedArchive({ archive: finalArchive,
+    sourceManifest: finalSourceManifest, encryptionKey,
+    snapshotSidecar: options.finalSnapshotSidecar }));
+  const targetClusterIdentity = await assertIsolatedMigrationTarget({ targetConnection, targetDbName: targetConnection?.db?.databaseName,
+    sourceDatabase: base.sourceDatabase, targetClassification });
+  if (base.sourceDatabase !== final.sourceDatabase) throw new Error('Final source database identity changed');
+  const domain = ['meal_days', 'meal_history_snapshots', 'meal_history_corrections', 'monthly_meal_rates'];
+  const baseArchive = readVerifiedArchive({ archive, sourceManifest, encryptionKey,
+    snapshotSidecar: options.snapshotSidecar });
+  const finalArchiveData = readVerifiedArchive({ archive: finalArchive,
+    sourceManifest: finalSourceManifest, encryptionKey,
+    snapshotSidecar: options.finalSnapshotSidecar });
+  const collectionNames = new Set([...Object.keys(baseArchive.rawData), ...Object.keys(finalArchiveData.rawData)]);
+  for (const name of collectionNames) {
+    if (!domain.includes(name) && checksumValue(baseArchive.rawData[name] ?? [])
+      !== checksumValue(finalArchiveData.rawData[name] ?? [])) {
+      throw new Error(`Final source changed outside the verified meal domain: ${name}`);
+    }
+  }
+  for (const name of domain) {
+    const finalIds = new Set(final.collections[name].map(documentId));
+    for (const previous of base.collections[name]) {
+      if (!finalIds.has(documentId(previous))) throw new Error(`Final source removed historical ${name} document`);
+    }
+  }
+  const db = targetConnection.db;
+  const markerCollection = db.collection('v3_migration_manifests');
+  const marker = await markerCollection.findOne({ migrationId: MIGRATION_ID, status: 'complete' });
+  if (!marker || marker.sourceChecksum !== base.sourceChecksum
+    || marker.targetClusterIdentity !== targetClusterIdentity) throw new Error('Target source or cluster fingerprint mismatch');
+  if (marker.finalSourceChecksum && marker.finalSourceChecksum !== final.sourceChecksum) {
+    throw new Error('A different frozen final source was already replayed');
+  }
+  const knownStudents = new Set((await db.collection('students').find({}).toArray()).map(student => student.studentId));
+  for (const raw of final.collections.meal_days) {
     const day = fromExtendedJson(raw);
-    if (!day._id || !day.date || seenDates.has(day.date)
-      || !Number.isSafeInteger(day.revision) || day.revision < 0) throw new Error('Invalid final meal delta');
-    seenDates.add(day.date);
     const participants = new Set([...(day.participantOrder ?? []), ...extractMealParticipantIds(day)]);
-    if ([...participants].some(id => !knownStudents.has(id))) throw new Error(`Final meal delta has an unknown student on ${day.date}`);
-    day.importedFromLegacy = true;
-    day.financialClassification = 'historical';
-    day.cutoverClassificationSource = 'migration-manifest';
-    const current = await targetConnection.db.collection('meal_days').findOne({ date: day.date });
-    if (current && String(current._id) !== String(day._id)) throw new Error('Final meal delta source identity mismatch');
-    if (current && day.revision < current.revision) throw new Error('Stale final meal delta');
-    if (current && day.revision === current.revision
-      && checksumValue(toExtendedJson(current)) !== checksumValue(toExtendedJson(day))) {
-      throw new Error('Conflicting final meal delta');
+    if ([...participants].some(id => !knownStudents.has(id))) {
+      throw new Error(`Final meal source references an unknown student on ${day.date}`);
     }
-    planned.push({ day, current, checksum: checksumValue(toExtendedJson(day)) });
   }
-  for (const { day, current, checksum } of planned) {
-    if (!current) await targetConnection.db.collection('meal_days').insertOne(day);
-    else if (day.revision > current.revision) {
-      const updated = await targetConnection.db.collection('meal_days').replaceOne({ date: day.date, revision: current.revision }, day);
-      if (updated.modifiedCount !== 1) throw new Error('Concurrent final meal delta conflict');
-    }
-    await targetConnection.db.collection('v3_migration_manifests').updateOne({ migrationId: MIGRATION_ID },
-      { $set: { [`finalMealDeltas.${day.date}`]: { revision: day.revision, checksum },
-        [`mealDateClassifications.${day.date}`]: 'historical' } });
+  const baseDocs = Object.fromEntries(domain.map(name => [name,
+    new Map(base.collections[name].map(doc => [documentId(doc), doc]))]));
+  const changed = Object.fromEntries(domain.map(name => [name,
+    final.collections[name].filter(doc => checksumValue(doc)
+      !== checksumValue(baseDocs[name].get(documentId(doc)) ?? null))]));
+  const changedDates = new Set(changed.meal_days.map(doc => doc.date));
+  for (const name of ['meal_history_snapshots', 'meal_history_corrections']) {
+    for (const doc of changed[name]) changedDates.add(doc.date);
   }
-  return { replayed: planned.length, deltaChecksum: expectedDeltaChecksum,
-    verifiedDates: planned.map(item => item.day.date) };
+  for (const rate of changed.monthly_meal_rates) {
+    for (const day of final.collections.meal_days) if (day.date.startsWith(`${rate.month}-`)) changedDates.add(day.date);
+  }
+  const sourceSnapshots = final.collections.meal_history_snapshots;
+  const sourceCorrections = final.collections.meal_history_corrections;
+  const finalDays = new Map(final.collections.meal_days.map(day => [day.date, day]));
+  const authorities = Object.fromEntries([...changedDates].map(date => {
+    const day = finalDays.get(date);
+    if (!day) throw new Error(`Final meal authority missing day ${date}`);
+    return [date, { dayChecksum: checksumValue(day),
+      authorityChecksum: checksumValue(authoritativeDay(day, sourceSnapshots, sourceCorrections)),
+      revision: day.revision }];
+  }));
+  const session = await targetConnection.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const activeMarker = await markerCollection.findOne({ migrationId: MIGRATION_ID, status: 'complete' }, { session });
+      if (!activeMarker || activeMarker.sourceChecksum !== base.sourceChecksum
+        || (activeMarker.finalSourceChecksum && activeMarker.finalSourceChecksum !== final.sourceChecksum)) {
+        throw new Error('Concurrent or foreign final replay checkpoint');
+      }
+      await markerCollection.updateOne({ migrationId: MIGRATION_ID, status: 'complete' },
+        { $set: { status: 'replaying' } }, { session });
+      for (const name of domain) {
+        for (const raw of changed[name]) {
+          const id = fromExtendedJson(raw)._id;
+          if (!id) throw new Error(`Final ${name} document lacks an immutable ID`);
+          const current = await db.collection(name).findOne({ _id: id }, { session });
+          const currentChecksum = checksumValue(current ? toExtendedJson(current) : null);
+          const previousChecksum = checksumValue(baseDocs[name].get(documentId(raw)) ?? null);
+          if (currentChecksum !== previousChecksum && currentChecksum !== checksumValue(raw)) {
+            throw new Error(`Concurrent or mismatched ${name} target document`);
+          }
+          if (currentChecksum !== checksumValue(raw)) {
+            await db.collection(name).replaceOne({ _id: id }, fromExtendedJson(raw), { upsert: !current, session });
+          }
+        }
+      }
+      if (options.onBeforeCheckpoint) await options.onBeforeCheckpoint();
+      const targetSnapshots = (await db.collection('meal_history_snapshots').find({}, { session }).toArray()).map(toExtendedJson);
+      const targetCorrections = (await db.collection('meal_history_corrections').find({}, { session }).toArray()).map(toExtendedJson);
+      for (const [date, expected] of Object.entries(authorities)) {
+        const actual = await db.collection('meal_days').findOne({ date }, { session });
+        if (!actual || checksumValue(toExtendedJson(actual)) !== expected.dayChecksum
+          || checksumValue(authoritativeDay(toExtendedJson(actual), targetSnapshots, targetCorrections))
+            !== expected.authorityChecksum) {
+          throw new Error(`Final meal authority differs by at least one paise on ${date}`);
+        }
+      }
+      await markerCollection.updateOne({ migrationId: MIGRATION_ID, status: 'replaying' },
+        { $set: { status: 'complete', finalSourceChecksum: final.sourceChecksum,
+          finalSourceManifestChecksum: final.sourceManifestChecksum,
+          finalMealDeltas: authorities,
+          mealDateClassifications: final.mealDateClassifications },
+          $inc: { finalReplayRevision: 1 } }, { session });
+    });
+  } finally { await session.endSession(); }
+  const verification = await verifyV3Migration({ ...options, targetConnection });
+  if (!verification.passed) throw new Error(`Final source reconciliation failed: ${verification.issues.join('; ')}`);
+  return { replayed: changed.meal_days.length, verifiedDates: [...changedDates].sort(),
+    finalSourceChecksum: final.sourceChecksum, verification };
 }

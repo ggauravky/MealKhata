@@ -2,7 +2,9 @@ import fs from 'node:fs/promises';
 import mongoose from 'mongoose';
 import { restoreDatabase } from '../src/backup/backupEngine.js';
 import { assertDistinctDatabaseUris } from '../src/migrations/sourceInventory.service.js';
-import { applyV3Migration, planV3Migration, replayFinalMealDelta, verifyV3Migration } from '../src/migrations/v3Migration.service.js';
+import { applyV3Migration, assertIsolatedMigrationTarget,
+  assertIsolatedMigrationTargetUri, planV3Migration, replayFinalMealDelta,
+  verifyV3Migration } from '../src/migrations/v3Migration.service.js';
 
 function argument(flag) {
   const index = process.argv.indexOf(flag);
@@ -24,10 +26,15 @@ Protected environment inputs:
   BACKUP_ENCRYPTION_KEY       Archive decryption secret
   V3_TARGET_MONGODB_URI      Explicit isolated target URI (verify/apply)
   V3_RESTORE_MONGODB_URI     Empty disposable restore URI (apply)
+  V3_TARGET_CLASSIFICATION   Must be isolated-test for this development tool
   V3_SUPERADMIN_EMAIL        Fresh login email (apply)
   V3_SUPERADMIN_PASSWORD     Fresh strong secret (apply)
   V3_RECOVERY_SUPERADMIN_EMAIL     Independent recovery login email (apply)
   V3_RECOVERY_SUPERADMIN_PASSWORD  Independent recovery secret (apply)
+
+Use --snapshot-sidecar PATH when the source archive lacks legacy-v2 snapshots.
+Use --stage pre-cutover|post-cutover with --verify. Final replay requires a
+second encrypted frozen source archive, its manifest, and --write-free-confirmed.
 
 --apply restores and verifies the complete source archive into an empty disposable
 database before writing the empty v3 target. No source database is modified.
@@ -42,31 +49,37 @@ Use --report PATH to write the machine-readable migration/rollback report.`);
   if (!archivePath || !manifestPath || !encryptionKey) throw new Error('Explicit archive, manifest and encryption key are required');
   const archive = await fs.readFile(archivePath, 'utf8');
   const sourceManifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
-  const plan = planV3Migration({ archive, encryptionKey, sourceManifest });
+  const snapshotSidecar = argument('--snapshot-sidecar')
+    ? JSON.parse(await fs.readFile(argument('--snapshot-sidecar'), 'utf8')) : undefined;
+  const common = { archive, encryptionKey, sourceManifest, snapshotSidecar };
+  const plan = planV3Migration(common);
   if (modes[0] === '--dry-run') {
     console.info(JSON.stringify({ mode: 'dry-run', ...plan }, null, 2));
     return;
   }
   const targetUri = process.env.V3_TARGET_MONGODB_URI;
   const targetDbName = argument('--target-db');
-  if (!targetUri || !targetDbName || databaseFromUri(targetUri) !== targetDbName
-    || targetDbName === plan.sourceDatabase) {
+  const targetClassification = process.env.V3_TARGET_CLASSIFICATION;
+  if (!targetUri || !targetDbName || databaseFromUri(targetUri) !== targetDbName) {
     throw new Error('An explicit isolated target URI and matching --target-db are required');
   }
+  assertIsolatedMigrationTargetUri(targetUri, targetClassification, plan.sourceDatabase);
   if (process.env.MONGODB_URI) assertDistinctDatabaseUris({ sourceUri: process.env.MONGODB_URI, targetUri });
   let target;
   let disposable;
   try {
     if (modes[0] === '--apply') {
       const restoreUri = process.env.V3_RESTORE_MONGODB_URI;
-      if (!restoreUri || databaseFromUri(restoreUri) === targetDbName
-        || databaseFromUri(restoreUri) === plan.sourceDatabase
-        || !/(?:^|[-_])(?:restore|drill|isolated|fixture|test)(?:[-_]|$)/i.test(databaseFromUri(restoreUri))) {
+      if (!restoreUri || databaseFromUri(restoreUri) === targetDbName) {
         throw new Error('A distinct disposable restore URI is required before apply');
       }
+      assertIsolatedMigrationTargetUri(restoreUri, targetClassification, plan.sourceDatabase);
       assertDistinctDatabaseUris({ sourceUri: restoreUri, targetUri });
       if (process.env.MONGODB_URI) assertDistinctDatabaseUris({ sourceUri: process.env.MONGODB_URI, targetUri: restoreUri });
       disposable = await mongoose.createConnection(restoreUri, { serverSelectionTimeoutMS: 10_000 }).asPromise();
+      await assertIsolatedMigrationTarget({ targetConnection: disposable,
+        targetDbName: disposable.db.databaseName, sourceDatabase: plan.sourceDatabase,
+        targetClassification });
       const restored = await restoreDatabase({ backupPackageString: archive, encryptionKey,
         targetDbConnection: disposable });
       if (!restored.verification.passed || restored.manifest.sha256Checksum !== plan.sourceChecksum) {
@@ -74,20 +87,34 @@ Use --report PATH to write the machine-readable migration/rollback report.`);
       }
     }
     target = await mongoose.createConnection(targetUri, { serverSelectionTimeoutMS: 10_000 }).asPromise();
+    await assertIsolatedMigrationTarget({ targetConnection: target,
+      targetDbName, sourceDatabase: plan.sourceDatabase, targetClassification });
     let result;
     if (modes[0] === '--verify') {
-      result = await verifyV3Migration({ archive, encryptionKey, sourceManifest, targetConnection: target });
+      const finalArchive = argument('--final-archive')
+        ? await fs.readFile(argument('--final-archive'), 'utf8') : undefined;
+      const finalSourceManifest = argument('--final-manifest')
+        ? JSON.parse(await fs.readFile(argument('--final-manifest'), 'utf8')) : undefined;
+      const finalSnapshotSidecar = argument('--final-snapshot-sidecar')
+        ? JSON.parse(await fs.readFile(argument('--final-snapshot-sidecar'), 'utf8')) : undefined;
+      result = await verifyV3Migration({ ...common, finalArchive, finalSourceManifest,
+        finalSnapshotSidecar, targetConnection: target,
+        targetClassification,
+        verificationStage: argument('--stage') ?? 'pre-cutover' });
     } else if (modes[0] === '--replay-delta') {
-      if (!argument('--delta-file') || !argument('--delta-checksum') || !process.argv.includes('--write-free-confirmed')) {
-        throw new Error('Final delta replay requires --delta-file, --delta-checksum and --write-free-confirmed');
+      if (!argument('--final-archive') || !argument('--final-manifest') || !process.argv.includes('--write-free-confirmed')) {
+        throw new Error('Final replay requires a frozen source archive, manifest and write-free confirmation');
       }
-      const deltaDocuments = JSON.parse(await fs.readFile(argument('--delta-file'), 'utf8'));
-      result = await replayFinalMealDelta({ targetConnection: target, deltaDocuments,
-        expectedSourceChecksum: plan.sourceChecksum,
-        expectedDeltaChecksum: argument('--delta-checksum'), sourceWritesStopped: true });
+      const finalArchive = await fs.readFile(argument('--final-archive'), 'utf8');
+      const finalSourceManifest = JSON.parse(await fs.readFile(argument('--final-manifest'), 'utf8'));
+      const finalSnapshotSidecar = argument('--final-snapshot-sidecar')
+        ? JSON.parse(await fs.readFile(argument('--final-snapshot-sidecar'), 'utf8')) : undefined;
+      result = await replayFinalMealDelta({ ...common, targetConnection: target,
+        targetClassification, finalArchive, finalSourceManifest, finalSnapshotSidecar,
+        sourceWritesStopped: true });
     } else {
-      result = await applyV3Migration({ archive, encryptionKey, sourceManifest,
-        targetConnection: target, targetDbName,
+      result = await applyV3Migration({ ...common, targetConnection: target,
+        targetDbName, targetClassification,
         superAdmin: { email: process.env.V3_SUPERADMIN_EMAIL,
           password: process.env.V3_SUPERADMIN_PASSWORD },
         recoverySuperAdmin: { email: process.env.V3_RECOVERY_SUPERADMIN_EMAIL,

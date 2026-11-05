@@ -225,24 +225,24 @@ function createMockExpenses() {
       if (memberId === 'gaurav') {
         return {
           spendingSharePaise: 36000, // ₹360
-          merchantSpendingPaise: 25000, // ₹250
-          owedToOthersPaise: 15000,  // ₹150 (owes Nikhil)
+          paidMerchantsPaise: 25000, // Expense service response field
+          iOweOthersPaise: 15000,  // ₹150 (owes Nikhil)
           owedToMePaise: 20000,      // ₹200 (Devansh owes Gaurav)
         };
       }
       if (memberId === 'nikhil') {
         return {
           spendingSharePaise: 42000, // ₹420
-          merchantSpendingPaise: 60000, // ₹600
-          owedToOthersPaise: 0,
+          paidMerchantsPaise: 60000, // Expense service response field
+          iOweOthersPaise: 0,
           owedToMePaise: 15000, // ₹150 from Gaurav
         };
       }
       // Devansh
       return {
         spendingSharePaise: 50000, // ₹500
-        merchantSpendingPaise: 43000, // ₹430
-        owedToOthersPaise: 20000, // ₹200 to Gaurav
+        paidMerchantsPaise: 43000, // Expense service response field
+        iOweOthersPaise: 20000, // ₹200 to Gaurav
         owedToMePaise: 0,
       };
     },
@@ -339,6 +339,7 @@ describe('MealKhata 2.0: Unified Financial Overview & Reporting (Phase 3)', () =
 
       // 3. Other Expenses
       assert.equal(overview.expenses.spendingSharePaise, 36000, 'Personal consumption share should be ₹360');
+      assert.equal(overview.expenses.merchantSpendingPaise, 25000, 'Merchant spending uses the expense service field');
       assert.equal(overview.expenses.owedToOthersPaise, 15000, 'Unpaid reimbursement debt owed is ₹150');
       assert.equal(overview.expenses.owedToMePaise, 20000, 'Receivable owed by roommates is ₹200');
 

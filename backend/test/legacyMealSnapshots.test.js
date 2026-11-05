@@ -304,4 +304,15 @@ describe('legacy snapshot CLI safety', () => {
       targetUri: 'mongodb://127.0.0.1:27017/mealkhata?retryWrites=false',
     }), /different databases/i);
   });
+
+  test('requires an explicitly classified local snapshot target, regardless of database name', () => {
+    const sourceUri = 'mongodb://127.0.0.1:27017/source';
+    const targetUri = 'mongodb://127.0.0.1:27017/mealkhata-snapshot-target';
+    assert.throws(() => validateLegacySnapshotConnections({ sourceUri, targetUri }), /isolated-test/i);
+    assert.throws(() => validateLegacySnapshotConnections({ sourceUri,
+      targetUri: 'mongodb+srv://atlas.example.test/mealkhata-snapshot-target',
+      targetClassification: 'isolated-test' }), /local/i);
+    assert.doesNotThrow(() => validateLegacySnapshotConnections({ sourceUri, targetUri,
+      targetClassification: 'isolated-test' }));
+  });
 });

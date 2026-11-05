@@ -448,11 +448,12 @@ export function AdminPage() {
                 }
 
                 // Status change item
-                const memberName = item.memberId[0].toUpperCase() + item.memberId.slice(1);
+                const memberName = studentRoster.data.find(student => student.id === item.memberId)?.name
+                  ?? item.memberId;
                 let actionDescription;
                 if (item.actorRole === 'member' && item.actorMemberId) {
-                  const actorName =
-                    item.actorMemberId[0].toUpperCase() + item.actorMemberId.slice(1);
+                  const actorName = studentRoster.data.find(student => student.id === item.actorMemberId)?.name
+                    ?? item.actorMemberId;
                   if (item.actorMemberId === item.memberId) {
                     actionDescription = `${actorName} changed their ${item.mealType === 'morning' ? 'Morning' : 'Night'} meal`;
                   } else {

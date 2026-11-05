@@ -3,22 +3,15 @@ import mongoose from 'mongoose';
 import { env } from '../src/config/env.js';
 import { restoreDatabase, verifyAndDecryptBackup } from '../src/backup/backupEngine.js';
 import { assertDistinctDatabaseUris } from '../src/migrations/sourceInventory.service.js';
+import { assertIsolatedMigrationTarget, assertIsolatedMigrationTargetUri } from '../src/migrations/v3Migration.service.js';
 import { verifyDataIntegrity } from './verifyData.js';
 
 export function redactMongoUri(value) {
   return String(value).replace(/mongodb(?:\+srv)?:\/\/[^\s"'<>]+/gi, '[redacted MongoDB URI]');
 }
 
-export function assertDisposableRestoreUri(uri, sourceDatabase) {
-  let parsed;
-  try { parsed = new URL(uri); } catch { throw new Error('Invalid restore target URI'); }
-  const database = decodeURIComponent(parsed.pathname.replace(/^\//, ''));
-  if (!['mongodb:', 'mongodb+srv:'].includes(parsed.protocol) || !database
-    || !/(?:^|[-_])(?:restore|drill|isolated|fixture|test)(?:[-_]|$)/i.test(database)
-    || database === sourceDatabase) {
-    throw new Error('Restore target must be an explicit disposable database distinct from source');
-  }
-  return database;
+export function assertDisposableRestoreUri(uri, sourceDatabase, targetClassification) {
+  return assertIsolatedMigrationTargetUri(uri, targetClassification, sourceDatabase);
 }
 
 async function run() {
@@ -30,6 +23,7 @@ Usage: npm run db:restore -- <path-to-backup-file> [--drop]
 Required environment:
   BACKUP_ENCRYPTION_KEY   Secret used to create the archive
   RESTORE_MONGODB_URI     Explicit isolated restore target
+  RESTORE_TARGET_CLASSIFICATION=isolated-test  Required local target classification
 
 The command refuses a target matching MONGODB_URI. --drop permits clearing only
 the explicitly supplied restore target; production override flags are unsupported.`);
@@ -39,6 +33,7 @@ the explicitly supplied restore target; production override flags are unsupporte
   const filePath = process.argv[2];
   const encryptionKey = process.env.BACKUP_ENCRYPTION_KEY?.trim();
   const restoreUri = process.env.RESTORE_MONGODB_URI?.trim();
+  const targetClassification = process.env.RESTORE_TARGET_CLASSIFICATION;
   const dropExisting = process.argv.includes('--drop');
 
   if (!filePath) {
@@ -60,7 +55,8 @@ the explicitly supplied restore target; production override flags are unsupporte
 
   try {
     assertDistinctDatabaseUris({ sourceUri: env.mongoUri, targetUri: restoreUri });
-    assertDisposableRestoreUri(restoreUri, env.mongoUri ? decodeURIComponent(new URL(env.mongoUri).pathname.replace(/^\//, '')) : null);
+    assertDisposableRestoreUri(restoreUri, env.mongoUri ? decodeURIComponent(new URL(env.mongoUri).pathname.replace(/^\//, '')) : null,
+      targetClassification);
   } catch (error) {
     console.error(`DANGER: ${redactMongoUri(error.message)}.`);
     console.error('Choose a separate disposable RESTORE_MONGODB_URI. Production override flags are not supported.');
@@ -70,7 +66,7 @@ the explicitly supplied restore target; production override flags are unsupporte
   console.info('Reading encrypted backup file...');
   const backupPackageString = await fs.readFile(filePath, 'utf8');
   const { manifest: archiveManifest } = verifyAndDecryptBackup({ backupPackageString, encryptionKey });
-  assertDisposableRestoreUri(restoreUri, archiveManifest.sourceDatabase);
+  assertDisposableRestoreUri(restoreUri, archiveManifest.sourceDatabase, targetClassification);
 
   console.info('Connecting to verified disposable restore target...');
   const targetConnection = await mongoose.createConnection(restoreUri, {
@@ -78,6 +74,9 @@ the explicitly supplied restore target; production override flags are unsupporte
   }).asPromise();
 
   try {
+    await assertIsolatedMigrationTarget({ targetConnection,
+      targetDbName: targetConnection.db.databaseName,
+      sourceDatabase: archiveManifest.sourceDatabase, targetClassification });
     console.info(`Restoring database (dropExisting: ${dropExisting})...`);
     const { manifest, restoredCounts, verification } = await restoreDatabase({
       backupPackageString,

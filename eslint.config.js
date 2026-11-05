@@ -30,7 +30,7 @@ export default [
     },
   },
   {
-    files: ['backend/**/*.js', 'eslint.config.js', 'frontend/vite.config.js'],
+    files: ['backend/**/*.js', 'e2e/**/*.js', 'playwright.config.js', 'eslint.config.js', 'frontend/vite.config.js'],
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'module',
