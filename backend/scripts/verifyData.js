@@ -8,6 +8,10 @@ import { isValidPaymentAmount, isValidUuid } from '../src/payments/payment.const
 import { isValidPricePaise } from '../src/billing/monthlyRate.constants.js';
 import { isValidLogicalTime } from '../src/settings/reminder.constants.js';
 import { MEAL_STATUSES } from '../src/meals/meal.constants.js';
+import { resolvePhysicalPlateLimit } from '../src/meals/plateAllocation.constants.js';
+import { assertSafeStudentId } from '../src/students/studentId.js';
+import { checksumValue } from '../src/migrations/sourceInventory.service.js';
+import { verifyLegacyMealSnapshot, buildLegacyMealSnapshot } from '../src/migrations/legacyMealSnapshot.service.js';
 import { EXPENSE_CATEGORIES } from '../src/expenses/expense.constants.js';
 
 function assignmentInterval(assignment) {
@@ -46,6 +50,27 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
   const checks = [];
 
   const db = dbConnection.db;
+  const students = await db.collection('students').find({}).toArray();
+  const studentIds = new Set(students.length ? students.map(student => student.studentId) : MEMBER_IDS);
+  const knownStudent = studentId => studentIds.has(studentId);
+  const studentIssues = [];
+  const seenStudents = new Set();
+  for (const student of students) {
+    try { assertSafeStudentId(student.studentId); } catch { studentIssues.push(`Unsafe studentId: ${student.studentId}`); }
+    if (seenStudents.has(student.studentId)) studentIssues.push(`Duplicate studentId: ${student.studentId}`);
+    if (!['ACTIVE', 'ARCHIVED'].includes(student.status)) studentIssues.push(`Invalid status for ${student.studentId}`);
+    seenStudents.add(student.studentId);
+  }
+  const auditEvents = await db.collection('student_audit_events').find({}).toArray();
+  const seenAuditIds = new Set();
+  for (const event of auditEvents) {
+    if (!studentIds.has(event.studentId)) studentIssues.push(`Audit event references missing student ${event.studentId}`);
+    if (seenAuditIds.has(event.auditId)) studentIssues.push(`Duplicate auditId ${event.auditId}`);
+    seenAuditIds.add(event.auditId);
+  }
+  issues.push(...studentIssues.map(issue => `[students] ${issue}`));
+  checks.push({ name: 'Students', recordsChecked: students.length + auditEvents.length,
+    status: studentIssues.length ? 'FAIL' : 'PASS', issues: studentIssues.length });
 
   // 1. User Accounts Check
   try {
@@ -83,7 +108,7 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
       }
 
       if (u.role === 'member') {
-        if (!MEMBER_IDS.includes(u.memberId)) {
+        if (!knownStudent(u.memberId)) {
           issues.push(`[user_accounts] Member role must have valid memberId: ${u.memberId} for ${normalizedEmail}`);
           userIssues++;
         }
@@ -133,7 +158,7 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
     const foundMemberIds = new Set();
 
     for (const m of members) {
-      if (!MEMBER_IDS.includes(m.memberId)) {
+      if (!knownStudent(m.memberId)) {
         issues.push(`[member_accounts] Unknown memberId: ${m.memberId}`);
         memberIssues++;
       }
@@ -175,11 +200,22 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         mealIssues++;
       }
       seenDates.add(md.date);
+      const participants = md.schemaVersion === 3 ? md.participantOrder : MEMBER_IDS;
+      if (md.schemaVersion === 3 && (!Array.isArray(participants)
+        || new Set(participants).size !== participants.length
+        || participants.some(id => !knownStudent(id)))) {
+        issues.push(`[meal_days] Invalid or orphaned participantOrder on ${md.date}`);
+        mealIssues++;
+      }
 
       for (const mealType of ['morning', 'night']) {
         const mealObj = md.meals?.[mealType] || {};
-        for (const memberId of MEMBER_IDS) {
+        for (const memberId of Object.keys(mealObj)) {
           const status = mealObj[memberId];
+          if (!knownStudent(memberId) || (md.schemaVersion === 3 && !participants?.includes(memberId))) {
+            issues.push(`[meal_days] Unknown student reference ${memberId} on ${md.date}`);
+            mealIssues++;
+          }
           if (status && !MEAL_STATUSES.includes(status)) {
             issues.push(`[meal_days] Invalid status ${status} for ${memberId} on ${md.date}`);
             mealIssues++;
@@ -189,15 +225,20 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         // Plate allocation invariants
         const alloc = md.allocations?.[mealType];
         if (alloc && alloc.mode === 'custom') {
-          if (!Array.isArray(alloc.plates) || alloc.plates.length > 3) {
+          if (!Array.isArray(alloc.plates) || alloc.plates.length > resolvePhysicalPlateLimit(participants?.length ?? 3)) {
             issues.push(`[meal_days] Invalid custom plate allocation count on ${md.date} (${mealType})`);
             mealIssues++;
           } else {
-            const memberTotalUnits = { gaurav: 0, nikhil: 0, devansh: 0 };
+            const memberTotalUnits = Object.fromEntries((participants ?? MEMBER_IDS).map(id => [id, 0]));
             for (let i = 0; i < alloc.plates.length; i++) {
               const p = alloc.plates[i];
               let plateUnits = 0;
-              for (const memberId of MEMBER_IDS) {
+              for (const memberId of Object.keys(p.shares ?? {})) {
+                if (!knownStudent(memberId) || !Object.hasOwn(memberTotalUnits, memberId)) {
+                  issues.push(`[meal_days] Unknown plate share student ${memberId} on ${md.date}`);
+                  mealIssues++;
+                  continue;
+                }
                 const units = p.shares?.[memberId] ?? 0;
                 if (!Number.isInteger(units) || units < 0 || units > 6) {
                   issues.push(`[meal_days] Plate #${i + 1} on ${md.date} (${mealType}) invalid units for ${memberId}: ${units}`);
@@ -212,7 +253,7 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
               }
             }
 
-            for (const memberId of MEMBER_IDS) {
+            for (const memberId of Object.keys(memberTotalUnits)) {
               if (memberTotalUnits[memberId] > 6) {
                 issues.push(`[meal_days] Member ${memberId} total units exceed 6 on ${md.date} (${mealType}): ${memberTotalUnits[memberId]}`);
                 mealIssues++;
@@ -330,7 +371,7 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
       }
       seenIdempotencyKeys.add(p.idempotencyKey);
 
-      if (!MEMBER_IDS.includes(p.memberId)) {
+      if (!knownStudent(p.memberId)) {
         issues.push(`[payments] Unknown memberId in payment: ${p.memberId}`);
         paymentIssues++;
       }
@@ -388,19 +429,38 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         // Verify member totals match room totals
         const membersSnapshot = s.snapshot?.members || {};
         const roomSnapshot = s.snapshot?.room || {};
+        if (s.snapshotVersion === 3) {
+          const recordedIds = s.snapshot?.studentIds;
+          const memberIds = Object.keys(membersSnapshot);
+          if (!Array.isArray(recordedIds) || new Set(recordedIds).size !== recordedIds.length
+            || recordedIds.length !== memberIds.length
+            || recordedIds.some(id => !knownStudent(id) || !Object.hasOwn(membersSnapshot, id))) {
+            issues.push(`[monthly_settlements] Invalid dynamic student roster in month: ${s.month}`);
+            settlementIssues++;
+          }
+        }
         let summedMorning = 0;
         let summedNight = 0;
         let summedPlates = 0;
         let summedBill = 0;
         let summedPaid = 0;
 
-        for (const memberId of MEMBER_IDS) {
+        for (const memberId of Object.keys(membersSnapshot)) {
+          if (!knownStudent(memberId)) {
+            issues.push(`[monthly_settlements] Unknown student ${memberId} in month ${s.month}`);
+            settlementIssues++;
+          }
           const mem = membersSnapshot[memberId] || {};
           summedMorning += mem.morningCount || 0;
           summedNight += mem.nightCount || 0;
           summedPlates += mem.totalPlates || 0;
           summedBill += mem.billAmountPaise || 0;
           summedPaid += mem.paidAmountPaise || 0;
+          if (!Number.isSafeInteger(mem.billAmountPaise) || !Number.isSafeInteger(mem.paidAmountPaise)
+            || !Number.isSafeInteger(mem.remainingAmountPaise)) {
+            issues.push(`[monthly_settlements] Invalid integer paise for ${memberId} in month: ${s.month}`);
+            settlementIssues++;
+          }
 
           if (mem.remainingAmountPaise !== 0) {
             issues.push(`[monthly_settlements] Closed settlement member ${memberId} has remainingAmountPaise != 0 (${mem.remainingAmountPaise})`);
@@ -408,13 +468,16 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
           }
         }
 
-        if (
-          summedMorning !== roomSnapshot.morningCount ||
-          summedNight !== roomSnapshot.nightCount ||
-          summedPlates !== roomSnapshot.totalPlates ||
-          summedBill !== roomSnapshot.billAmountPaise ||
-          summedPaid !== roomSnapshot.paidAmountPaise
-        ) {
+        const countMismatch = s.snapshotVersion === 3
+          ? (Number.isSafeInteger(roomSnapshot.totalPhysicalPlates)
+            && Object.values(membersSnapshot).every(member => Number.isSafeInteger(member.totalShareUnits))
+            && Object.values(membersSnapshot).reduce((sum, member) => sum + member.totalShareUnits, 0)
+              !== roomSnapshot.totalPhysicalPlates * 6)
+          : summedMorning !== roomSnapshot.morningCount
+            || summedNight !== roomSnapshot.nightCount
+            || summedPlates !== roomSnapshot.totalPlates;
+        if (countMismatch || summedBill !== roomSnapshot.billAmountPaise
+          || summedPaid !== roomSnapshot.paidAmountPaise) {
           issues.push(`[monthly_settlements] Closed snapshot member sums do not equal room total in month: ${s.month}`);
           settlementIssues++;
         }
@@ -500,7 +563,7 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         issues.push(`[room_assignments] Invalid assignmentId UUID: ${a.assignmentId}`);
         roomIssues++;
       }
-      if (!MEMBER_IDS.includes(a.memberId)) {
+      if (!knownStudent(a.memberId)) {
         issues.push(`[room_assignments] Invalid memberId: ${a.memberId}`);
         roomIssues++;
       }
@@ -531,7 +594,7 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         issues.push(`[room_fee_plans] Invalid feePlanId UUID: ${p.feePlanId}`);
         roomIssues++;
       }
-      if (!MEMBER_IDS.includes(p.memberId)) {
+      if (!knownStudent(p.memberId)) {
         issues.push(`[room_fee_plans] Invalid memberId: ${p.memberId}`);
         roomIssues++;
       }
@@ -554,7 +617,7 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         issues.push(`[room_charges] Invalid chargeId UUID: ${c.chargeId}`);
         roomIssues++;
       }
-      if (!MEMBER_IDS.includes(c.memberId)) {
+      if (!knownStudent(c.memberId)) {
         issues.push(`[room_charges] Invalid memberId: ${c.memberId}`);
         roomIssues++;
       }
@@ -590,7 +653,7 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         issues.push(`[room_payments] Invalid roomPaymentId UUID: ${p.roomPaymentId}`);
         roomIssues++;
       }
-      if (!MEMBER_IDS.includes(p.memberId)) {
+      if (!knownStudent(p.memberId)) {
         issues.push(`[room_payments] Invalid memberId: ${p.memberId}`);
         roomIssues++;
       }
@@ -734,7 +797,7 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         seenExpenseIdempotency.add(exp.idempotencyKey);
       }
 
-      if (!MEMBER_IDS.includes(exp.paidByMemberId)) {
+      if (!knownStudent(exp.paidByMemberId)) {
         issues.push(`[expenses] Invalid paidByMemberId: ${exp.paidByMemberId}`);
         expenseIssues++;
       }
@@ -766,7 +829,7 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         let allocationSum = 0;
         const seenAllocMembers = new Set();
         for (const alloc of exp.allocations) {
-          if (!MEMBER_IDS.includes(alloc.memberId)) {
+          if (!knownStudent(alloc.memberId)) {
             issues.push(`[expenses] Invalid memberId in allocation: ${alloc.memberId}`);
             expenseIssues++;
           }
@@ -842,11 +905,11 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         }
       }
 
-      if (!MEMBER_IDS.includes(r.fromMemberId)) {
+      if (!knownStudent(r.fromMemberId)) {
         issues.push(`[expense_reimbursements] Invalid fromMemberId: ${r.fromMemberId}`);
         expenseIssues++;
       }
-      if (!MEMBER_IDS.includes(r.toMemberId)) {
+      if (!knownStudent(r.toMemberId)) {
         issues.push(`[expense_reimbursements] Invalid toMemberId: ${r.toMemberId}`);
         expenseIssues++;
       }
@@ -924,7 +987,7 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         stayIssues++;
       }
 
-      if (!MEMBER_IDS.includes(s.memberId)) {
+      if (!knownStudent(s.memberId)) {
         issues.push(`[hostel_stays] Invalid memberId: ${s.memberId} in stay ${s.stayId}`);
         stayIssues++;
       }
@@ -1333,6 +1396,88 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
     });
   } catch (error) {
     checks.push({ name: 'Security Deposits & Clearances', status: 'FAIL', issues: 1, message: error.message });
+  }
+
+  // Historical authority is append-only. Verify every captured legacy baseline and
+  // the complete correction chain without mutating either collection.
+  try {
+    const [days, snapshots, corrections] = await Promise.all([
+      db.collection('meal_days').find({}).toArray(),
+      db.collection('meal_history_snapshots').find({}).toArray(),
+      db.collection('meal_history_corrections').find({}).toArray(),
+    ]);
+    let historyIssues = 0;
+    const dayByDate = new Map(days.map(day => [day.date, day]));
+    const snapshotByDate = new Map();
+    for (const snapshot of snapshots) {
+      const key = `${snapshot.date}:${snapshot.calculationVersion}`;
+      if (snapshotByDate.has(key) || !dayByDate.has(snapshot.date)) {
+        issues.push(`[meal_history_snapshots] Duplicate or orphaned snapshot ${key}`);
+        historyIssues++;
+      }
+      snapshotByDate.set(key, snapshot);
+      if (!Array.isArray(snapshot.participantOrder)
+        || new Set(snapshot.participantOrder).size !== snapshot.participantOrder.length) {
+        issues.push(`[meal_history_snapshots] Invalid participant roster on ${snapshot.date}`);
+        historyIssues++;
+      }
+      for (const id of snapshot.participantOrder ?? []) {
+        if (!knownStudent(id)) {
+          issues.push(`[meal_history_snapshots] Unknown student ${id} on ${snapshot.date}`);
+          historyIssues++;
+        }
+      }
+      for (const cost of Object.values(snapshot.costs ?? {})) {
+        const amounts = Object.values(cost.memberAmountsPaise ?? {});
+        for (const id of Object.keys(cost.memberAmountsPaise ?? {})) {
+          if (!knownStudent(id) || !snapshot.participantOrder?.includes(id)) {
+            issues.push(`[meal_history_snapshots] Orphaned cost student ${id} on ${snapshot.date}`);
+            historyIssues++;
+          }
+        }
+        if (!Number.isSafeInteger(cost.totalCostPaise) || !Number.isSafeInteger(cost.roomAmountPaise)
+          || amounts.some(amount => !Number.isSafeInteger(amount))
+          || amounts.reduce((sum, amount) => sum + amount, 0) !== cost.totalCostPaise
+          || cost.roomAmountPaise !== cost.totalCostPaise) {
+          issues.push(`[meal_history_snapshots] Cost does not conserve exact paise on ${snapshot.date}`);
+          historyIssues++;
+        }
+      }
+    }
+    if (snapshots.length || corrections.length) {
+      for (const day of days.filter(candidate => candidate.schemaVersion !== 3)) {
+        try { verifyLegacyMealSnapshot(day, snapshotByDate.get(`${day.date}:legacy-v2`)); }
+        catch { issues.push(`[meal_history_snapshots] Missing or mismatched legacy authority on ${day.date}`); historyIssues++; }
+      }
+    }
+    const correctionsByDate = new Map();
+    for (const correction of corrections) {
+      if (!correctionsByDate.has(correction.date)) correctionsByDate.set(correction.date, []);
+      correctionsByDate.get(correction.date).push(correction);
+    }
+    for (const [date, chain] of correctionsByDate) {
+      const baseline = snapshotByDate.get(`${date}:legacy-v2`);
+      if (!baseline) { issues.push(`[meal_history_corrections] Missing baseline for ${date}`); historyIssues++; continue; }
+      let prior = baseline.sourceRevision;
+      for (const correction of chain.sort((a, b) => a.revision - b.revision)) {
+        let valid = correction.previousRevision === prior && correction.revision === prior + 1
+          && correction.originalSourceChecksum === baseline.sourceChecksum
+          && correction.snapshot?.sourceRevision === correction.revision
+          && checksumValue(correction.snapshot) === correction.snapshotChecksum;
+        try {
+          const recalculated = buildLegacyMealSnapshot(correction.sourceState);
+          recalculated.snapshotId = correction.snapshot?.snapshotId;
+          recalculated.calculationVersion = 'legacy-correction-v1';
+          valid &&= checksumValue(recalculated) === checksumValue(correction.snapshot);
+        } catch { valid = false; }
+        if (!valid) { issues.push(`[meal_history_corrections] Broken authority chain for ${date}`); historyIssues++; }
+        prior = correction.revision;
+      }
+    }
+    checks.push({ name: 'Historical Meal Authority', recordsChecked: snapshots.length + corrections.length,
+      status: historyIssues ? 'FAIL' : 'PASS', issues: historyIssues });
+  } catch (error) {
+    checks.push({ name: 'Historical Meal Authority', status: 'FAIL', issues: 1, message: error.message });
   }
 
   const overallPassed = checks.every((c) => c.status === 'PASS');

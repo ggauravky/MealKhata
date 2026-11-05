@@ -57,7 +57,12 @@ export function createMealService({
 
   const serializeDay = async (document, date) => {
     if (document && document.schemaVersion !== 3 && snapshots) {
-      return serializeLegacyMealSnapshot(await verifiedSnapshot(document), { timezone });
+      return {
+        ...serializeLegacyMealSnapshot(await verifiedSnapshot(document), { timezone }),
+        ...(document.financialClassification ? { financialClassification: document.financialClassification } : {}),
+        ...(document.cutoverClassificationSource ? { cutoverClassificationSource: document.cutoverClassificationSource } : {}),
+        ...(document.importedFromLegacy ? { importedFromLegacy: true } : {}),
+      };
     }
     return serializeMealDay(document, date, {
       timezone,

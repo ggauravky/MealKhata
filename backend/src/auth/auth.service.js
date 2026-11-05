@@ -83,6 +83,11 @@ export function createAuthService({
         };
       }
 
+      if (config.canonicalOnlyAuth === true) {
+        await bcrypt.compare(password, DUMMY_PASSWORD_HASH);
+        throw new HttpError(401, 'Invalid email or password.');
+      }
+
       // 2. Fallback: Legacy member_accounts collection (pre-migration / test mocks)
       let legacyMemberAccount = null;
       try {

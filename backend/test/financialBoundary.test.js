@@ -48,7 +48,9 @@ test('imported boundary-day meal needs explicit manifest classification', async 
   assert.equal(await service.isOperationalMealDay({ date: '2026-11-15', schemaVersion: 3, importedFromLegacy: true }), false);
   assert.equal(await service.isOperationalMealDay({ date: '2026-11-15', schemaVersion: 3, importedFromLegacy: true,
     financialClassification: 'operational', cutoverClassificationSource: 'migration-manifest' }), true);
-  assert.equal(await service.isOperationalMealDay({ date: '2026-11-16', calculationVersion: 'legacy-v2' }), true);
+  assert.equal(await service.isOperationalMealDay({ date: '2026-11-16', calculationVersion: 'legacy-v2' }), false);
+  assert.equal(await service.isOperationalMealDay({ date: '2026-11-16', calculationVersion: 'legacy-v2',
+    financialClassification: 'operational', cutoverClassificationSource: 'migration-manifest' }), true);
 });
 
 test('partial month keeps historical cost visible without creating historical debt', async () => {

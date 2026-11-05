@@ -70,7 +70,7 @@ export function createMealRepository({ model = MealDay, resolver = studentResolv
 
   async findInDateRange(startDate, endDate) {
     return model.find({ date: { $gte: startDate, $lte: endDate } })
-      .select({ date: 1, schemaVersion: 1, participantOrder: 1, meals: 1, allocations: 1, priceOverrides: 1, revision: 1, changes: 1, allocationChanges: 1, priceChanges: 1, createdAt: 1, updatedAt: 1, _id: 0 })
+      .select({ date: 1, schemaVersion: 1, participantOrder: 1, financialClassification: 1, cutoverClassificationSource: 1, importedFromLegacy: 1, meals: 1, allocations: 1, priceOverrides: 1, revision: 1, changes: 1, allocationChanges: 1, priceChanges: 1, createdAt: 1, updatedAt: 1, _id: 0 })
       .lean()
       .exec();
   },

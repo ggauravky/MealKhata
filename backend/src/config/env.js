@@ -18,6 +18,7 @@ export const env = Object.freeze({
   superAdminEmail: process.env.SUPERADMIN_EMAIL?.trim().toLowerCase() ?? '',
   superAdminPasswordHash: process.env.SUPERADMIN_PASSWORD_HASH?.trim() ?? '',
   authJwtSecret: process.env.AUTH_JWT_SECRET?.trim() ?? '',
+  canonicalOnlyAuth: process.env.CANONICAL_ONLY_AUTH === 'true',
   appOrigin: normalizeAppOrigin(process.env.APP_ORIGIN),
   vapidPublicKey: process.env.VAPID_PUBLIC_KEY?.trim() ?? '',
   vapidPrivateKey: process.env.VAPID_PRIVATE_KEY?.trim() ?? '',

@@ -303,6 +303,11 @@ export async function restoreDatabase(options) {
   }
 
   if (dropExisting) {
+    if (targetBeforeRestore.collectionOrder.length > 0) {
+      const previous = await verifyRestoredInventory({ sourceManifest: manifest,
+        targetDbConnection, serializeDocument: toExtendedJson });
+      if (!previous.passed) throw new Error('Refusing to drop an unverified restore target');
+    }
     for (const collectionName of targetBeforeRestore.collectionOrder) {
       try {
         await db.collection(collectionName).drop();

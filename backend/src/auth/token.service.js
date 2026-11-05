@@ -114,7 +114,7 @@ export async function createSessionToken(
 
 export async function verifySessionToken(
   token,
-  { accounts = userAccountRepository, resolver = studentResolver } = {},
+  { accounts = userAccountRepository, resolver = studentResolver, canonicalOnly = env.canonicalOnlyAuth } = {},
 ) {
   const { payload } = await jwtVerify(token, getSecretKey(), {
     algorithms: [ALGORITHM],
@@ -124,6 +124,12 @@ export async function verifySessionToken(
 
   if (!isAuthenticatedRole(payload.role)) {
     throw new Error('Unsupported session role');
+  }
+  if (canonicalOnly && (!payload.userId || !accounts)) {
+    throw new Error('Canonical session requires a userId and account repository');
+  }
+  if (canonicalOnly && (!Number.isSafeInteger(payload.sessionVersion) || payload.sessionVersion < 0)) {
+    throw new Error('Canonical session requires a valid session version');
   }
 
   const expiresAt = typeof payload.exp === 'number'
@@ -138,6 +144,9 @@ export async function verifySessionToken(
     }
     if (user.active === false) {
       throw new Error('User account is inactive');
+    }
+    if (payload.role !== user.role || payload.memberId !== (user.memberId ?? undefined)) {
+      throw new Error('Session identity does not match canonical account');
     }
     if (typeof payload.sessionVersion === 'number' && user.sessionVersion !== payload.sessionVersion) {
       throw new Error('Session has been revoked');
@@ -156,6 +165,7 @@ export async function verifySessionToken(
     if (!principal) {
       throw new Error('User account role is invalid');
     }
+    if (payload.sub !== principal) throw new Error('Session principal does not match canonical account');
     return {
       authenticated: true,
       role: user.role,

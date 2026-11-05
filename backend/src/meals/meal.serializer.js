@@ -94,6 +94,9 @@ export function serializeMealDay(
 
   return {
     date,
+    ...(source.financialClassification ? { financialClassification: source.financialClassification } : {}),
+    ...(source.cutoverClassificationSource ? { cutoverClassificationSource: source.cutoverClassificationSource } : {}),
+    ...(source.importedFromLegacy ? { importedFromLegacy: true } : {}),
     ...(Object.hasOwn(source, 'schemaVersion') ? { schemaVersion: source.schemaVersion } : {}),
     ...(source.participantOrder ? { participantOrder: [...participantIds] } : {}),
     timezone,

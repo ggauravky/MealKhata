@@ -18,12 +18,12 @@ function previousDate(value) {
 export function isOperationalMealDayForBoundary(day, financialStartDate) {
   if (!day || !isValidLogicalDate(day.date)) throw new TypeError('meal day must have a YYYY-MM-DD date');
   if (!financialStartDate || day.date < financialStartDate) return false;
-  if (day.date !== financialStartDate) return true;
   if (day.financialClassification === 'historical') return false;
   if (day.importedFromLegacy || day.calculationVersion?.startsWith('legacy-')) {
     return day.financialClassification === 'operational'
       && day.cutoverClassificationSource === 'migration-manifest';
   }
+  if (day.date !== financialStartDate) return true;
   return day.schemaVersion === 3 || day.calculationVersion === 'v3';
 }
 

@@ -1,9 +1,25 @@
 import fs from 'node:fs/promises';
 import mongoose from 'mongoose';
 import { env } from '../src/config/env.js';
-import { restoreDatabase } from '../src/backup/backupEngine.js';
+import { restoreDatabase, verifyAndDecryptBackup } from '../src/backup/backupEngine.js';
 import { assertDistinctDatabaseUris } from '../src/migrations/sourceInventory.service.js';
 import { verifyDataIntegrity } from './verifyData.js';
+
+export function redactMongoUri(value) {
+  return String(value).replace(/mongodb(?:\+srv)?:\/\/[^\s"'<>]+/gi, '[redacted MongoDB URI]');
+}
+
+export function assertDisposableRestoreUri(uri, sourceDatabase) {
+  let parsed;
+  try { parsed = new URL(uri); } catch { throw new Error('Invalid restore target URI'); }
+  const database = decodeURIComponent(parsed.pathname.replace(/^\//, ''));
+  if (!['mongodb:', 'mongodb+srv:'].includes(parsed.protocol) || !database
+    || !/(?:^|[-_])(?:restore|drill|isolated|fixture|test)(?:[-_]|$)/i.test(database)
+    || database === sourceDatabase) {
+    throw new Error('Restore target must be an explicit disposable database distinct from source');
+  }
+  return database;
+}
 
 async function run() {
   if (process.argv.includes('--help')) {
@@ -44,16 +60,19 @@ the explicitly supplied restore target; production override flags are unsupporte
 
   try {
     assertDistinctDatabaseUris({ sourceUri: env.mongoUri, targetUri: restoreUri });
+    assertDisposableRestoreUri(restoreUri, env.mongoUri ? decodeURIComponent(new URL(env.mongoUri).pathname.replace(/^\//, '')) : null);
   } catch (error) {
-    console.error(`DANGER: ${error.message}.`);
+    console.error(`DANGER: ${redactMongoUri(error.message)}.`);
     console.error('Choose a separate disposable RESTORE_MONGODB_URI. Production override flags are not supported.');
     process.exit(1);
   }
 
-  console.info(`Reading backup file: ${filePath}`);
+  console.info('Reading encrypted backup file...');
   const backupPackageString = await fs.readFile(filePath, 'utf8');
+  const { manifest: archiveManifest } = verifyAndDecryptBackup({ backupPackageString, encryptionKey });
+  assertDisposableRestoreUri(restoreUri, archiveManifest.sourceDatabase);
 
-  console.info(`Connecting to target restore database at: ${restoreUri}`);
+  console.info('Connecting to verified disposable restore target...');
   const targetConnection = await mongoose.createConnection(restoreUri, {
     serverSelectionTimeoutMS: 10_000,
   }).asPromise();
@@ -98,6 +117,6 @@ the explicitly supplied restore target; production override flags are unsupporte
 }
 
 run().catch((error) => {
-  console.error(`\n✗ Restoration failed: ${error.message}`);
+  console.error(`\n✗ Restoration failed: ${redactMongoUri(error.message)}`);
   process.exit(1);
 });
