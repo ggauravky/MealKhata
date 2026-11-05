@@ -9,7 +9,8 @@ const ID_FIELDS = new Set(['clusterId', 'databaseName', 'replicaSet']);
 const ACTIONS = new Set(['read-source-inventory', 'archive-source', 'restore-recovery',
   'create-target', 'apply-history', 'freeze-source-writes', 'archive-frozen-source', 'replay-final-meals',
   'configure-financial-boundary', 'configure-operations', 'deploy-backend',
-  'deploy-frontend', 'switch-connection', 'open-writes', 'rollback-connection']);
+  'deploy-frontend', 'switch-connection', 'open-writes', 'rollback-connection',
+  'approve-preflight-plan', 'approve-frozen-amendment']);
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 

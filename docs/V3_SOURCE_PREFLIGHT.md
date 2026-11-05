@@ -1,6 +1,6 @@
 # V3 source inventory and offline preflight
 
-**Task 15 did not connect to genuine Atlas.** Current counts and costs from tests describe isolated fixtures only. A future authorized operator must obtain an independent, read-only source inventory before cutover. It must run under a principal with `listCollections`, `listIndexes` and read access, and no write, drop or database creation privilege.
+**Tasks 15–17 did not connect to genuine Atlas.** Current counts and costs from tests describe isolated fixtures only. A future authorized operator must obtain an independent, read-only source inventory before cutover. It must run under a principal with `listCollections`, `listIndexes` and read access, and no write, drop or database creation privilege. The snapshot/epoch limits and separate authorization template are in [Task 17 source evidence](V3_TASK17_SOURCE_EVIDENCE.md).
 
 ## Authorized future procedure
 

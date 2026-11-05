@@ -245,7 +245,7 @@ async function ensureIndexes(db) {
   await db.collection('v3_migration_manifests').createIndex({ migrationId: 1 }, { unique: true });
 }
 
-function authoritativeDay(day, snapshots, corrections) {
+export function authoritativeDay(day, snapshots, corrections) {
   const source = fromExtendedJson(day);
   let cooked;
   if (source.schemaVersion === 3) {

@@ -1,8 +1,10 @@
 # MealKhata 3.0 cutover and rollback checklist
 
-**Task 15 preparation only. Do not execute this checklist without a separately reviewed production executor and written approval for each step.** The current migration CLI accepts only explicitly classified local replica sets. Do not bypass its guard. See the [production control design](V3_PRODUCTION_CUTOVER_ARCHITECTURE.md), [offline source preflight](V3_SOURCE_PREFLIGHT.md) and [student setup procedure](V3_STUDENT_BOOTSTRAP.md).
+**Tasks 15–17 preparation only. Do not execute this checklist without a separately reviewed production executor and written approval for each step.** The current migration CLI accepts only explicitly classified local replica sets. Do not bypass its guard. See the [production control design](V3_PRODUCTION_CUTOVER_ARCHITECTURE.md), [staged source evidence](V3_TASK17_SOURCE_EVIDENCE.md), [offline source preflight](V3_SOURCE_PREFLIGHT.md) and [student setup procedure](V3_STUDENT_BOOTSTRAP.md).
 
 For every checkbox below, the release journal must record the exact action, plan digest, source/recovery/target identity observations, owner and separate operator approval, one-time nonce, timestamp, artifact fingerprints, result and next stop/go decision. Do not reuse an approval. The owner must approve the real boundary; no date in a test or document is a production selection.
+
+Gates 1–7 belong to the signed Stage A plan. The final frozen archive cannot be known at Gate 1. After Gate 7, stop and obtain a separately signed Stage B amendment binding the actual frozen archive, inventory, sidecar, freeze attestation and meal delta to the same release ID. Gates 8–13 then require their own Stage B action approvals. The Task 17 controller and evidence verifier have no live Atlas observers or production handlers; the checklist remains a review artifact, not an executable procedure.
 
 ## Decision gate
 
