@@ -33,4 +33,4 @@ Omit `--final-snapshot-sidecar` only when all final legacy days already have ver
 
 Rollback means switching the application connection back to the protected original source database after stopping writes to the new target. It does not mean deleting the target or restoring over the original. The isolated drill switches an active database reference back to the unchanged source and checks every source collection checksum. A real connection-string change, production cutover, backup, financial start date, Render/Vercel deployment and Atlas operation require a separate reviewed and approved procedure. The Task 14 CLI deliberately rejects production destinations.
 
-See [the cutover and rollback checklist](../V3_CUTOVER_AND_ROLLBACK.md). Do not execute it during Task 14.
+Task 15 adds an offline source preflight and an independently reviewable production control design. It does not extend this CLI to Atlas. See [source preflight](../V3_SOURCE_PREFLIGHT.md), [production control design](../V3_PRODUCTION_CUTOVER_ARCHITECTURE.md), and [the cutover and rollback checklist](../V3_CUTOVER_AND_ROLLBACK.md). Do not execute production actions from this local rehearsal guide.

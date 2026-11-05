@@ -44,7 +44,7 @@ calendar and historical-cost baselines. It does not modify the source database.`
   await connectDatabase();
 
   try {
-    await fs.mkdir(backupsDir, { recursive: true });
+    await fs.mkdir(backupsDir, { recursive: true, mode: 0o700 });
 
     console.info('Generating encrypted backup archive...');
     const { manifest, serializedPackage } = await createEncryptedBackup({
@@ -58,9 +58,10 @@ calendar and historical-cost baselines. It does not modify the source database.`
     const filename = `mealkhata-backup-${timestamp}.mealkhata-backup`;
     const outputPath = path.join(backupsDir, filename);
 
-    await fs.writeFile(outputPath, serializedPackage, 'utf8');
+    await fs.writeFile(outputPath, serializedPackage, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
     const manifestPath = `${outputPath}.manifest.json`;
-    await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+    await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2),
+      { encoding: 'utf8', mode: 0o600, flag: 'wx' });
 
     console.info('\n✓ Backup created successfully!');
     console.info(`  File: ${outputPath}`);
@@ -85,7 +86,7 @@ calendar and historical-cost baselines. It does not modify the source database.`
   }
 }
 
-run().catch((error) => {
-  console.error(`Backup failed: ${error.message}`);
+run().catch(() => {
+  console.error('Backup failed. Archive and manifest were not verified; no credentials are printed.');
   process.exit(1);
 });

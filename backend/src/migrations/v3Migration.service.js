@@ -20,12 +20,23 @@ import { assertSafeStudentId } from '../students/studentId.js';
 import { isValidLogicalDate } from '../utils/date.js';
 import { checksumValue } from './sourceInventory.service.js';
 import { verifyLegacySnapshotSidecar } from './v3SnapshotSidecar.service.js';
+import { auditV3OperationalFinances } from './v3OperationalFinanceAudit.service.js';
 
 export const V3_HISTORY_COLLECTIONS = Object.freeze([
   'students', 'student_audit_events', 'meal_days', 'meal_history_snapshots',
   'meal_history_corrections', 'monthly_meal_rates',
 ]);
 const TARGET_COLLECTIONS = Object.freeze([...V3_HISTORY_COLLECTIONS, 'user_accounts', 'system_settings', 'v3_migration_manifests']);
+const LEGACY_OPERATIONAL_IDENTIFIERS = Object.freeze({
+  payments: 'paymentId', monthly_settlements: 'settlementId',
+  rooms: 'roomId', room_assignments: 'assignmentId', room_fee_plans: 'feePlanId',
+  room_charges: 'chargeId', room_payments: 'roomPaymentId',
+  expenses: 'expenseId', expense_reimbursements: 'reimbursementId',
+  hostel_stays: 'stayId', hostel_deposit_accounts: 'depositAccountId',
+  hostel_deposit_transactions: 'depositTransactionId', hostel_clearances: 'clearanceId',
+  payment_reclassifications: 'reclassificationId', unallocated_credits: 'creditId',
+  credit_allocations: 'creditAllocationId', payment_reference_claims: 'normalizedReference',
+});
 const INDEX_MODELS = [Student, StudentAuditEvent, MealDay, MealHistorySnapshot,
   MealHistoricalCorrection, MonthlyMealRate, UserAccount, SystemSettings];
 const ORIGINAL_IDS = ['gaurav', 'nikhil', 'devansh'];
@@ -357,8 +368,14 @@ export async function verifyV3Migration(options) {
     if (!postCutover && !TARGET_COLLECTIONS.includes(name)) issues.push(`Unexpected target collection: ${name}`);
     if (postCutover && plan.excludedCollections.includes(name)) {
       const archivedIds = new Set((verified.rawData[name] ?? []).map(documentId));
+      const naturalKey = LEGACY_OPERATIONAL_IDENTIFIERS[name];
+      const archivedKeys = new Set((verified.rawData[name] ?? [])
+        .map(row => row[naturalKey]).filter(value => value != null && value !== ''));
       for (const record of await db.collection(name).find({}).toArray()) {
         if (archivedIds.has(documentId(toExtendedJson(record)))) issues.push(`${name}: old operational record was imported`);
+        if (naturalKey && archivedKeys.has(record[naturalKey])) {
+          issues.push(`${name}: old operational ${naturalKey} was reused`);
+        }
       }
     }
   }
@@ -388,7 +405,11 @@ export async function verifyV3Migration(options) {
     || (!postCutover && settings[0]?.financialStartDate != null)) {
     issues.push('Financial start boundary state is invalid for verification stage');
   }
-  if (postCutover) await verifyPostCutoverBoundary(db, settings[0], issues);
+  if (postCutover) {
+    await verifyPostCutoverBoundary(db, settings[0], issues);
+    const financeAudit = await auditV3OperationalFinances(db, settings[0]?.financialStartDate);
+    if (!financeAudit.passed) issues.push(...financeAudit.issues);
+  }
   if (migration?.sourceChecksum !== originalPlan.sourceChecksum) issues.push('Migration manifest source fingerprint mismatch');
   for (const [date, delta] of Object.entries(finalDeltas)) {
     const actual = await db.collection('meal_days').findOne({ date });

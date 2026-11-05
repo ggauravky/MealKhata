@@ -243,6 +243,25 @@ describe('v3 blue-green migration in isolated replica set', () => {
       const verified = await verifyV3Migration({ archive, encryptionKey: key, sourceManifest: manifest,
         targetConnection: post, verificationStage: 'post-cutover' });
       assert.equal(verified.passed, true, verified.issues.join('; '));
+      const oldPaymentId = (await source.db.collection('payments').findOne({ memberId: 'gaurav' })).paymentId;
+      const copiedIdentifier = await post.db.collection('payments').insertOne({
+        paymentId: oldPaymentId, idempotencyKey: randomUUID(), memberId: 'gaurav',
+        month: '2026-11', amountPaise: 100, status: 'recorded', voidedAt: null,
+        voidReason: null, recordedAt: new Date('2026-11-02T12:00:00.000Z'),
+      });
+      const oldIdFailure = await verifyV3Migration({ archive, encryptionKey: key,
+        sourceManifest: manifest, targetConnection: post, verificationStage: 'post-cutover' });
+      assert.match(oldIdFailure.issues.join('; '), /old operational.*paymentId/i);
+      await post.db.collection('payments').deleteOne({ _id: copiedIdentifier.insertedId });
+      const preBoundaryReceipt = await post.db.collection('hostel_deposit_transactions').insertOne({
+        depositTransactionId: 'pre-boundary-receipt', depositAccountId: 'missing-account',
+        stayId: 'missing-stay', memberId: 'gaurav', type: 'RECEIVED', amountPaise: 100,
+        status: 'recorded', recordedAt: new Date('2026-10-31T12:00:00.000Z'),
+      });
+      const receiptFailure = await verifyV3Migration({ archive, encryptionKey: key,
+        sourceManifest: manifest, targetConnection: post, verificationStage: 'post-cutover' });
+      assert.match(receiptFailure.issues.join('; '), /hostel_deposit_transactions pre-boundary-receipt.*pre-boundary/i);
+      await post.db.collection('hostel_deposit_transactions').deleteOne({ _id: preBoundaryReceipt.insertedId });
       const preBoundaryExpense = await post.db.collection('expenses').insertOne({
         date: '2026-10-31', amountPaise: 100, paidByMemberId: 'gaurav',
       });
@@ -588,10 +607,33 @@ describe('v3 blue-green migration in isolated replica set', () => {
       assert.equal((await replayFinalMealDelta(replay)).replayed, 1);
       assert.equal((await verifyV3Migration(replay)).passed, true);
       assert.equal((await verifyIndexes(candidate)).passed, true);
+      await candidate.db.collection('system_settings').updateOne({ settingsId: 'system' },
+        { $set: { financialStartDate: '2026-11-01' } }); // Disposable fixture date only.
+      const v3Payments = ['gaurav', 'nikhil'].map(memberId => ({
+        paymentId: randomUUID(), idempotencyKey: randomUUID(), memberId,
+        month: '2026-11', amountPaise: 125, status: 'recorded',
+        voidedAt: null, voidReason: null, recordedAt: new Date('2026-11-02T12:00:00.000Z'),
+      }));
+      await candidate.db.collection('payments').insertMany(v3Payments);
+      const postOptions = { ...replay, verificationStage: 'post-cutover' };
+      const post = await verifyV3Migration(postOptions);
+      assert.equal(post.passed, true, post.issues.join('; '));
+      const badClaim = await candidate.db.collection('payment_reference_claims').insertOne({
+        normalizedReference: 'REHEARSAL-ORPHAN', ledger: 'MESS_PAYMENT',
+        documentId: 'missing-payment', memberId: 'gaurav',
+      });
+      const failedPost = await verifyV3Migration(postOptions);
+      assert.equal(failedPost.passed, false);
+      assert.match(failedPost.issues.join('; '), /REHEARSAL-ORPHAN.*missing/i);
+      await candidate.db.collection('payment_reference_claims').deleteOne({ _id: badClaim.insertedId });
+      assert.equal((await verifyV3Migration(postOptions)).passed, true);
+      assert.equal(await candidate.db.collection('payments').countDocuments(), 2);
       let active = candidate;
-      assert.equal(await active.db.collection('payments').countDocuments(), 0);
+      assert.equal(await active.db.collection('payments').countDocuments(), 2);
       active = original; // Rehearse restoring the original connection; no source write is involved.
       assert.equal(await active.db.collection('payments').countDocuments({ paymentId: 'old-v2-payment' }), 1);
+      assert.equal(await active.db.collection('payments').countDocuments({
+        paymentId: { $in: v3Payments.map(payment => payment.paymentId) } }), 0);
       assert.equal(await active.db.collection('meal_days').countDocuments(), 2);
       const afterRollback = await discoverSourceInventory({ dbConnection: original });
       assert.deepEqual(afterRollback.collectionOrder, frozen.collectionOrder);
