@@ -1,29 +1,39 @@
 import { Server } from 'socket.io';
 import { env, isProduction } from './config/env.js';
+import { verifyActiveSocketIdentity, verifySocketTicket } from './auth/socketTicket.service.js';
 import { logger } from './utils/logger.js';
 
 let activeSocketServer = null;
 
-export function createSocketServer(httpServer) {
+export function createSocketServer(httpServer, { config = env,
+  production = isProduction, verifyTicket = verifySocketTicket,
+  verifyActive = verifyActiveSocketIdentity, revalidateIntervalMs = 15_000 } = {}) {
   const io = new Server(httpServer, {
     path: '/socket.io',
     serveClient: false,
     cors: {
-      origin: isProduction ? env.appOrigin : true,
+      origin: production ? config.appOrigin : true,
       methods: ['GET', 'POST'],
       credentials: true,
     },
   });
 
-  if (isProduction) {
-    io.use((socket, next) => {
+  if (production || config.runtimeProfile === 'v3') {
+    io.use(async (socket, next) => {
       const origin = socket.handshake.headers.origin;
-      if (origin && origin !== env.appOrigin) {
-        logger.warn('socket.origin_rejected', {
-          socketId: socket.id,
-          origin,
-        });
+      if (config.runtimeProfile === 'v3'
+        ? origin !== config.appOrigin
+        : Boolean(origin && origin !== config.appOrigin)) {
+        logger.warn('socket.origin_rejected', { socketId: socket.id });
         return next(new Error('Unauthorized origin'));
+      }
+      if (config.runtimeProfile === 'v3') {
+        try {
+          const identity = await verifyTicket(socket.handshake.auth?.ticket);
+          socket.data.identity = identity;
+        } catch {
+          return next(new Error('Unauthorized socket session'));
+        }
       }
       return next();
     });
@@ -33,6 +43,16 @@ export function createSocketServer(httpServer) {
 
   io.on('connection', (socket) => {
     logger.info('socket.connected', { socketId: socket.id });
+
+    if (config.runtimeProfile === 'v3') {
+      const timer = setInterval(async () => {
+        try {
+          if (!await verifyActive(socket.data.identity)) socket.disconnect(true);
+        } catch { socket.disconnect(true); }
+      }, revalidateIntervalMs);
+      timer.unref();
+      socket.once('disconnect', () => clearInterval(timer));
+    }
 
     socket.on('disconnect', (reason) => {
       logger.info('socket.disconnected', { socketId: socket.id, reason });

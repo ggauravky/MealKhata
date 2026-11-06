@@ -1,40 +1,40 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import packageJson from '../../package.json' with { type: 'json' };
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(currentDir, '../..');
-
 const GATES = [
-  { name: 'Code Quality & Linting', command: 'npm run lint' },
-  { name: 'Automated Test Suites', command: 'npm test' },
-  { name: 'Production Frontend Build', command: 'npm run build' },
-  { name: 'Dual-Mode Production Verification', command: 'npm run verify-production-build' },
-  { name: 'Security & Dependency Audit', command: 'npm run security:check' },
-  { name: 'Performance Baseline Check', command: 'node -e "process.env.NODE_ENV=\'test\'; import(\'./backend/scripts/perfCheck.js\')"' },
+  ['Lint', ['run', 'lint']],
+  ['Backend and frontend tests', ['test']],
+  ['Frontend build', ['run', 'build']],
+  ['Backend production build verification', ['run', 'verify-production-build']],
+  ['Security checks', ['run', 'security:check']],
+  ['Performance baseline', ['run', 'perf:check']],
 ];
 
-console.log('==========================================');
-console.log('   MealKhata v1.0.0 Release Verification   ');
-console.log('==========================================\n');
-
-for (const gate of GATES) {
-  console.log(`▶ Running gate: ${gate.name} (${gate.command})...`);
-  try {
-    execSync(gate.command, {
-      cwd: rootDir,
-      stdio: 'inherit',
-      env: { ...process.env },
-    });
-    console.log(`  ✓ ${gate.name}: PASSED\n`);
-  } catch {
-    console.error(`\n❌ FAILED gate: ${gate.name}`);
-    console.error(`Command failed: ${gate.command}`);
-    process.exit(1);
-  }
+export function releaseGateSummary({ codeQualityPassed = false, isolatedMigrationPassed = false } = {}) {
+  return Object.freeze({ version: packageJson.version,
+    codeQuality: codeQualityPassed ? 'verified' : 'pending',
+    isolatedMigration: isolatedMigrationPassed ? 'verified' : 'pending',
+    productionSourceEvidence: 'pending', recovery: 'pending',
+    productionAdapters: 'review pending', ownerApproval: 'pending',
+    cutoverAuthorized: false });
 }
 
-console.log('==========================================');
-console.log('  ALL RELEASE GATES PASSED SUCCESSFULLY   ');
-console.log('==========================================\n');
-console.log('MealKhata is verified and ready for v1.0.0 release.');
+export function runReleaseCodeChecks({ run = execFileSync, log = console.log } = {}) {
+  log(`MealKhata ${packageJson.version} local code verification`);
+  for (const [name, args] of GATES) {
+    log(`Checking ${name}`);
+    run('npm', args, { cwd: rootDir, stdio: 'inherit', env: { ...process.env } });
+  }
+  const summary = releaseGateSummary({ codeQualityPassed: true, isolatedMigrationPassed: true });
+  log('Local code checks passed. Production source, recovery, provider and owner gates remain pending.');
+  return summary;
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try { runReleaseCodeChecks(); }
+  catch { console.error('A local code verification gate failed.'); process.exitCode = 1; }
+}

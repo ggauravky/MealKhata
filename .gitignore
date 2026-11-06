@@ -11,6 +11,7 @@ coverage/
 tmp/
 temp/
 screenshots/
+test-results/
 backups/
 restore-work/
 *.mealkhata-backup

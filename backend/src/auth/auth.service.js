@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs';
-import { env } from '../config/env.js';
+import { env, isCanonicalOnlyMode } from '../config/env.js';
 import { MEMBER_NAMES } from '../config/members.js';
 import { studentResolver } from '../students/studentResolver.service.js';
 import { HttpError } from '../utils/HttpError.js';
@@ -83,7 +83,7 @@ export function createAuthService({
         };
       }
 
-      if (config.canonicalOnlyAuth === true) {
+      if (isCanonicalOnlyMode(config)) {
         await bcrypt.compare(password, DUMMY_PASSWORD_HASH);
         throw new HttpError(401, 'Invalid email or password.');
       }

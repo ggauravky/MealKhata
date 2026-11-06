@@ -11,6 +11,7 @@ import { errorHandler } from './middleware/errorHandler.js';
 import { apiNotFound, notFound } from './middleware/notFound.js';
 import { sensitiveMutationLimiter } from './middleware/rateLimiters.js';
 import { requestCorrelation } from './middleware/requestCorrelation.js';
+import { v3MutationGate } from './middleware/v3MutationGate.js';
 import { authRouter } from './routes/auth.routes.js';
 import { healthRouter } from './routes/health.routes.js';
 import { mealRouter } from './routes/meal.routes.js';
@@ -125,6 +126,7 @@ export function createApp({
   app.use('/api', apiLimiter);
   app.use('/api', authenticate);
   app.use('/api', enforceTrustedOrigin);
+  app.use('/api', v3MutationGate);
   app.use('/api', health);
   app.use('/api/auth', auth);
   app.use('/api/meals', meals);

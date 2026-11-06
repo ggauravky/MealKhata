@@ -1,6 +1,6 @@
 {
   "name": "mealkhata",
-  "version": "1.0.0",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
   "description": "A private meal and shared-bill tracker for a dynamic student roster.",

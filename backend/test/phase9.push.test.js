@@ -6,6 +6,8 @@ import { ROLES } from '../src/auth/permissions.js';
 import { createSessionToken, SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
 import { createPushRouter } from '../src/routes/push.routes.js';
 import { createPushSubscriptionService } from '../src/push/pushSubscription.service.js';
+import { PushSubscription } from '../src/push/pushSubscription.model.js';
+import { PushDelivery } from '../src/push/pushDelivery.model.js';
 import {
   createReminderDispatchService,
   getLogicalTimeInTimeZone,
@@ -322,6 +324,32 @@ describe('Phase 9: Background Web Push Notifications & Smart Meal Reminders', ()
   });
 
   describe('Reminder Dispatch Service & Smart Scheduling', () => {
+    test('a fourth valid student can subscribe and receive a taking reminder', async () => {
+      const id = 'student_four';
+      const subscription = new PushSubscription({ memberId: id,
+        endpoint: 'https://push.example.test/fourth', keys: VALID_SUBSCRIPTION.keys });
+      const delivery = new PushDelivery({ dispatchKey: '2026-10-01:morning:fourth',
+        memberId: id, mealType: 'morning', logicalDate: '2026-10-01', subscriptionId: 'fourth' });
+      await subscription.validate();
+      await delivery.validate();
+      await assert.rejects(new PushSubscription({ memberId: '$unsafe',
+        endpoint: 'https://push.example.test/unsafe', keys: VALID_SUBSCRIPTION.keys }).validate());
+      await subRepo.upsertSubscription({ memberId: id,
+        endpoint: 'https://push.example.test/fourth', keys: VALID_SUBSCRIPTION.keys });
+      const sent = [];
+      const dispatch = createReminderDispatchService({
+        settingsService: { getSettings: async () => ({ reminders: {
+          morning: { enabled: true, time: '09:00' }, night: { enabled: false },
+        } }) },
+        meals: { getDay: async () => ({ participantOrder: [id],
+          meals: { morning: { [id]: 'taking' } } }) },
+        subscriptions: subRepo, deliveries: deliveryRepo,
+        resolver: { listEligibleOn: async () => [{ studentId: id }] },
+        push: { sendNotification: async sub => sent.push(sub.memberId) },
+      });
+      assert.equal((await dispatch.dispatchReminders({ now: new Date('2026-10-01T03:30:00Z') })).sentCount, 1);
+      assert.deepEqual(sent, [id]);
+    });
     test('isReminderDue evaluates dispatch window correctly', () => {
       assert.equal(isReminderDue({ scheduledTime: '09:00', currentTime: '08:59' }), false);
       assert.equal(isReminderDue({ scheduledTime: '09:00', currentTime: '09:00' }), true);

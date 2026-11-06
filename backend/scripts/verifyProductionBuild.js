@@ -30,21 +30,29 @@ const baseEnv = {
 
 // 1. Verify Vercel Split Deployment Configuration (Requirement 47)
 console.info('--- Verifying Vercel & Split Deployment Configuration ---');
-const vercelConfigPath = path.resolve(rootDir, 'vercel.json');
-const vercelConfigRaw = await fs.readFile(vercelConfigPath, 'utf8');
-const vercelConfig = JSON.parse(vercelConfigRaw);
+const { createVercelConfig } = await import('../../vercel.mjs');
+const vercelConfig = createVercelConfig({ VERCEL_ENV: 'production',
+  MEALKHATA_BACKEND_ORIGIN: 'https://meal-khata-api.onrender.com',
+  MEALKHATA_BACKEND_ENV: 'production', VITE_RUNTIME_PROFILE: 'v3',
+  VITE_SOCKET_URL: 'https://meal-khata-api.onrender.com' });
+const previewConfig = createVercelConfig({ VERCEL_ENV: 'preview',
+  MEALKHATA_BACKEND_ORIGIN: 'https://meal-khata-api-preview.onrender.com',
+  MEALKHATA_PRODUCTION_BACKEND_ORIGIN: 'https://meal-khata-api.onrender.com',
+  MEALKHATA_BACKEND_ENV: 'preview', VITE_RUNTIME_PROFILE: 'v3',
+  VITE_SOCKET_URL: 'https://meal-khata-api-preview.onrender.com' });
+assert.notEqual(vercelConfig.rewrites[0].destination, previewConfig.rewrites[0].destination);
 
 assert.equal(vercelConfig.framework, 'vite');
 assert.equal(vercelConfig.installCommand, 'npm ci');
 assert.equal(vercelConfig.buildCommand, 'npm run build --workspace frontend');
 assert.equal(vercelConfig.outputDirectory, 'frontend/dist');
 
-assert.ok(Array.isArray(vercelConfig.rewrites), 'vercel.json must define rewrites');
+assert.ok(Array.isArray(vercelConfig.rewrites), 'Vercel config must define rewrites');
 const apiRewriteIdx = vercelConfig.rewrites.findIndex((r) => r.source === '/api/:path*');
 const spaFallbackIdx = vercelConfig.rewrites.findIndex((r) => r.source === '/(.*)');
 
-assert.ok(apiRewriteIdx !== -1, 'vercel.json must define /api/:path* rewrite');
-assert.ok(spaFallbackIdx !== -1, 'vercel.json must define SPA fallback rewrite');
+assert.ok(apiRewriteIdx !== -1, 'Vercel config must define /api/:path* rewrite');
+assert.ok(spaFallbackIdx !== -1, 'Vercel config must define SPA fallback rewrite');
 assert.ok(apiRewriteIdx < spaFallbackIdx, '/api/:path* rewrite must precede /(.*) fallback');
 
 const apiDestination = vercelConfig.rewrites[apiRewriteIdx].destination;
@@ -56,7 +64,7 @@ assert.match(
 assert.equal(vercelConfig.rewrites[spaFallbackIdx].destination, '/index.html', 'SPA fallback must route to /index.html');
 
 const apiHeaderRule = vercelConfig.headers?.find((h) => h.source === '/api/:path*');
-assert.ok(apiHeaderRule, 'vercel.json must define Cache-Control header for /api/:path*');
+assert.ok(apiHeaderRule, 'Vercel config must define Cache-Control header for /api/:path*');
 const apiCacheHeader = apiHeaderRule.headers?.find((h) => h.key.toLowerCase() === 'cache-control');
 assert.equal(apiCacheHeader?.value, 'no-store', 'API header rule must be Cache-Control: no-store');
 
@@ -73,6 +81,9 @@ assert.ok(renderYaml.includes('name: meal-khata-api'), 'render.yaml must name ba
 assert.ok(renderYaml.includes('buildCommand: npm ci --omit=dev'), 'render.yaml must use backend-only buildCommand');
 assert.ok(renderYaml.includes('startCommand: npm run start --workspace backend'), 'render.yaml must start backend workspace');
 assert.ok(renderYaml.includes('healthCheckPath: /api/ready'), 'render.yaml must probe /api/ready');
+assert.ok(renderYaml.includes('autoDeployTrigger: off'), 'Render automatic deployment must be disabled');
+assert.ok(renderYaml.includes('CANONICAL_ONLY_AUTH'), 'Render v3 must explicitly configure canonical authentication');
+assert.ok(renderYaml.includes('MEALKHATA_RUNTIME_PROFILE'), 'Render v3 must explicitly select runtime profile');
 assert.ok(!renderYaml.includes('ADMIN_EMAIL'), 'render.yaml must not require legacy admin email');
 
 console.info('Vercel and Render configuration verified.');

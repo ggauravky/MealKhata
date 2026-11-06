@@ -87,6 +87,10 @@ export async function createSessionToken(
   if (!principal) {
     throw new Error('Cannot create a session for an unsupported role');
   }
+  if (env.runtimeProfile === 'v3' && (!userId || !Number.isSafeInteger(sessionVersion)
+    || sessionVersion < 0)) {
+    throw new Error('MealKhata v3 requires a canonical account session');
+  }
 
   const payload = { role, sessionVersion };
   if (userId) {
@@ -114,7 +118,8 @@ export async function createSessionToken(
 
 export async function verifySessionToken(
   token,
-  { accounts = userAccountRepository, resolver = studentResolver, canonicalOnly = env.canonicalOnlyAuth } = {},
+  { accounts = userAccountRepository, resolver = studentResolver,
+    canonicalOnly = env.canonicalOnlyAuth, runtimeProfile = env.runtimeProfile } = {},
 ) {
   const { payload } = await jwtVerify(token, getSecretKey(), {
     algorithms: [ALGORITHM],
@@ -125,10 +130,11 @@ export async function verifySessionToken(
   if (!isAuthenticatedRole(payload.role)) {
     throw new Error('Unsupported session role');
   }
-  if (canonicalOnly && (!payload.userId || !accounts)) {
+  const requireCanonical = canonicalOnly === true || runtimeProfile === 'v3';
+  if (requireCanonical && (!payload.userId || !accounts)) {
     throw new Error('Canonical session requires a userId and account repository');
   }
-  if (canonicalOnly && (!Number.isSafeInteger(payload.sessionVersion) || payload.sessionVersion < 0)) {
+  if (requireCanonical && (!Number.isSafeInteger(payload.sessionVersion) || payload.sessionVersion < 0)) {
     throw new Error('Canonical session requires a valid session version');
   }
 
