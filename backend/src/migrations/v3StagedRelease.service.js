@@ -8,6 +8,9 @@ const B_STEPS = Object.freeze(['replay-final-meals', 'configure-financial-bounda
   'configure-operations', 'deploy-backend', 'deploy-frontend', 'switch-connection', 'open-writes']);
 const SHA = /^[a-f0-9]{64}$/;
 const SAFE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
+const EMERGENCY_EVIDENCE_FIELDS = ['outageEvidenceRef', 'outageEvidenceDigest',
+  'lastKnownTargetFingerprint', 'outageObservedAt', 'sourceIdentitySha256', 'controlIdentitySha256',
+  'previousConfigSha256', 'writesStoppedDigest'];
 const WRITE = { w: 'majority', j: true };
 const nonceId = value => createHash('sha256').update(value).digest('hex');
 const releaseKey = value => `release:${value}`;
@@ -155,7 +158,18 @@ export function createStagedReleaseJournal({ collection, startSession, observeCo
         throw new Error('Frozen amendment is incomplete, already used or failed');
       }
     },
-    async reserve(releaseId, phase, digest, action, approval, predecessor, at) {
+    async reserve(releaseId, phase, digest, action, approval, predecessor, at,
+      emergencyEvidence = null) {
+      if (action === 'emergency-rollback-connection'
+        ? !exactKeys(emergencyEvidence, EMERGENCY_EVIDENCE_FIELDS)
+          || !SAFE.test(emergencyEvidence.outageEvidenceRef ?? '')
+          || !Number.isFinite(new Date(emergencyEvidence.outageObservedAt).getTime())
+          || EMERGENCY_EVIDENCE_FIELDS.slice(1)
+            .filter(field => field !== 'outageObservedAt')
+            .some(field => !SHA.test(emergencyEvidence[field] ?? ''))
+        : emergencyEvidence !== null) {
+        throw new Error('Emergency reservation evidence is missing or unexpected');
+      }
       try {
         return await transaction(async session => {
           const release = await collection.findOne({ _id: releaseKey(releaseId) }, { session });
@@ -168,7 +182,9 @@ export function createStagedReleaseJournal({ collection, startSession, observeCo
           await consumeNonce(approval, releaseId, action, session);
           const result = await collection.updateOne({ _id: release._id, version: release.version },
             { $set: { [`actions.${action}`]: { status: 'reserved', approval,
-              planDigest: digest, reservedAt: at } }, $inc: { version: 1 } }, { session });
+              planDigest: digest, reservedAt: at,
+              ...(emergencyEvidence ? { emergencyEvidence } : {}) } },
+            $inc: { version: 1 } }, { session });
           if (result.matchedCount !== 1) throw new Error('Concurrent action changed the release');
           return true;
         });
@@ -273,7 +289,8 @@ export function createStagedReleaseController({ journal, trustedAllowlist, obser
       if (!release) throw new Error('Unknown release ID');
       assertStoredReleaseIntegrity(release);
       const rollback = action === 'rollback-connection';
-      if (!rollback && release.actions['rollback-connection']) {
+      if (release.actions['emergency-rollback-connection']
+        || (!rollback && release.actions['rollback-connection'])) {
         throw new Error('Release rollback has closed all forward actions');
       }
       const phase = A_STEPS.includes(action) ? 'A' : B_STEPS.includes(action) || rollback ? 'B' : null;

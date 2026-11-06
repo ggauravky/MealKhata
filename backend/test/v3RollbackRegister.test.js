@@ -34,3 +34,23 @@ test('rollback register flags duplicate external references across new ledgers',
   assert.equal(register.duplicateExternalReferences.length, 1);
   assert.equal(register.duplicateExternalReferences[0], 'SAME REF');
 });
+
+test('restricted register covers all v3-only meal, finance, student and account domains', () => {
+  const names = ['meal_days', 'meal_history_corrections', 'payments', 'room_charges',
+    'room_payments', 'expenses', 'expense_reimbursements',
+    'hostel_deposit_transactions', 'unallocated_credits', 'credit_allocations',
+    'students', 'user_accounts'];
+  const before = { databaseName: 'target_db', collectionOrder: names,
+    documents: Object.fromEntries(names.map(name => [name, []])) };
+  const after = { ...before, documents: Object.fromEntries(names.map((name, index) =>
+    [name, [{ _id: `new-${index}`, memberId: 'fourth-student', amountPaise: index + 1,
+      actorId: 'super-admin', createdAt: '2026-11-06T12:00:00.000Z',
+      passwordHash: 'must-never-leak', jwtSecret: 'must-never-leak' }]])) };
+  after.documents.payments[0].upiReference = 'BANK-NEW-1';
+  const register = buildV3RollbackWriteRegister({ before, after, writesStopped: true });
+  assert.deepEqual(register.entries.map(row => row.collection).sort(), [...names].sort());
+  assert.equal(register.entries.find(row => row.collection === 'payments').externalReference,
+    'BANK-NEW-1');
+  assert.equal(JSON.stringify(register).includes('must-never-leak'), false);
+  assert.match(register.registerSha256, /^[a-f0-9]{64}$/);
+});

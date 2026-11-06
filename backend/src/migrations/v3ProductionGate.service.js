@@ -10,7 +10,7 @@ const ACTIONS = new Set(['read-source-inventory', 'archive-source', 'restore-rec
   'create-target', 'apply-history', 'freeze-source-writes', 'archive-frozen-source', 'replay-final-meals',
   'configure-financial-boundary', 'configure-operations', 'deploy-backend',
   'deploy-frontend', 'switch-connection', 'open-writes', 'rollback-connection',
-  'approve-preflight-plan', 'approve-frozen-amendment']);
+  'approve-preflight-plan', 'approve-frozen-amendment', 'emergency-rollback-connection']);
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 

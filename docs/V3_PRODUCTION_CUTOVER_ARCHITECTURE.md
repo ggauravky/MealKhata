@@ -1,5 +1,7 @@
 # V3 production cutover control design
 
+Task 18B adds a separate review-only production provider catalog and an emergency target-outage rollback protocol. Neither adds a live executor. See [Task 18B release evidence](V3_TASK18B_RELEASE_EVIDENCE.md) for its required source/control re-observation, protected outage proof, stopped-writer proof, separate approval and one-use journal entry.
+
 **Preparation only. No Atlas connection or production migration is implemented by this document.** The existing `migrate:v3` and `db:restore` CLIs remain restricted to disposable local replica sets. Never weaken their `isolated-test` guard or add a generic production override. Task 16 adds an injected execution controller and durable approval journal; Task 18A adds a [disposable rehearsal integration boundary](V3_TASK18A_PRODUCTION_INTEGRATION.md). Neither contains a live Atlas connector, production operation handler, deployment command or application startup hook.
 
 ## Trust boundaries

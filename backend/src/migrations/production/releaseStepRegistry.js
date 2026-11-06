@@ -49,6 +49,11 @@ export const RELEASE_STEP_CONTRACTS = Object.freeze({
   'rollback-connection': step('B', 'switch-connection', ['render', 'source', 'target', 'control'], ['read', 'writer-disable', 'connection-switch'],
     ['v3-only-write-register', 'source-unchanged', 'rollback-credentials'], 'connection-rolled-back',
     'unreconciled-external-reference', 'keep-both-sides-frozen', true),
+  'emergency-rollback-connection': step('B', 'switch-connection',
+    ['render', 'source', 'control'], ['read', 'writer-disable', 'connection-switch'],
+    ['target-outage', 'last-target-fingerprint', 'source-unchanged', 'control-identity',
+      'previous-release', 'writers-stopped'], 'emergency-connection-rolled-back',
+    'source-or-control-unavailable', 'keep-writes-closed-and-review', true),
 });
 
 /** Wraps independently reviewed operation handlers with evidence and safe-checkpoint gates. */

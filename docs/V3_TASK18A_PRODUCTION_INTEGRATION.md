@@ -1,5 +1,7 @@
 # Task 18A production integration and operator rehearsal
 
+Task 18B adds a separate, review-only provider catalog and a target-outage emergency rollback controller. See [Task 18B release evidence](V3_TASK18B_RELEASE_EVIDENCE.md) for the current status; the Task 18A limitations below describe that earlier milestone.
+
 **Release decision: `NOT READY — BLOCKERS REMAIN`.** This task supplies reviewable contracts and a disposable rehearsal bridge. It does not include live Atlas, Render, or Vercel connectors, and does not authorize Task 18B or cutover. Fixture results can establish `IMPLEMENTATION_VERIFIED` only. `PRODUCTION_ADAPTERS_REVIEW_PENDING` and `SOURCE_EVIDENCE_PENDING` remain open.
 
 ## Adapter design and exact identities
