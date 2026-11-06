@@ -94,7 +94,7 @@ function assertStoredReleaseIntegrity(release) {
 }
 
 /** One protected collection holds both release lineage and globally unique nonce hashes. */
-export function createStagedReleaseJournal({ collection, startSession }) {
+export function createStagedReleaseJournal({ collection, startSession, observeConnectionIdentity }) {
   if (!collection?.insertOne || typeof startSession !== 'function') {
     throw new Error('A separate durable release-control collection is required');
   }
@@ -110,6 +110,8 @@ export function createStagedReleaseJournal({ collection, startSession }) {
   }
   return {
     databaseName: collection.dbName,
+    ...(typeof observeConnectionIdentity === 'function'
+      ? { observeConnectionIdentity: () => observeConnectionIdentity(collection) } : {}),
     async initialize() {
       await collection.createIndex({ kind: 1, releaseId: 1 },
         { name: 'release_lineage', writeConcern: WRITE });
@@ -270,18 +272,27 @@ export function createStagedReleaseController({ journal, trustedAllowlist, obser
       const release = await journal.readRelease(releaseId);
       if (!release) throw new Error('Unknown release ID');
       assertStoredReleaseIntegrity(release);
-      const phase = A_STEPS.includes(action) ? 'A' : B_STEPS.includes(action) ? 'B' : null;
+      const rollback = action === 'rollback-connection';
+      if (!rollback && release.actions['rollback-connection']) {
+        throw new Error('Release rollback has closed all forward actions');
+      }
+      const phase = A_STEPS.includes(action) ? 'A' : B_STEPS.includes(action) || rollback ? 'B' : null;
       if (!phase || release.phase !== phase) throw new Error('Release action is outside the approved stage');
       const at = now();
-      validateExpiry(phase === 'A' ? release.plan.expiresAt : release.amendment.expiresAt, at, 24);
+      // Rollback has its own fresh approval and must remain possible after the amendment expires.
+      if (!rollback) validateExpiry(phase === 'A' ? release.plan.expiresAt : release.amendment.expiresAt, at, 24);
       const digest = phase === 'A' ? release.stageAPlanDigest : release.stageBPlanDigest;
       shortApproval(approval, digest, action, trustedSigners, at);
       if (typeof handlers[action] !== 'function') throw new Error('Trusted release handler is unavailable');
       await journal.assertReady();
       await observe(release.plan);
       const sequence = phase === 'A' ? A_STEPS : B_STEPS;
-      const predecessor = sequence[sequence.indexOf(action) - 1] ?? null;
-      await journal.reserve(releaseId, phase, digest, action, structuredClone(approval), predecessor, at);
+      const predecessor = rollback ? 'switch-connection' : sequence[sequence.indexOf(action) - 1] ?? null;
+      try {
+        await journal.reserve(releaseId, phase, digest, action, structuredClone(approval), predecessor, at);
+      } catch {
+        throw new Error('Release journal reservation failed or is ambiguous; stop and inspect protected state');
+      }
       try {
         safeLog({ event: 'v3.release.step_reserved', releaseId, action, planDigest: digest });
         const checkpoint = await handlers[action]({ action, releaseId, phase,

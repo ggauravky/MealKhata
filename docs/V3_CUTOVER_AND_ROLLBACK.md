@@ -1,6 +1,6 @@
 # MealKhata 3.0 cutover and rollback checklist
 
-**Tasks 15–17 preparation only. Do not execute this checklist without a separately reviewed production executor and written approval for each step.** The current migration CLI accepts only explicitly classified local replica sets. Do not bypass its guard. See the [production control design](V3_PRODUCTION_CUTOVER_ARCHITECTURE.md), [staged source evidence](V3_TASK17_SOURCE_EVIDENCE.md), [offline source preflight](V3_SOURCE_PREFLIGHT.md) and [student setup procedure](V3_STUDENT_BOOTSTRAP.md).
+**Tasks 15–18A preparation only. Do not execute this checklist without separately reviewed live adapters, genuine source evidence, and written approval for each step.** The current migration CLI accepts only explicitly classified local replica sets. Do not bypass its guard. See the [Task 18A integration design](V3_TASK18A_PRODUCTION_INTEGRATION.md), [production control design](V3_PRODUCTION_CUTOVER_ARCHITECTURE.md), [staged source evidence](V3_TASK17_SOURCE_EVIDENCE.md), [offline source preflight](V3_SOURCE_PREFLIGHT.md) and [student setup procedure](V3_STUDENT_BOOTSTRAP.md).
 
 For every checkbox below, the release journal must record the exact action, plan digest, source/recovery/target identity observations, owner and separate operator approval, one-time nonce, timestamp, artifact fingerprints, result and next stop/go decision. Do not reuse an approval. The owner must approve the real boundary; no date in a test or document is a production selection.
 

@@ -137,17 +137,22 @@ test('dynamic student lifecycle, canonical access, exact meals and preserved his
     expect(day.dailyCostSummary.room.totalAmountPaise).toBe(12001);
     expect(day.dailyCostSummary.members.gaurav.morningAmountPaise).toBe(1667);
     expect(day.dailyCostSummary.members.nikhil.morningAmountPaise).toBe(1667);
-    expect(day.dailyCostSummary.members.devansh.morningAmountPaise).toBe(834);
-    expect(day.dailyCostSummary.members[fourthId].morningAmountPaise).toBe(833);
+    // The extra paise rotates by logical date and saved participant order.
+    const tiedAmounts = [day.dailyCostSummary.members.devansh.morningAmountPaise,
+      day.dailyCostSummary.members[fourthId].morningAmountPaise];
+    expect(tiedAmounts.sort((a, b) => a - b)).toEqual([833, 834]);
+    const fourthMorning = day.dailyCostSummary.members[fourthId].morningAmountPaise;
+    const fourthTotal = day.dailyCostSummary.members[fourthId].totalAmountPaise;
+    const rupees = paise => (paise / 100).toFixed(2);
     expect(Object.values(day.dailyCostSummary.members).reduce((sum, row) =>
       sum + row.totalAmountPaise, 0)).toBe(12001);
-    await expect(page.getByText('₹8.33').first()).toBeVisible();
+    await expect(page.getByText(`₹${rupees(fourthMorning)}`).first()).toBeVisible();
     await page.goto('/');
     await expect(page.getByText(fourthName).first()).toBeVisible();
-    await expect(page.getByText('₹8.33').first()).toBeVisible();
+    await expect(page.getByText(`₹${rupees(fourthMorning)}`).first()).toBeVisible();
     await page.goto(`/calendar?month=${testMonth}`);
     await expect(page.getByLabel('Household daily total, ₹120.01')).toBeVisible();
-    await expect(page.getByLabel(`${fourthName} daily total, ₹78.33`)).toBeVisible();
+    await expect(page.getByLabel(`${fourthName} daily total, ₹${rupees(fourthTotal)}`)).toBeVisible();
     const historicalAfter = (await (await page.request.get('/api/meals/2026-09-30')).json()).data;
     expect(historicalAfter).toEqual(historicalBefore);
 
@@ -179,7 +184,7 @@ test('dynamic student lifecycle, canonical access, exact meals and preserved his
     await memberPage.getByRole('button', { name: 'Sign in' }).click();
     await expect(memberPage.getByRole('alert')).toContainText('Invalid email or password');
     await page.goto(`/calendar?month=${testMonth}`);
-    await expect(page.getByLabel(`${fourthName} daily total, ₹78.33`)).toBeVisible();
+    await expect(page.getByLabel(`${fourthName} daily total, ₹${rupees(fourthTotal)}`)).toBeVisible();
     await page.goto('/admin/members');
     await fourthCard.getByRole('button', { name: 'Reactivate' }).click();
     await page.getByRole('dialog').getByRole('textbox', { name: 'Reason' }).fill('Isolated reactivation acceptance');

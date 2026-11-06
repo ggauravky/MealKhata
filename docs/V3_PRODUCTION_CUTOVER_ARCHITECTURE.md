@@ -1,6 +1,6 @@
 # V3 production cutover control design
 
-**Preparation only. No Atlas connection or production migration is implemented by this document.** The existing `migrate:v3` and `db:restore` CLIs remain restricted to disposable local replica sets. Never weaken their `isolated-test` guard or add a generic production override. Task 16 adds an injected execution controller and durable approval journal; neither contains an Atlas connector, production handler, deployment command or application startup hook.
+**Preparation only. No Atlas connection or production migration is implemented by this document.** The existing `migrate:v3` and `db:restore` CLIs remain restricted to disposable local replica sets. Never weaken their `isolated-test` guard or add a generic production override. Task 16 adds an injected execution controller and durable approval journal; Task 18A adds a [disposable rehearsal integration boundary](V3_TASK18A_PRODUCTION_INTEGRATION.md). Neither contains a live Atlas connector, production operation handler, deployment command or application startup hook.
 
 ## Trust boundaries
 

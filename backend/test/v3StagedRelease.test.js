@@ -50,7 +50,9 @@ function setup(overrides = {}) {
       freezeAttestationSha256: amendment.freezeAttestationSha256 }),
     handlers: Object.fromEntries(['read-source-inventory', 'archive-source', 'restore-recovery',
       'create-target', 'apply-history', 'freeze-source-writes', 'archive-frozen-source',
-      'replay-final-meals'].map(action => [action, async () => ({ checkpointId: action,
+      'replay-final-meals', 'configure-financial-boundary', 'configure-operations',
+      'deploy-backend', 'deploy-frontend', 'switch-connection', 'open-writes',
+      'rollback-connection'].map(action => [action, async () => ({ checkpointId: action,
       evidenceDigest: action === 'archive-source' ? base : action === 'archive-frozen-source'
         ? frozen : action === 'freeze-source-writes' ? '3'.repeat(64)
           : 'e'.repeat(64) })])), now: () => at, ...overrides });
@@ -98,6 +100,91 @@ test('two-stage release requires an independently signed amendment and preserves
     approval(aDigest, 'archive-source', 'new-version-nonce')), /stage|used|complete/i);
 });
 
+test('separately approved rollback survives expired Stage B and prevents later write opening', async () => {
+  let clock = at;
+  const { journal, controller } = setup({ now: () => clock });
+  await journal.initialize();
+  const aDigest = await throughA(controller);
+  const change = amendment(aDigest);
+  const bDigest = controller.digestStageB(change);
+  await controller.approveStageB(change, approval(bDigest, 'approve-frozen-amendment', 'nonce-amend'));
+  for (const [index, action] of ['replay-final-meals', 'configure-financial-boundary',
+    'configure-operations', 'deploy-backend', 'deploy-frontend', 'switch-connection'].entries()) {
+    await controller.execute(initial.releaseId, action,
+      approval(bDigest, action, `nonce-b-${index}`));
+  }
+  await assert.rejects(controller.execute(initial.releaseId, 'rollback-connection', null), /approv|sign/i);
+  clock = new Date('2026-11-06T12:00:00.000Z');
+  const rollbackExpiry = '2026-11-06T12:04:00.000Z';
+  const payload = Buffer.from(`${bDigest}\nrollback-connection\n${rollbackExpiry}\nnonce-rollback`);
+  const rollbackApproval = { planDigest: bDigest, action: 'rollback-connection',
+    nonce: 'nonce-rollback', expiresAt: rollbackExpiry, signatures: [
+      { role: 'owner', signerId: 'owner1', signature: sign(null, payload, owner.privateKey).toString('base64') },
+      { role: 'operator', signerId: 'operator2', signature: sign(null, payload, operator.privateKey).toString('base64') },
+    ] };
+  const result = await controller.execute(initial.releaseId, 'rollback-connection',
+    rollbackApproval);
+  assert.equal(result.status, 'complete');
+  assert.equal((await journal.readRelease(initial.releaseId)).actions['rollback-connection'].status, 'complete');
+  await assert.rejects(controller.execute(initial.releaseId, 'open-writes',
+    approval(bDigest, 'open-writes', 'nonce-open')), /rollback|closed|stage/i);
+});
+
+test('failed journal reservation redacts storage errors before any handler side effect', async () => {
+  const base = setup();
+  await base.journal.initialize();
+  let executed = false;
+  const controller = setup({ journal: { ...base.journal,
+    reserve: async () => { throw new Error('mongodb://secret-journal-host'); } },
+  handlers: { 'read-source-inventory': async () => { executed = true; return {
+    checkpointId: 'inventory', evidenceDigest: 'e'.repeat(64) }; } } }).controller;
+  const digest = controller.digestStageA(initial);
+  await controller.createStageA(initial, approval(digest, 'approve-preflight-plan', 'nonce-plan'));
+  await assert.rejects(controller.execute(initial.releaseId, 'read-source-inventory',
+    approval(digest, 'read-source-inventory', 'nonce-reserve')),
+  error => !error.message.includes('mongodb://') && /journal|reservation|failed/i.test(error.message));
+  assert.equal(executed, false);
+});
+
+test('failed checkpoint journal write after side effects leaves a non-retryable failed action', async () => {
+  const base = setup();
+  await base.journal.initialize();
+  let executions = 0;
+  const controller = setup({ journal: { ...base.journal,
+    complete: async () => { throw new Error('mongodb://secret-journal-host'); } },
+  handlers: { 'read-source-inventory': async () => { executions += 1; return {
+    checkpointId: 'inventory', evidenceDigest: 'e'.repeat(64) }; } } }).controller;
+  const digest = controller.digestStageA(initial);
+  await controller.createStageA(initial, approval(digest, 'approve-preflight-plan', 'nonce-plan'));
+  await assert.rejects(controller.execute(initial.releaseId, 'read-source-inventory',
+    approval(digest, 'read-source-inventory', 'nonce-checkpoint')), /step failed/i);
+  assert.equal((await base.journal.readRelease(initial.releaseId)).actions['read-source-inventory'].status, 'failed');
+  await assert.rejects(controller.execute(initial.releaseId, 'read-source-inventory',
+    approval(digest, 'read-source-inventory', 'nonce-retry')), /failed|used/i);
+  assert.equal(executions, 1);
+});
+
+test('lost checkpoint acknowledgement cannot replay a completed side effect', async () => {
+  const base = setup();
+  await base.journal.initialize();
+  let executions = 0;
+  const controller = setup({ journal: { ...base.journal,
+    complete: async (...args) => {
+      await base.journal.complete(...args);
+      throw new Error('lost acknowledgement after majority commit');
+    } },
+  handlers: { 'read-source-inventory': async () => { executions += 1; return {
+    checkpointId: 'inventory', evidenceDigest: 'e'.repeat(64) }; } } }).controller;
+  const digest = controller.digestStageA(initial);
+  await controller.createStageA(initial, approval(digest, 'approve-preflight-plan', 'nonce-plan'));
+  await assert.rejects(controller.execute(initial.releaseId, 'read-source-inventory',
+    approval(digest, 'read-source-inventory', 'nonce-lost-ack')), /step failed/i);
+  assert.equal((await base.journal.readRelease(initial.releaseId)).actions['read-source-inventory'].status, 'complete');
+  await assert.rejects(controller.execute(initial.releaseId, 'read-source-inventory',
+    approval(digest, 'read-source-inventory', 'nonce-replay')), /journal|reserved|used/i);
+  assert.equal(executions, 1);
+});
+
 test('changed frozen checksum, source identity, boundary or unexplained drift prevents amendment', async () => {
   const { journal, controller } = setup();
   await journal.initialize();
@@ -124,7 +211,7 @@ test('nonce and release action cannot be replayed after restart or a changed Sta
     approval(digest, 'read-source-inventory', 'nonce-shared'));
   const restarted = setup();
   await assert.rejects(restarted.controller.execute(initial.releaseId, 'read-source-inventory',
-    approval(digest, 'read-source-inventory', 'nonce-shared')), /used|complete|reserved/i);
+    approval(digest, 'read-source-inventory', 'nonce-shared')), /used|complete|reserved|journal|ambiguous/i);
   await assert.rejects(restarted.controller.createStageA({ ...initial, proceduresSha256: '9'.repeat(64) },
     approval(restarted.controller.digestStageA({ ...initial, proceduresSha256: '9'.repeat(64) }),
       'approve-preflight-plan', 'nonce-another')), /release|exist|used/i);

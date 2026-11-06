@@ -18,6 +18,8 @@ import { buildLegacyMealSnapshot } from '../src/migrations/legacyMealSnapshot.se
 import { createHistoricalMealCorrectionService } from '../src/meals/mealHistoricalCorrection.service.js';
 import { checksumValue, discoverSourceInventory } from '../src/migrations/sourceInventory.service.js';
 import { createLegacySnapshotSidecar } from '../src/migrations/v3SnapshotSidecar.service.js';
+import { auditV3OperationalFinances } from '../src/migrations/v3OperationalFinanceAudit.service.js';
+import { buildV3RollbackWriteRegister } from '../src/migrations/production/v3RollbackRegister.service.js';
 import { createReadOnlyMealBaselineReaders } from '../src/migrations/v3ArchiveBaselines.service.js';
 import { serializeLegacyMealSnapshot, serializeMealDay } from '../src/meals/meal.serializer.js';
 import { isOperationalMealDayForBoundary } from '../src/finance/financialBoundary.service.js';
@@ -715,6 +717,7 @@ describe('v3 blue-green migration in isolated replica set', () => {
       assert.equal((await verifyIndexes(candidate)).passed, true);
       await candidate.db.collection('system_settings').updateOne({ settingsId: 'system' },
         { $set: { financialStartDate: '2026-11-01' } }); // Disposable fixture date only.
+      const beforeSwitch = await discoverSourceInventory({ dbConnection: candidate });
       const v3Payments = ['gaurav', 'nikhil'].map(memberId => ({
         paymentId: randomUUID(), idempotencyKey: randomUUID(), memberId,
         month: '2026-11', amountPaise: 125, status: 'recorded',
@@ -734,6 +737,38 @@ describe('v3 blue-green migration in isolated replica set', () => {
       await candidate.db.collection('payment_reference_claims').deleteOne({ _id: badClaim.insertedId });
       assert.equal((await verifyV3Migration(postOptions)).passed, true);
       assert.equal(await candidate.db.collection('payments').countDocuments(), 2);
+      // Rehearse additional post-switch domain writes before a simulated rollback.
+      await candidate.db.collection('meal_days').insertOne({ date: '2026-11-02', schemaVersion: 3,
+        participantOrder: ['gaurav', 'nikhil', 'devansh'], importedFromLegacy: false,
+        meals: { morning: { gaurav: 'taking', nikhil: 'skip', devansh: 'skip' }, night: {} },
+        revision: 0, changes: [], allocationChanges: [], priceChanges: [] });
+      await candidate.db.collection('room_charges').insertOne({ chargeId: 'v3-room-charge',
+        memberId: 'nikhil', month: '2026-11', baseAmountPaise: 2000, adjustments: [] });
+      await candidate.db.collection('room_payments').insertOne({ roomPaymentId: 'v3-room-payment',
+        chargeId: 'v3-room-charge', memberId: 'nikhil', month: '2026-11', amountPaise: 500,
+        status: 'verified', reference: 'V3-ROOM-ONLY', recordedAt: new Date('2026-11-02T12:00:00Z') });
+      await candidate.db.collection('expenses').insertOne({ expenseId: 'v3-expense',
+        date: '2026-11-02', amountPaise: 300, paidByMemberId: 'gaurav',
+        allocations: [{ memberId: 'gaurav', amountPaise: 150 },
+          { memberId: 'nikhil', amountPaise: 150 }] });
+      await candidate.db.collection('expense_reimbursements').insertOne({
+        reimbursementId: 'v3-reimbursement', expenseId: 'v3-expense', expenseMonth: '2026-11',
+        fromMemberId: 'nikhil', toMemberId: 'gaurav', amountPaise: 150,
+        status: 'recorded', reference: 'V3-EXPENSE-ONLY',
+        recordedAt: new Date('2026-11-02T12:00:00Z') });
+      const financeReport = await auditV3OperationalFinances(candidate.db, '2026-11-01');
+      assert.equal(financeReport.passed, true, financeReport.issues.join('; '));
+      assert.equal(financeReport.counts.room_payments, 1);
+      assert.equal(financeReport.counts.expense_reimbursements, 1);
+      const afterWriteStop = await discoverSourceInventory({ dbConnection: candidate });
+      const writeRegister = buildV3RollbackWriteRegister({ before: beforeSwitch,
+        after: afterWriteStop, writesStopped: true });
+      assert.deepEqual(new Set(writeRegister.entries.map(item => item.collection)), new Set([
+        'meal_days', 'payments', 'room_charges', 'room_payments',
+        'expenses', 'expense_reimbursements' ]));
+      assert.equal(writeRegister.duplicateExternalReferences.length, 0);
+      assert.equal(writeRegister.entries.filter(item => item.collection === 'payments').length, 2);
+      assert.equal(JSON.stringify(writeRegister).includes('passwordHash'), false);
       let active = candidate;
       assert.equal(await active.db.collection('payments').countDocuments(), 2);
       active = original; // Rehearse restoring the original connection; no source write is involved.
@@ -742,6 +777,8 @@ describe('v3 blue-green migration in isolated replica set', () => {
       assert.equal(await active.db.collection('payments').countDocuments({
         paymentId: { $in: v3Payments.map(payment => payment.paymentId) } }), 0);
       assert.equal(await active.db.collection('meal_days').countDocuments(), 2);
+      assert.equal(await active.db.collection('room_payments').countDocuments(), 0);
+      assert.equal(await active.db.collection('expense_reimbursements').countDocuments(), 0);
       const afterRollback = await discoverSourceInventory({ dbConnection: original });
       assert.deepEqual(afterRollback.collectionOrder, frozen.collectionOrder);
       for (const name of frozen.collectionOrder) {
