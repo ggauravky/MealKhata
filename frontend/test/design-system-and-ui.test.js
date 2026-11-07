@@ -3,6 +3,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { createServer } from 'vite';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -81,16 +84,21 @@ describe('Redesign Design System, Theme & UI Verification', () => {
     assert.match(content, /Total physical plates today/);
   });
 
-  test('Member avatar has distinct subtle colors for Gaurav, Nikhil, Devansh', async () => {
-    const avatarPath = path.join(srcDir, 'components/ui/avatar.jsx');
-    const content = await fs.readFile(avatarPath, 'utf8');
-
-    assert.match(content, /gaurav:/);
-    assert.match(content, /teal/);
-    assert.match(content, /nikhil:/);
-    assert.match(content, /sky|blue/);
-    assert.match(content, /devansh:/);
-    assert.match(content, /purple|violet/);
+  test('Member avatar gives new students stable identity-based tones', async () => {
+    const vite = await createServer({ server: { middlewareMode: true }, appType: 'custom' });
+    try {
+      const { MemberAvatar } = await vite.ssrLoadModule('/src/components/ui/avatar.jsx');
+      const render = (memberId) => renderToStaticMarkup(React.createElement(MemberAvatar, {
+        memberId, name: 'Student',
+      }));
+      const first = render('student_alpha');
+      const second = render('student_beta');
+      assert.equal(first, render('student_alpha'));
+      assert.notEqual(first, second);
+      assert.match(first, />S<\/span>$/);
+    } finally {
+      await vite.close();
+    }
   });
 
   test('Empty state presentation for zero operational data views', async () => {

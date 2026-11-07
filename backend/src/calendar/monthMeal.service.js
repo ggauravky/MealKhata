@@ -102,7 +102,7 @@ export function createMonthMealService({
           const participants = !document && students
             ? (await students.listEligibleOn(date)).map(({ studentId }) => studentId)
             : undefined;
-          const snapshot = document && document.schemaVersion !== 3 && snapshots
+          const snapshot = runtimeProfile === 'v3' && document && document.schemaVersion !== 3 && snapshots
             ? await resolveHistoricalMealAuthority(document, {
               snapshots,
               corrections: corrections ?? { listByDate: async () => [] },

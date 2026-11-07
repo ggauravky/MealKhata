@@ -21,12 +21,35 @@ const FIELDS = ['format', 'releaseId', 'buildSha', 'targetDatabase',
   'targetClusterIdentity', 'sourceChecksum', 'sourceManifestChecksum', 'finalSourceChecksum',
   'recoveryEvidenceSha256', 'migrationEvidenceSha256', 'stageBPlanDigest',
   'launchStage', 'issuedAt', 'expiresAt'];
+const FRESH_FIELDS = ['format', 'releaseId', 'buildSha', 'targetDatabase',
+  'targetClusterIdentity', 'initializationChecksum', 'launchStage', 'issuedAt', 'expiresAt'];
+const FRESH_MANIFEST_FIELDS = ['initializationId', 'status', 'targetDatabase',
+  'targetClusterIdentity', 'sourceDatabase', 'superAdminUserId', 'superAdminEmail',
+  'financialStartDate', 'createdAt'];
 const INDEX_MODELS = [Student, StudentAuditEvent, MealDay, MealHistorySnapshot,
   MealHistoricalCorrection, MonthlyMealRate, UserAccount, SystemSettings];
 
 function exact(value, keys) {
   return value && typeof value === 'object' && !Array.isArray(value)
     && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+}
+
+function verifyAttestationSignatures(body, signatures, config) {
+  try {
+    const owner = createPublicKey(config.v3OwnerPublicKey);
+    const operator = createPublicKey(config.v3OperatorPublicKey);
+    if (owner.asymmetricKeyType !== 'ed25519' || operator.asymmetricKeyType !== 'ed25519'
+      || owner.export({ type: 'spki', format: 'der' }).equals(operator.export({ type: 'spki', format: 'der' }))) return false;
+    const message = Buffer.from(checksumValue(body));
+    for (const [role, key] of [['owner', owner], ['operator', operator]]) {
+      const signature = signatures[role];
+      if (typeof signature !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(signature)
+        || !verify(null, message, key, Buffer.from(signature, 'base64'))) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function verifyV3RuntimeAttestation(document, config, now = new Date()) {
@@ -45,21 +68,36 @@ export function verifyV3RuntimeAttestation(document, config, now = new Date()) {
     || Date.parse(body.issuedAt) > now.getTime()
     || Date.parse(body.expiresAt) <= now.getTime()
     || Date.parse(body.expiresAt) - Date.parse(body.issuedAt) > 24 * 60 * 60 * 1_000) return null;
-  try {
-    const owner = createPublicKey(config.v3OwnerPublicKey);
-    const operator = createPublicKey(config.v3OperatorPublicKey);
-    if (owner.asymmetricKeyType !== 'ed25519' || operator.asymmetricKeyType !== 'ed25519'
-      || owner.export({ type: 'spki', format: 'der' }).equals(operator.export({ type: 'spki', format: 'der' }))) return null;
-    const message = Buffer.from(checksumValue(body));
-    for (const [role, key] of [['owner', owner], ['operator', operator]]) {
-      const signature = signatures[role];
-      if (typeof signature !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(signature)
-        || !verify(null, message, key, Buffer.from(signature, 'base64'))) return null;
-    }
-    return body;
-  } catch {
-    return null;
-  }
+  return verifyAttestationSignatures(body, signatures, config) ? body : null;
+}
+
+export function verifyV3FreshRuntimeAttestation(document, config, now = new Date()) {
+  if (!exact(document, ['body', 'signatures']) || !exact(document.signatures, ['owner', 'operator'])) return null;
+  const { body, signatures } = document;
+  if (!exact(body, FRESH_FIELDS) || body.format !== 'mealkhata-v3-fresh-runtime-attestation-v1'
+    || !SAFE_ID.test(body.releaseId ?? '') || !SAFE_ID.test(body.targetDatabase ?? '')
+    || !BUILD_SHA.test(body.buildSha ?? '') || body.buildSha !== config.v3BuildSha
+    || !SHA.test(body.targetClusterIdentity ?? '') || !SHA.test(body.initializationChecksum ?? '')
+    || !['read-only', 'serving'].includes(body.launchStage)
+    || typeof body.issuedAt !== 'string' || typeof body.expiresAt !== 'string'
+    || !Number.isFinite(Date.parse(body.issuedAt)) || !Number.isFinite(Date.parse(body.expiresAt))
+    || Date.parse(body.issuedAt) > now.getTime()
+    || Date.parse(body.expiresAt) <= now.getTime()
+    || Date.parse(body.expiresAt) - Date.parse(body.issuedAt) > 24 * 60 * 60 * 1_000) return null;
+  return verifyAttestationSignatures(body, signatures, config) ? body : null;
+}
+
+function freshManifestBody(manifest) {
+  if (!manifest || FRESH_MANIFEST_FIELDS.some(field => !Object.hasOwn(manifest, field))) return null;
+  const body = Object.fromEntries(FRESH_MANIFEST_FIELDS.map(field => [field, manifest[field]]));
+  if (body.initializationId !== 'mealkhata-v3-fresh' || body.status !== 'complete'
+    || !SAFE_ID.test(body.targetDatabase) || !SAFE_ID.test(body.sourceDatabase)
+    || body.targetDatabase === body.sourceDatabase || !SHA.test(body.targetClusterIdentity)
+    || !SAFE_ID.test(body.superAdminUserId)
+    || typeof body.superAdminEmail !== 'string' || !body.superAdminEmail.includes('@')
+    || typeof body.financialStartDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(body.financialStartDate)
+    || typeof body.createdAt !== 'string' || !Number.isFinite(Date.parse(body.createdAt))) return null;
+  return body;
 }
 
 async function observeHandshake(db) {
@@ -77,15 +115,24 @@ function matchesIndex(actual, key, expected) {
       || checksumValue(actual.partialFilterExpression) === checksumValue(expected.partialFilterExpression));
 }
 
-export async function inspectV3RequiredIndexes(db) {
+export async function inspectV3RequiredIndexes(db, { mode = 'migration' } = {}) {
   for (const model of INDEX_MODELS) {
     const actual = await db.collection(model.collection.name).indexes();
     for (const [key, expected] of model.schema.indexes()) {
       if (!actual.some(index => matchesIndex(index, key, expected))) return false;
     }
   }
-  const markerIndexes = await db.collection('v3_migration_manifests').indexes();
-  return markerIndexes.some(index => matchesIndex(index, { migrationId: 1 }, { unique: true }));
+  const markerCollection = mode === 'fresh' ? 'v3_fresh_initializations' : 'v3_migration_manifests';
+  const markerKey = mode === 'fresh' ? { initializationId: 1 } : { migrationId: 1 };
+  const markerIndexes = await db.collection(markerCollection).indexes();
+  return markerIndexes.some(index => matchesIndex(index, markerKey, { unique: true }));
+}
+
+export async function createV3RequiredIndexes(db, { mode = 'fresh' } = {}) {
+  for (const model of INDEX_MODELS) await model.createIndexes();
+  const markerCollection = mode === 'fresh' ? 'v3_fresh_initializations' : 'v3_migration_manifests';
+  const markerKey = mode === 'fresh' ? { initializationId: 1 } : { migrationId: 1 };
+  await db.collection(markerCollection).createIndex(markerKey, { unique: true });
 }
 
 /** The protected, dual-signed artifact is reread on every probe so revocation fails closed. */
@@ -100,7 +147,11 @@ export async function checkV3ReleaseReadiness({ config = env, db = mongoose.conn
     if (await probe() !== true) return false;
     const raw = await readAttestation(config.v3AttestationPath);
     if (Buffer.byteLength(raw, 'utf8') > 16_384) return false;
-    const body = verifyV3RuntimeAttestation(JSON.parse(raw), config, now);
+    const document = JSON.parse(raw);
+    const fresh = document?.body?.format === 'mealkhata-v3-fresh-runtime-attestation-v1';
+    const body = fresh
+      ? verifyV3FreshRuntimeAttestation(document, config, now)
+      : verifyV3RuntimeAttestation(document, config, now);
     if (!body || (requiredLaunchStage && body.launchStage !== requiredLaunchStage)
       || db.databaseName !== body.targetDatabase) return false;
     const observed = await handshake(db);
@@ -109,8 +160,28 @@ export async function checkV3ReleaseReadiness({ config = env, db = mongoose.conn
     const clusterIdentity = checksumValue({ setName: observed.setName,
       hosts: [...observed.hosts].sort() });
     if (clusterIdentity !== body.targetClusterIdentity) return false;
-    const manifest = await db.collection('v3_migration_manifests')
-      .findOne({ migrationId: MIGRATION_ID });
+    if (fresh) {
+      const [manifest, migrated] = await Promise.all([
+        db.collection('v3_fresh_initializations').findOne({ initializationId: 'mealkhata-v3-fresh' }),
+        db.collection('v3_migration_manifests').findOne({ migrationId: MIGRATION_ID }),
+      ]);
+      const initialization = freshManifestBody(manifest);
+      if (migrated || !initialization
+        || initialization.targetDatabase !== body.targetDatabase
+        || initialization.targetClusterIdentity !== body.targetClusterIdentity
+        || checksumValue(initialization) !== body.initializationChecksum) return false;
+      const admin = await db.collection('user_accounts').findOne({
+        userId: initialization.superAdminUserId,
+        email: initialization.superAdminEmail,
+        role: 'superadmin', active: true,
+      }, { projection: { userId: 1 } });
+      if (!admin) return false;
+      const settings = await db.collection('system_settings').findOne({ settingsId: 'system' },
+        { projection: { financialStartDate: 1 } });
+      if (settings?.financialStartDate !== initialization.financialStartDate) return false;
+      return await inspectIndexes(db, { mode: 'fresh' }) === true;
+    }
+    const manifest = await db.collection('v3_migration_manifests').findOne({ migrationId: MIGRATION_ID });
     if (!manifest || manifest.status !== 'complete'
       || manifest.sourceChecksum !== body.sourceChecksum
       || manifest.finalSourceChecksum !== body.finalSourceChecksum

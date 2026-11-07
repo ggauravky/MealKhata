@@ -62,7 +62,7 @@ export function createMealService({
   });
 
   const serializeDay = async (document, date) => {
-    if (document && document.schemaVersion !== 3 && snapshots) {
+    if (runtimeProfile === 'v3' && document && document.schemaVersion !== 3 && snapshots) {
       return {
         ...serializeLegacyMealSnapshot(await verifiedSnapshot(document), { timezone }),
         ...(document.financialClassification ? { financialClassification: document.financialClassification } : {}),
@@ -78,7 +78,7 @@ export function createMealService({
 
   const runFinancialMutation = async (date, actorRole, work, proposedIds = []) => {
     const previous = await repository.findByDate(date);
-    if (previous && previous.schemaVersion !== 3 && snapshots) {
+    if (runtimeProfile === 'v3' && previous && previous.schemaVersion !== 3 && snapshots) {
       await verifiedSnapshot(previous);
       throw new HttpError(409, 'Historical meal correction requires an explicit revision-aware correction.');
     }
@@ -91,7 +91,7 @@ export function createMealService({
         session,
         guard: async () => {
           const current = await repository.findByDate(date, { session });
-          if (current && current.schemaVersion !== 3 && snapshots) {
+          if (runtimeProfile === 'v3' && current && current.schemaVersion !== 3 && snapshots) {
             await verifiedSnapshot(current);
             throw new HttpError(409, 'Historical meal correction requires an explicit revision-aware correction.');
           }
@@ -122,9 +122,9 @@ export function createMealService({
     async getHistory(date, limit) {
       try {
         const document = await repository.findByDate(date);
-        if (document && document.schemaVersion !== 3 && snapshots) await verifiedSnapshot(document);
+        if (runtimeProfile === 'v3' && document && document.schemaVersion !== 3 && snapshots) await verifiedSnapshot(document);
         const history = serializeHistory(document, date, limit);
-        if (document && document.schemaVersion !== 3 && corrections) {
+        if (runtimeProfile === 'v3' && document && document.schemaVersion !== 3 && corrections) {
           const correctionEvents = (await corrections.listByDate(date)).map((record) => ({
             changedAt: new Date(record.createdAt).toISOString(),
             actorRole: record.actorRole,

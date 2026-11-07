@@ -49,11 +49,12 @@ test('explicit historical correction preserves the original day and frozen snaps
   }), /revision|refresh/i);
   const authority = await resolveHistoricalMealAuthority(original, { snapshots, corrections });
   assert.equal(authority.sourceRevision, 2);
-  const calendar = await createMonthMealService({ repository: meals, snapshots, corrections }).getMonth('2026-09');
+  const students = { listEligibleOn: async () => [] };
+  const calendar = await createMonthMealService({ repository: meals, snapshots, corrections, students, runtimeProfile: 'v3' }).getMonth('2026-09');
   assert.equal(calendar.days[8].pricing.morning.effectivePricePaise, 101);
   assert.equal(calendar.days[8].priceOverrides.morning.pricePaise, 101);
   const report = await createReportService({
-    meals: createMonthMealService({ repository: meals, snapshots, corrections }),
+    meals: createMonthMealService({ repository: meals, snapshots, corrections, students, runtimeProfile: 'v3' }),
     rates: { getRate: async () => ({ configured: true, morningPricePaise: 5000, nightPricePaise: 7000 }) },
     now: () => new Date('2026-10-01T12:00:00Z'),
   }).getMonthlyReport('2026-09');
@@ -91,7 +92,7 @@ test('historical correction API is Super Admin only and ordinary PATCH cannot in
     create: async (record) => { records.push(structuredClone(record)); return record; },
   };
   const correctionService = createHistoricalMealCorrectionService({ meals, snapshots, corrections });
-  const service = createMealService({ repository: meals, snapshots, corrections });
+  const service = createMealService({ repository: meals, snapshots, corrections, runtimeProfile: 'v3' });
   const app = createApp({ meals: createMealRouter({
     service, correctionService, settlements: null, broadcast: () => {},
     now: () => new Date('2026-09-09T20:00:00.000Z'),

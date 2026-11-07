@@ -243,7 +243,7 @@ test('historical reads use verified legacy-v2 costs and reject a one-paisa snaps
   await repository.create(day);
   const snapshot = buildLegacyMealSnapshot(await repository.findByDate(day.date));
   const snapshots = { findByDateAndVersion: async () => snapshot };
-  const service = createMealService({ repository, snapshots, students: { listEligibleOn: async () => [] } });
+  const service = createMealService({ repository, snapshots, students: { listEligibleOn: async () => [] }, runtimeProfile: 'v3' });
   const read = await service.getDay(day.date);
   assert.equal(read.dailyCostSummary.members.gaurav.morningAmountPaise, snapshot.costs.morning.memberAmountsPaise.gaurav);
   assert.equal(read.calculationVersion, 'legacy-v2');
@@ -257,7 +257,7 @@ test('historical read fails closed when the frozen snapshot is missing', async (
   delete day.participantOrder;
   const repository = new InMemoryMealRepository();
   await repository.create(day);
-  const service = createMealService({ repository, snapshots: { findByDateAndVersion: async () => null } });
+  const service = createMealService({ repository, snapshots: { findByDateAndVersion: async () => null }, runtimeProfile: 'v3' });
   await assert.rejects(service.getDay(day.date), /snapshot.*missing/i);
 });
 
@@ -270,9 +270,9 @@ test('calendar uses verified frozen historical amount and reports missing snapsh
   const repository = { findInDateRange: async () => [source] };
   const snapshots = { findByDateAndVersion: async () => snapshot };
   const students = { listEligibleOn: async () => [] };
-  const month = await createMonthMealService({ repository, snapshots, students }).getMonth('2026-09');
+  const month = await createMonthMealService({ repository, snapshots, students, runtimeProfile: 'v3' }).getMonth('2026-09');
   assert.equal(month.days[8].dailyCostSummary.members.gaurav.morningAmountPaise, 5000);
   assert.equal(month.days[9].counts.morningNotSet, 0);
   snapshots.findByDateAndVersion = async () => null;
-  await assert.rejects(createMonthMealService({ repository, snapshots, students }).getMonth('2026-09'), /snapshot.*missing/i);
+  await assert.rejects(createMonthMealService({ repository, snapshots, students, runtimeProfile: 'v3' }).getMonth('2026-09'), /snapshot.*missing/i);
 });

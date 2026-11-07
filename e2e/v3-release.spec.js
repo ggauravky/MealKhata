@@ -73,7 +73,7 @@ test('dynamic student lifecycle, canonical access, exact meals and preserved his
   const startingStudents = (await (await page.request.get('/api/students/roster')).json()).data.length;
   expect(historicalBefore.financialClassification).toBe('historical');
   expect(historicalBefore.meals.morning.gaurav).toBe('taking');
-  expect(historicalBefore.participantOrder).toEqual(['gaurav', 'nikhil', 'devansh']);
+  expect(Object.keys(historicalBefore.meals.morning)).toEqual(['gaurav', 'nikhil', 'devansh']);
   await page.getByRole('button', { name: 'Add student' }).click();
   await page.getByRole('textbox', { name: 'Display name' }).fill('Task14 Fourth');
   await page.getByRole('textbox', { name: 'Meal eligible from (optional)' }).fill(testDate);

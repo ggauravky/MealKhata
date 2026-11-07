@@ -8,13 +8,15 @@ export function MemberAvatar({
 }) {
   const initial = (name || memberId || '?').charAt(0).toUpperCase();
 
-  const colorStyles = {
-    gaurav:
+  const studentColors = [
       'bg-teal-50 text-teal-800 border-teal-200/80 dark:bg-teal-950/60 dark:text-teal-300 dark:border-teal-800/60',
-    nikhil:
       'bg-sky-50 text-sky-800 border-sky-200/80 dark:bg-sky-950/60 dark:text-sky-300 dark:border-sky-800/60',
-    devansh:
       'bg-purple-50 text-purple-800 border-purple-200/80 dark:bg-purple-950/60 dark:text-purple-300 dark:border-purple-800/60',
+      'bg-amber-50 text-amber-800 border-amber-200/80 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800/60',
+      'bg-rose-50 text-rose-800 border-rose-200/80 dark:bg-rose-950/60 dark:text-rose-300 dark:border-rose-800/60',
+      'bg-emerald-50 text-emerald-800 border-emerald-200/80 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800/60',
+  ];
+  const roleColors = {
     admin:
       'bg-amber-50 text-amber-800 border-amber-200/80 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800/60',
     superadmin:
@@ -29,7 +31,11 @@ export function MemberAvatar({
   };
 
   const normalized = String(memberId || '').toLowerCase();
-  const selectedColor = colorStyles[normalized] || 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:border-slate-700';
+  const hash = Array.from(normalized).reduce((value, character) =>
+    (Math.imul(value, 31) + character.codePointAt(0)) >>> 0, 0);
+  const selectedColor = roleColors[normalized]
+    || (normalized ? studentColors[hash % studentColors.length]
+      : 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:border-slate-700');
 
   return (
     <span

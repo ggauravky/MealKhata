@@ -11,6 +11,7 @@
     "hash-password": "node scripts/hashPassword.js",
     "migrate:user-accounts": "node scripts/migrateUserAccounts.js",
     "migrate:v3": "node scripts/migrateV3Database.js",
+    "initialize:fresh:v3": "node scripts/initializeFreshV3.js",
     "preflight:v3-source": "node scripts/preflightV3Source.js",
     "capture:legacy-meal-snapshots": "node scripts/captureLegacyMealSnapshots.js",
     "seed-members": "node scripts/seedMemberAccounts.js",

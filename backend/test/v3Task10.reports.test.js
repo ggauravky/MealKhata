@@ -225,6 +225,8 @@ test('monthly report fails closed when a saved historical day lacks its snapshot
       repository: { findInDateRange: async () => [legacy] },
       snapshots: { findByDateAndVersion: async () => null },
       corrections: { listByDate: async () => [] },
+      students: { listEligibleOn: async () => [] },
+      runtimeProfile: 'v3',
     }),
     rates: { getRate: async () => ({ configured: true, morningPricePaise: 100, nightPricePaise: 100 }) },
     now: () => new Date('2026-10-01T12:00:00Z'),

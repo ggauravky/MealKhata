@@ -55,7 +55,8 @@ test('v3 auth rejects legacy account, environment principal and legacy token eve
 });
 
 test('a v3 target cannot boot under the v2 fallback profile', async () => {
-  const db = marker => ({ collection: () => ({ findOne: async () => marker }) });
+  const db = marker => ({ collection: name => ({ findOne: async () =>
+    name === 'v3_migration_manifests' ? marker : null }) });
   await assert.rejects(assertRuntimeDatabaseProfile({ config: { runtimeProfile: 'v2' },
     db: db({ migrationId: 'mealkhata-v3-blue-green', status: 'complete' }) }), /v3 target/);
   await assert.rejects(assertRuntimeDatabaseProfile({ config: { runtimeProfile: 'v3' },
@@ -64,6 +65,15 @@ test('a v3 target cannot boot under the v2 fallback profile', async () => {
     db: db(null) }));
   await assert.doesNotReject(assertRuntimeDatabaseProfile({ config: { runtimeProfile: 'v3' },
     db: db({ migrationId: 'mealkhata-v3-blue-green', status: 'complete' }) }));
+});
+
+test('a separately initialized fresh v3 target boots only in the v3 profile', async () => {
+  const db = { collection(name) {
+    return { findOne: async () => name === 'v3_fresh_initializations'
+      ? { initializationId: 'mealkhata-v3-fresh', status: 'complete' } : null };
+  } };
+  await assert.rejects(assertRuntimeDatabaseProfile({ config: { runtimeProfile: 'v2' }, db }), /v3 target/);
+  await assert.doesNotReject(assertRuntimeDatabaseProfile({ config: { runtimeProfile: 'v3' }, db }));
 });
 
 test('v3 readiness requires signed release, exact target and manifest, indexes and live connection', async () => {

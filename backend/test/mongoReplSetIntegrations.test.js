@@ -30,7 +30,9 @@ import { MealHistorySnapshot } from '../src/meals/mealHistorySnapshot.model.js';
 import { MealHistoricalCorrection } from '../src/meals/mealHistoricalCorrection.model.js';
 import { buildLegacyMealSnapshot } from '../src/migrations/legacyMealSnapshot.service.js';
 import { historicalMealCorrectionService } from '../src/meals/mealHistoricalCorrection.service.js';
-import { monthMealService } from '../src/calendar/monthMeal.service.js';
+import { createMonthMealService } from '../src/calendar/monthMeal.service.js';
+import { mealHistorySnapshotRepository } from '../src/meals/mealHistorySnapshot.repository.js';
+import { mealHistoricalCorrectionRepository } from '../src/meals/mealHistoricalCorrection.repository.js';
 import { createDefaultMealDay } from '../src/meals/meal.defaults.js';
 import { MonthlyMealRate } from '../src/billing/monthlyRate.model.js';
 import { Payment } from '../src/payments/payment.model.js';
@@ -387,7 +389,13 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
     assert.ok(indexes.some((index) => index.unique && index.key.date === 1 && index.key.revision === 1));
     assert.deepEqual((await MealDay.findOne({ date: source.date }).lean()).meals, source.meals);
     assert.equal((await MealHistorySnapshot.findOne({ date: source.date }).lean()).sourceChecksum, frozen.sourceChecksum);
-    const calendar = await monthMealService.getMonth('2026-11');
+    const calendar = await createMonthMealService({
+      repository: mealRepository,
+      students: studentResolver,
+      snapshots: mealHistorySnapshotRepository,
+      corrections: mealHistoricalCorrectionRepository,
+      runtimeProfile: 'v3',
+    }).getMonth('2026-11');
     assert.equal(calendar.days[2].dailyCostSummary.members.gaurav.morningAmountPaise, 5000);
   });
 
