@@ -1,7 +1,9 @@
 import mongoose from 'mongoose';
 import { createHash, randomUUID } from 'node:crypto';
+import { env } from '../config/env.js';
 import { isSafeStudentId } from '../students/studentId.js';
 import { studentResolver } from '../students/studentResolver.service.js';
+import { STUDENT_STATUSES } from '../students/student.constants.js';
 import { financialBoundaryService } from '../finance/financialBoundary.service.js';
 import { HttpError } from '../utils/HttpError.js';
 import { isValidLogicalMonth, getPreviousLogicalMonth, compareLogicalMonths, getClampedDueDate, lastDateOfMonth } from '../utils/month.js';
@@ -12,7 +14,6 @@ import { runFinancialTransaction } from '../finance/financialTransaction.js';
 export function calculateMaxSimultaneousOccupancy({
   roomAssignments = [],
   targetAssignment,
-  roomCapacity,
 }) {
   const targetFrom = targetAssignment.effectiveFromDate || `${targetAssignment.effectiveFromMonth}-01`;
   const targetUntil = targetAssignment.effectiveUntilDate || (targetAssignment.effectiveUntilMonth ? lastDateOfMonth(targetAssignment.effectiveUntilMonth) : '9999-12-31');
@@ -106,7 +107,6 @@ import {
   canManageRooms,
   canRecordRoomPayment,
   canViewAllRoomFees,
-  canViewOwnRoomFees,
   canVoidRoomPayment,
   canAdjustRoomCharge,
   canCancelRoomCharge,
@@ -125,16 +125,25 @@ import {
 export function createRoomFeeService({
   repository,
   students = null,
+  runtimeProfile = env.runtimeProfile,
   boundary = null,
   timezone = 'Asia/Kolkata',
   now = () => new Date(),
 }) {
-  const getMembers = async () => {
-    if (students) return (await students.listAll()).map((student) => ({ id: student.studentId, name: student.displayName }));
+  if (runtimeProfile === 'v3' && !students) {
+    throw new TypeError('Student directory is required for v3 Room Fees');
+  }
+  const getMembers = async ({ activeOnly = false } = {}) => {
+    if (students) return (await students.listAll())
+      .filter(student => !activeOnly || student.status === STUDENT_STATUSES.ACTIVE)
+      .map((student) => ({ id: student.studentId, name: student.displayName }));
     const assignments = await repository.findAllAssignments?.() ?? [];
     return [...new Set(assignments.map((assignment) => assignment.memberId))]
       .filter(isSafeStudentId).sort().map((id) => ({ id, name: id }));
   };
+  const getStudentNames = async () => students
+    ? new Map((await students.listAll()).map(({ studentId, displayName }) => [studentId, displayName]))
+    : null;
   const assertKnownMember = async (memberId) => {
     if (!isSafeStudentId(memberId)) throw new HttpError(400, 'Invalid member ID.');
     if (students) await students.assertKnown(memberId);
@@ -159,7 +168,7 @@ export function createRoomFeeService({
 
     const normalizedSchedule = schedule.map((period) => {
       const effectiveUntilMonth = period.effectiveUntilMonth ?? null;
-      const dueDay = Number(period.dueDay ?? DEFAULT_DUE_DAY);
+      const dueDay = period.dueDay === undefined ? DEFAULT_DUE_DAY : period.dueDay;
       if (!isValidLogicalMonth(period.effectiveFromMonth)) {
         throw new HttpError(400, 'Every schedule period requires a valid effectiveFromMonth.');
       }
@@ -214,6 +223,7 @@ export function createRoomFeeService({
       repository.findChargesForMember(memberId, { session }),
       repository.getFeeScheduleState(memberId, { session }),
     ]);
+    const studentNames = await getStudentNames();
     const activePlans = plans.filter((plan) => !plan.supersededAt);
     const overlappingPairs = [];
     for (let left = 0; left < activePlans.length; left += 1) {
@@ -275,7 +285,7 @@ export function createRoomFeeService({
     return {
       memberId,
       scheduleRevision: revision,
-      currentPlans: plans.map(serializeFeePlan),
+      currentPlans: plans.map(plan => serializeFeePlan(plan, { studentNames })),
       proposedSchedule: normalizedSchedule,
       overlappingPairs,
       referencedPlans,
@@ -311,7 +321,7 @@ export function createRoomFeeService({
       }
       const finalLabel = trimmedLabel || `Room ${normalizedNumber}`;
 
-      const numCapacity = Number(capacity);
+      const numCapacity = capacity;
       if (!Number.isInteger(numCapacity) || numCapacity < MIN_ROOM_CAPACITY || numCapacity > MAX_ROOM_CAPACITY) {
         throw new HttpError(400, `Capacity must be an integer between ${MIN_ROOM_CAPACITY} and ${MAX_ROOM_CAPACITY}.`);
       }
@@ -351,7 +361,7 @@ export function createRoomFeeService({
       }
 
       if (updates.capacity !== undefined) {
-        const numCapacity = Number(updates.capacity);
+        const numCapacity = updates.capacity;
         if (!Number.isInteger(numCapacity) || numCapacity < MIN_ROOM_CAPACITY || numCapacity > MAX_ROOM_CAPACITY) {
           throw new HttpError(400, `Capacity must be an integer between ${MIN_ROOM_CAPACITY} and ${MAX_ROOM_CAPACITY}.`);
         }
@@ -401,7 +411,10 @@ export function createRoomFeeService({
       }
 
       if (updates.active !== undefined) {
-        allowedUpdates.active = Boolean(updates.active);
+        if (typeof updates.active !== 'boolean') {
+          throw new HttpError(400, 'Room active state must be a boolean.');
+        }
+        allowedUpdates.active = updates.active;
       }
 
       const updated = await repository.updateRoom(roomId, allowedUpdates);
@@ -410,6 +423,7 @@ export function createRoomFeeService({
 
     async getRooms({ activeOnly = false } = {}) {
       const rooms = await repository.findAllRooms({ activeOnly });
+      const studentNames = await getStudentNames();
       const todayDate = getLogicalDateInTimeZone(now(), timezone);
       const assignments = await repository.findAllAssignments();
 
@@ -426,7 +440,7 @@ export function createRoomFeeService({
       }
 
       return rooms.map((room) =>
-        serializeRoom(room, { currentOccupants: occupantMap.get(room.roomId) || [] })
+        serializeRoom(room, { currentOccupants: occupantMap.get(room.roomId) || [], studentNames })
       );
     },
 
@@ -446,7 +460,8 @@ export function createRoomFeeService({
         })
         .map((a) => a.memberId);
 
-      return serializeRoom(room, { currentOccupants: activeOccupants });
+      return serializeRoom(room, { currentOccupants: activeOccupants,
+        studentNames: await getStudentNames() });
     },
 
     // --- Room Assignments ---
@@ -493,6 +508,7 @@ export function createRoomFeeService({
       if (targetUntilDate && targetFromDate > targetUntilDate) {
         throw new HttpError(400, 'effectiveUntilDate cannot be earlier than effectiveFromDate.');
       }
+      const studentNames = await getStudentNames();
 
       const execute = async (activeSession) => {
         const room =
@@ -586,7 +602,7 @@ export function createRoomFeeService({
         );
 
         const roomMap = new Map([[room.roomId, room]]);
-        return serializeRoomAssignment(assignment, roomMap);
+        return serializeRoomAssignment(assignment, roomMap, { studentNames });
       };
 
       if (session) return execute(session);
@@ -600,7 +616,8 @@ export function createRoomFeeService({
       const assignments = await repository.findAllAssignments();
       const rooms = await repository.findAllRooms();
       const roomMap = new Map(rooms.map((r) => [r.roomId, r]));
-      return assignments.map((a) => serializeRoomAssignment(a, roomMap));
+      const studentNames = await getStudentNames();
+      return assignments.map((a) => serializeRoomAssignment(a, roomMap, { studentNames }));
     },
 
     async getAssignmentsForMember(memberId) {
@@ -610,14 +627,16 @@ export function createRoomFeeService({
       const assignments = await repository.findAssignmentsForMember(memberId);
       const rooms = await repository.findAllRooms();
       const roomMap = new Map(rooms.map((r) => [r.roomId, r]));
-      return assignments.map((a) => serializeRoomAssignment(a, roomMap));
+      const studentNames = await getStudentNames();
+      return assignments.map((a) => serializeRoomAssignment(a, roomMap, { studentNames }));
     },
 
     async getAssignmentById(assignmentId) {
       const assignment = await repository.findAssignmentById(assignmentId);
       if (!assignment || assignment.cancelledAt) return null;
       const room = await repository.findRoomById(assignment.roomId);
-      return serializeRoomAssignment(assignment, new Map([[room?.roomId, room]]));
+      return serializeRoomAssignment(assignment, new Map([[room?.roomId, room]]),
+        { studentNames: await getStudentNames() });
     },
 
     async rollbackCreatedAssignment(assignmentId) {
@@ -1074,12 +1093,13 @@ export function createRoomFeeService({
         throw new HttpError(400, 'effectiveUntilMonth cannot be earlier than effectiveFromMonth.');
       }
 
-      const numDueDay = Number(dueDay);
+      const numDueDay = dueDay;
       if (!Number.isInteger(numDueDay) || numDueDay < MIN_DUE_DAY || numDueDay > MAX_DUE_DAY) {
         throw new HttpError(400, `dueDay must be an integer between ${MIN_DUE_DAY} and ${MAX_DUE_DAY}.`);
       }
 
       const normalizedReason = typeof reason === 'string' && reason.trim() ? reason.trim().slice(0, MAX_REASON_LENGTH) : null;
+      const studentNames = await getStudentNames();
 
       const execute = async (activeSession) => {
         if (typeof repository.lockFeeSchedule === 'function') {
@@ -1142,7 +1162,7 @@ export function createRoomFeeService({
           { session: activeSession },
         );
 
-        return serializeFeePlan(plan);
+        return serializeFeePlan(plan, { studentNames });
       };
 
       try {
@@ -1167,12 +1187,13 @@ export function createRoomFeeService({
       }
       await assertKnownMember(memberId);
       const plans = await repository.findFeePlansForMember(memberId);
-      return plans.map(serializeFeePlan);
+      const studentNames = await getStudentNames();
+      return plans.map(plan => serializeFeePlan(plan, { studentNames }));
     },
 
     async getActiveFeePlan(memberId, month) {
       const plan = await repository.findActiveFeePlan(memberId, month);
-      return serializeFeePlan(plan);
+      return serializeFeePlan(plan, { studentNames: await getStudentNames() });
     },
 
     async previewFeePlanReconciliation({ memberId, schedule, reason, actorRole }) {
@@ -1185,6 +1206,7 @@ export function createRoomFeeService({
       if (typeof previewToken !== 'string' || !/^[a-f0-9]{64}$/.test(previewToken)) {
         throw new HttpError(400, 'A valid reconciliation previewToken is required.');
       }
+      const studentNames = await getStudentNames();
 
       const applyReconciliation = async (session) => {
         const currentState = await repository.getFeeScheduleState(memberId, { session });
@@ -1236,7 +1258,7 @@ export function createRoomFeeService({
             createdByRole: actorRole,
             createdReconciliationId: reconciliationId,
           }, { session });
-          createdPlans.push(serializeFeePlan(plan));
+          createdPlans.push(serializeFeePlan(plan, { studentNames }));
         }
 
         return {
@@ -1281,7 +1303,7 @@ export function createRoomFeeService({
       const rooms = await repository.findAllRooms();
       const roomMap = new Map(rooms.map((r) => [r.roomId, r]));
 
-      for (const member of await getMembers()) {
+      for (const member of await getMembers({ activeOnly: true })) {
         const memberId = member.id;
 
         // Check if member has completed hostel stay prior to this month
@@ -1399,6 +1421,7 @@ export function createRoomFeeService({
         throw new HttpError(400, 'month must be in YYYY-MM format.');
       }
       if (boundary) await boundary.assertFullOperationalMonth(month);
+      const studentNames = await getStudentNames();
 
       const issueWithinTransaction = async (session = null) => {
         const rooms = await repository.findAllRooms({ session });
@@ -1406,7 +1429,7 @@ export function createRoomFeeService({
         const issuedCharges = [];
         let skippedCount = 0;
 
-        for (const member of await getMembers()) {
+        for (const member of await getMembers({ activeOnly: true })) {
           const memberId = member.id;
 
           // Check if member has completed hostel stay prior to this month
@@ -1481,7 +1504,7 @@ export function createRoomFeeService({
             },
             session ? { session } : {},
           );
-          issuedCharges.push(serializeRoomCharge(charge, { payments: [], now: now() }));
+          issuedCharges.push(serializeRoomCharge(charge, { payments: [], now: now(), studentNames }));
         }
 
         return {
@@ -1528,6 +1551,7 @@ export function createRoomFeeService({
       if (newFinalBill < 0) {
         throw new HttpError(400, `Adjustment cannot reduce the total charge below ₹0 (current: ₹${(charge.baseAmountPaise + currentAdjustmentTotal) / 100}).`);
       }
+      const studentNames = await getStudentNames();
 
       if (typeof repository.atomicAdjustCharge === 'function') {
         const updated = await repository.atomicAdjustCharge({
@@ -1537,7 +1561,7 @@ export function createRoomFeeService({
           actorRole,
         });
         const payments = await repository.findPaymentsForCharge(chargeId);
-        return serializeRoomCharge(updated, { payments, now: now() });
+        return serializeRoomCharge(updated, { payments, now: now(), studentNames });
       }
 
       const adjustment = {
@@ -1552,7 +1576,7 @@ export function createRoomFeeService({
       const updated = await repository.updateCharge(chargeId, { adjustments: updatedAdjustments });
       const payments = await repository.findPaymentsForCharge(chargeId);
 
-      return serializeRoomCharge(updated, { payments, now: now() });
+      return serializeRoomCharge(updated, { payments, now: now(), studentNames });
     },
 
     async cancelCharge({ chargeId, reason, actorRole }) {
@@ -1561,6 +1585,7 @@ export function createRoomFeeService({
       }
 
       const normalizedReason = typeof reason === 'string' && reason.trim() ? reason.trim().slice(0, MAX_REASON_LENGTH) : 'Cancelled by Super Admin';
+      const studentNames = await getStudentNames();
 
       if (typeof repository.executeAtomicCancelCharge === 'function') {
         const updated = await repository.executeAtomicCancelCharge({
@@ -1569,7 +1594,7 @@ export function createRoomFeeService({
           actorRole,
         });
         const payments = await repository.findPaymentsForCharge(chargeId);
-        return serializeRoomCharge(updated, { payments, now: now() });
+        return serializeRoomCharge(updated, { payments, now: now(), studentNames });
       }
 
       const charge = await repository.findChargeById(chargeId);
@@ -1589,7 +1614,7 @@ export function createRoomFeeService({
         cancelReason: normalizedReason,
       });
 
-      return serializeRoomCharge(updated, { payments, now: now() });
+      return serializeRoomCharge(updated, { payments, now: now(), studentNames });
     },
 
     async getChargesForMonth(month, actorRole) {
@@ -1604,9 +1629,10 @@ export function createRoomFeeService({
         if (!paymentsByCharge.has(p.chargeId)) paymentsByCharge.set(p.chargeId, []);
         paymentsByCharge.get(p.chargeId).push(p);
       }
+      const studentNames = await getStudentNames();
 
       return charges.map((c) =>
-        serializeRoomCharge(c, { payments: paymentsByCharge.get(c.chargeId) || [], now: now() })
+        serializeRoomCharge(c, { payments: paymentsByCharge.get(c.chargeId) || [], now: now(), studentNames })
       );
     },
 
@@ -1641,6 +1667,7 @@ export function createRoomFeeService({
       }
       await assertKnownMember(targetMemberId);
       if (boundary) await boundary.assertFullOperationalMonth(targetMonth);
+      const studentNames = await getStudentNames();
 
       // Idempotency: return existing payment if previously recorded with this key
       const existingKey = await repository.findPaymentByIdempotencyKey(idempotencyKey);
@@ -1655,7 +1682,7 @@ export function createRoomFeeService({
         if (!isMatch) {
           throw new HttpError(409, 'Idempotency key reused with conflicting payment payload.');
         }
-        return serializeRoomPayment(existingKey);
+        return serializeRoomPayment(existingKey, { studentNames });
       }
 
       if (!isValidRoomPaymentAmount(amountPaise)) {
@@ -1685,7 +1712,7 @@ export function createRoomFeeService({
           idempotencyKey,
           actorRole,
         });
-        return serializeRoomPayment(payment);
+        return serializeRoomPayment(payment, { studentNames });
       }
 
       const charge = await repository.findChargeById(chargeId);
@@ -1738,7 +1765,7 @@ export function createRoomFeeService({
         recordedByRole: actorRole,
       });
 
-      return serializeRoomPayment(payment);
+      return serializeRoomPayment(payment, { studentNames });
     },
 
     async voidPayment({ roomPaymentId, reason, actorRole }) {
@@ -1749,6 +1776,7 @@ export function createRoomFeeService({
       if (typeof reason !== 'string' || !reason.trim() || reason.trim().length > MAX_REASON_LENGTH) {
         throw new HttpError(400, `Void reason is required and must not exceed ${MAX_REASON_LENGTH} characters.`);
       }
+      const studentNames = await getStudentNames();
 
       if (typeof repository.executeAtomicVoidPayment === 'function') {
         const updated = await repository.executeAtomicVoidPayment({
@@ -1756,7 +1784,7 @@ export function createRoomFeeService({
           reason: reason.trim(),
           actorRole,
         });
-        return serializeRoomPayment(updated);
+        return serializeRoomPayment(updated, { studentNames });
       }
 
       const payment = await repository.findPaymentById(roomPaymentId);
@@ -1765,7 +1793,7 @@ export function createRoomFeeService({
       }
 
       if (payment.status === ROOM_PAYMENT_STATUSES.VOIDED) {
-        return serializeRoomPayment(payment);
+        return serializeRoomPayment(payment, { studentNames });
       }
 
       const updated = await repository.updatePayment(roomPaymentId, {
@@ -1775,12 +1803,13 @@ export function createRoomFeeService({
         voidReason: reason.trim(),
       });
 
-      return serializeRoomPayment(updated);
+      return serializeRoomPayment(updated, { studentNames });
     },
 
     async getPaymentsForCharge(chargeId) {
       const payments = await repository.findPaymentsForCharge(chargeId);
-      return payments.map(serializeRoomPayment);
+      const studentNames = await getStudentNames();
+      return payments.map(payment => serializeRoomPayment(payment, { studentNames }));
     },
 
     async getPaymentsForMonth(month, actorRole) {
@@ -1788,7 +1817,8 @@ export function createRoomFeeService({
         throw new HttpError(403, 'Permission denied.');
       }
       const payments = await repository.findPaymentsForMonth(month);
-      return payments.map(serializeRoomPayment);
+      const studentNames = await getStudentNames();
+      return payments.map(payment => serializeRoomPayment(payment, { studentNames }));
     },
 
     async getAllPayments({ limit = 100 } = {}, actorRole) {
@@ -1796,7 +1826,8 @@ export function createRoomFeeService({
         throw new HttpError(403, 'Permission denied.');
       }
       const payments = await repository.findAllPayments({ limit });
-      return payments.map(serializeRoomPayment);
+      const studentNames = await getStudentNames();
+      return payments.map(payment => serializeRoomPayment(payment, { studentNames }));
     },
 
     // --- Member-Specific Data Queries ---
@@ -1814,13 +1845,14 @@ export function createRoomFeeService({
       const assignment = await repository.findAssignmentOnDate(memberId, date);
       const room = assignment ? await repository.findRoomById(assignment.roomId) : null;
       const feePlan = await repository.findActiveFeePlan(memberId, date.slice(0, 7));
+      const studentNames = await getStudentNames();
 
       return {
         currentRoom: room ? serializeRoom(room) : null,
         currentAssignment: assignment
-          ? serializeRoomAssignment(assignment, new Map([[room?.roomId, room]]))
+          ? serializeRoomAssignment(assignment, new Map([[room?.roomId, room]]), { studentNames })
           : null,
-        currentFeePlan: feePlan ? serializeFeePlan(feePlan) : null,
+        currentFeePlan: feePlan ? serializeFeePlan(feePlan, { studentNames }) : null,
       };
     },
 
@@ -1829,6 +1861,7 @@ export function createRoomFeeService({
         throw new HttpError(400, 'Invalid member ID.');
       }
       await assertKnownMember(memberId);
+      const studentNames = await getStudentNames();
 
       const month = targetMonth || getCurrentMonth();
       const assignment = await repository.findActiveAssignment(memberId, month);
@@ -1843,7 +1876,7 @@ export function createRoomFeeService({
 
       if (charge) {
         const payments = await repository.findPaymentsForCharge(charge.chargeId);
-        serializedCharge = serializeRoomCharge(charge, { payments, now: now() });
+        serializedCharge = serializeRoomCharge(charge, { payments, now: now(), studentNames });
       }
 
       // Member lifetime stats across all issued charges
@@ -1876,8 +1909,8 @@ export function createRoomFeeService({
         memberId,
         month,
         currentRoom: room ? serializeRoom(room) : null,
-        currentAssignment: assignment ? serializeRoomAssignment(assignment, new Map([[room?.roomId, room]])) : null,
-        currentFeePlan: feePlan ? serializeFeePlan(feePlan) : null,
+        currentAssignment: assignment ? serializeRoomAssignment(assignment, new Map([[room?.roomId, room]]), { studentNames }) : null,
+        currentFeePlan: feePlan ? serializeFeePlan(feePlan, { studentNames }) : null,
         scheduledFeePaise: feePlan ? feePlan.amountPaise : null,
         currentMonthCharge: serializedCharge,
         summaryMetrics: {
@@ -1898,6 +1931,7 @@ export function createRoomFeeService({
         throw new HttpError(400, 'Invalid member ID.');
       }
       await assertKnownMember(memberId);
+      const studentNames = await getStudentNames();
 
       const charges = await repository.findChargesForMember(memberId);
       const payments = await repository.findPaymentsForMember(memberId);
@@ -1909,7 +1943,7 @@ export function createRoomFeeService({
       }
 
       const serializedCharges = charges.map((c) =>
-        serializeRoomCharge(c, { payments: paymentsByCharge.get(c.chargeId) || [], now: now() })
+        serializeRoomCharge(c, { payments: paymentsByCharge.get(c.chargeId) || [], now: now(), studentNames })
       );
 
       // Summary metrics
@@ -1942,7 +1976,8 @@ export function createRoomFeeService({
       }
       await assertKnownMember(memberId);
       const payments = await repository.findPaymentsForMember(memberId);
-      return payments.map(serializeRoomPayment);
+      const studentNames = await getStudentNames();
+      return payments.map(payment => serializeRoomPayment(payment, { studentNames }));
     },
 
     // --- Admin Monthly Overview ---
@@ -1965,8 +2000,11 @@ export function createRoomFeeService({
       let membersBilledCount = 0;
       let membersPaidCount = 0;
       let membersPendingCount = 0;
+      const members = await getMembers();
+      const studentNames = students
+        ? new Map(members.map(member => [member.id, member.name])) : null;
 
-      for (const member of await getMembers()) {
+      for (const member of members) {
         const memberId = member.id;
         const assignment = await repository.findActiveAssignment(memberId, month);
         const room = assignment ? roomMap.get(assignment.roomId) : null;
@@ -1976,7 +2014,7 @@ export function createRoomFeeService({
         let serializedCharge = null;
         if (charge) {
           const payments = await repository.findPaymentsForCharge(charge.chargeId);
-          serializedCharge = serializeRoomCharge(charge, { payments, now: now() });
+          serializedCharge = serializeRoomCharge(charge, { payments, now: now(), studentNames });
 
           if (charge.status !== ROOM_CHARGE_STATUSES.CANCELLED) {
             totalBilledPaise += serializedCharge.finalBillAmountPaise;
@@ -1996,8 +2034,8 @@ export function createRoomFeeService({
           memberId,
           memberName: member.name,
           room: room ? serializeRoom(room) : null,
-          assignment: assignment ? serializeRoomAssignment(assignment, roomMap) : null,
-          feePlan: plan ? serializeFeePlan(plan) : null,
+          assignment: assignment ? serializeRoomAssignment(assignment, roomMap, { studentNames }) : null,
+          feePlan: plan ? serializeFeePlan(plan, { studentNames }) : null,
           charge: serializedCharge,
           status: serializedCharge ? serializedCharge.paymentStatus : (plan ? 'not_issued' : 'not_configured'),
         });
@@ -2052,7 +2090,7 @@ export function createRoomFeeService({
       }
 
       if (updates.defaultDueDay !== undefined) {
-        const numDueDay = Number(updates.defaultDueDay);
+        const numDueDay = updates.defaultDueDay;
         if (!Number.isInteger(numDueDay) || numDueDay < MIN_DUE_DAY || numDueDay > MAX_DUE_DAY) {
           throw new HttpError(400, `defaultDueDay must be an integer between ${MIN_DUE_DAY} and ${MAX_DUE_DAY}.`);
         }

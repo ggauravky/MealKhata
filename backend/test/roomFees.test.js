@@ -50,6 +50,52 @@ beforeEach(() => {
 
 describe('MealKhata 2.0: Room Fees & Management Domain (Phase 1)', () => {
   describe('Room Creation & Capacity Validation', () => {
+    test('room active updates accept only booleans and preserve explicit false', async () => {
+      const cookie = await cookieFor(ROLES.ADMIN);
+      const created = await request(testApp).post('/api/room-fees/rooms')
+        .set('Origin', ORIGIN).set('Cookie', cookie)
+        .send({ roomNumber: 'strict-active', capacity: 1 });
+      assert.equal(created.status, 201);
+      const path = `/api/room-fees/rooms/${created.body.data.roomId}`;
+
+      for (const active of ['false', 'true', null, 0, 1]) {
+        const response = await request(testApp).patch(path)
+          .set('Origin', ORIGIN).set('Cookie', cookie).send({ active });
+        assert.equal(response.status, 400, `active=${JSON.stringify(active)} must be rejected`);
+      }
+      const disabled = await request(testApp).patch(path)
+        .set('Origin', ORIGIN).set('Cookie', cookie).send({ active: false });
+      assert.equal(disabled.status, 200);
+      assert.equal(disabled.body.data.active, false);
+      const enabled = await request(testApp).patch(path)
+        .set('Origin', ORIGIN).set('Cookie', cookie).send({ active: true });
+      assert.equal(enabled.status, 200);
+      assert.equal(enabled.body.data.active, true);
+    });
+
+    test('room capacity rejects coerced boolean and string values', async () => {
+      const cookie = await cookieFor(ROLES.ADMIN);
+      for (const capacity of [true, false, '2', null]) {
+        const response = await request(testApp).post('/api/rooms')
+          .set('Origin', ORIGIN).set('Cookie', cookie)
+          .send({ roomNumber: `capacity-${String(capacity)}`, capacity });
+        assert.equal(response.status, 400, `capacity=${JSON.stringify(capacity)} must be rejected`);
+      }
+    });
+
+    test('fee due days reject coerced values', async () => {
+      for (const dueDay of [true, '5', null]) {
+        await assert.rejects(
+          service.createFeePlan({
+            memberId: 'gaurav', amountPaise: 10000, effectiveFromMonth: CURRENT_MONTH,
+            dueDay, actorRole: ROLES.ADMIN,
+          }),
+          (error) => error.statusCode === 400,
+          `dueDay=${JSON.stringify(dueDay)} must be rejected`,
+        );
+      }
+    });
+
     test('Admin can create a room with valid capacity', async () => {
       const res = await request(testApp)
         .post('/api/rooms')

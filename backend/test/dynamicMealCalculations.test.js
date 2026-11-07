@@ -17,6 +17,14 @@ import { createMonthMealService } from '../src/calendar/monthMeal.service.js';
 import { buildLegacyMealSnapshot } from '../src/migrations/legacyMealSnapshot.service.js';
 import { resolvePhysicalPlateLimit } from '../src/meals/plateAllocation.constants.js';
 
+test('v3 meal helpers require an explicit participant roster, including an explicit empty roster', () => {
+  assert.throws(() => createDefaultMealDay('2026-11-03', undefined, { runtimeProfile: 'v3' }), /participants.*required/i);
+  assert.throws(() => getEffectiveMealAllocation({ runtimeProfile: 'v3' }), /participants.*required/i);
+  assert.throws(() => splitMealCost({ allocation: { plates: [] }, runtimeProfile: 'v3' }), /participants.*required/i);
+  assert.throws(() => createPresetAllocation('individual', { runtimeProfile: 'v3' }), /participants.*required/i);
+  assert.deepEqual(createDefaultMealDay('2026-11-03', [], { runtimeProfile: 'v3' }).participantOrder, []);
+});
+
 const ids = ['gaurav', 'nikhil', 'devansh', 'student_0123456789abcdef0123456789abcdef'];
 
 test('four eligible students retain all shares and exact cost with stable persisted order', () => {
@@ -76,6 +84,16 @@ test('a fourth student can take a meal and receive exact cost through the servic
   assert.equal(result.data.meals.morning[ids[3]], 'taking');
   assert.equal(result.data.dailyCostSummary.members[ids[3]].morningAmountPaise, 5000);
   assert.deepEqual(result.data.participantOrder, ids);
+});
+
+test('v3 day and calendar reads fail closed when the student resolver is absent', async () => {
+  const dayService = createMealService({ repository: new InMemoryMealRepository(),
+    students: null, runtimeProfile: 'v3' });
+  await assert.rejects(dayService.getDay('2026-11-03'), error => error.statusCode === 503);
+  const calendar = createMonthMealService({
+    repository: { findInDateRange: async () => [] }, students: null, runtimeProfile: 'v3',
+  });
+  await assert.rejects(calendar.getMonth('2026-11'), error => error.statusCode === 503);
 });
 
 test('four-student allocation updates statuses and exact amounts atomically', async () => {

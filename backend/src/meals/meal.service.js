@@ -35,9 +35,15 @@ export function createMealService({
   snapshots = null,
   corrections = null,
   timezone = env.appTimezone,
+  runtimeProfile = env.runtimeProfile,
 } = {}) {
   const listEligibleStudentIds = async (date) => {
-    if (!students) return MEMBER_IDS;
+    if (!students) {
+      if (runtimeProfile === 'v3') {
+        throw new HttpError(503, 'Student registry is unavailable for v3 meals.');
+      }
+      return MEMBER_IDS;
+    }
     const eligibleStudents = await students.listEligibleOn(date);
     return eligibleStudents.map(({ studentId }) => studentId);
   };

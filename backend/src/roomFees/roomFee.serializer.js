@@ -6,6 +6,13 @@ function serializeDate(value) {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
+function resolveStudentName(memberId, studentNames, recordedName = null) {
+  if (typeof recordedName === 'string' && recordedName.trim()) return recordedName;
+  const currentName = studentNames?.get(memberId);
+  return typeof currentName === 'string' && currentName.trim()
+    ? currentName : MEMBER_NAMES[memberId] ?? memberId;
+}
+
 export function computeChargeFinancials({ charge, payments = [], now = new Date() }) {
   const baseAmount = charge.baseAmountPaise;
   const adjustments = Array.isArray(charge.adjustments) ? charge.adjustments : [];
@@ -47,7 +54,7 @@ export function computeChargeFinancials({ charge, payments = [], now = new Date(
   };
 }
 
-export function serializeRoom(room, { currentOccupants = [] } = {}) {
+export function serializeRoom(room, { currentOccupants = [], studentNames = null } = {}) {
   if (!room) return null;
   return {
     roomId: room.roomId,
@@ -58,14 +65,14 @@ export function serializeRoom(room, { currentOccupants = [] } = {}) {
     currentOccupancyCount: currentOccupants.length,
     currentOccupants: currentOccupants.map((id) => ({
       memberId: id,
-      name: MEMBER_NAMES[id] ?? id,
+      name: resolveStudentName(id, studentNames),
     })),
     createdAt: serializeDate(room.createdAt),
     updatedAt: serializeDate(room.updatedAt),
   };
 }
 
-export function serializeRoomAssignment(assignment, roomMap = new Map()) {
+export function serializeRoomAssignment(assignment, roomMap = new Map(), { studentNames = null } = {}) {
   if (!assignment) return null;
   const room = roomMap.get(assignment.roomId);
   return {
@@ -74,7 +81,7 @@ export function serializeRoomAssignment(assignment, roomMap = new Map()) {
     roomNumber: room?.roomNumber ?? 'Unknown',
     roomLabel: room?.roomLabel ?? 'Unknown Room',
     memberId: assignment.memberId,
-    memberName: MEMBER_NAMES[assignment.memberId] ?? assignment.memberId,
+    memberName: resolveStudentName(assignment.memberId, studentNames, assignment.memberNameSnapshot),
     effectiveFromMonth: assignment.effectiveFromMonth,
     effectiveUntilMonth: assignment.effectiveUntilMonth,
     effectiveFromDate: assignment.effectiveFromDate ?? (assignment.effectiveFromMonth ? `${assignment.effectiveFromMonth}-01` : null),
@@ -87,12 +94,12 @@ export function serializeRoomAssignment(assignment, roomMap = new Map()) {
   };
 }
 
-export function serializeFeePlan(plan) {
+export function serializeFeePlan(plan, { studentNames = null } = {}) {
   if (!plan) return null;
   return {
     feePlanId: plan.feePlanId,
     memberId: plan.memberId,
-    memberName: MEMBER_NAMES[plan.memberId] ?? plan.memberId,
+    memberName: resolveStudentName(plan.memberId, studentNames, plan.memberNameSnapshot),
     amountPaise: plan.amountPaise,
     effectiveFromMonth: plan.effectiveFromMonth,
     effectiveUntilMonth: plan.effectiveUntilMonth,
@@ -108,13 +115,13 @@ export function serializeFeePlan(plan) {
   };
 }
 
-export function serializeRoomPayment(payment) {
+export function serializeRoomPayment(payment, { studentNames = null } = {}) {
   if (!payment) return null;
   return {
     roomPaymentId: payment.roomPaymentId,
     chargeId: payment.chargeId,
     memberId: payment.memberId,
-    memberName: MEMBER_NAMES[payment.memberId] ?? payment.memberId,
+    memberName: resolveStudentName(payment.memberId, studentNames, payment.memberNameSnapshot),
     month: payment.month,
     amountPaise: payment.amountPaise,
     method: payment.method,
@@ -132,14 +139,14 @@ export function serializeRoomPayment(payment) {
   };
 }
 
-export function serializeRoomCharge(charge, { payments = [], now = new Date() } = {}) {
+export function serializeRoomCharge(charge, { payments = [], now = new Date(), studentNames = null } = {}) {
   if (!charge) return null;
   const financials = computeChargeFinancials({ charge, payments, now });
 
   return {
     chargeId: charge.chargeId,
     memberId: charge.memberId,
-    memberName: MEMBER_NAMES[charge.memberId] ?? charge.memberId,
+    memberName: resolveStudentName(charge.memberId, studentNames, charge.memberNameSnapshot),
     roomId: charge.roomId,
     roomNumber: charge.roomNumber,
     month: charge.month,
@@ -159,7 +166,7 @@ export function serializeRoomCharge(charge, { payments = [], now = new Date() } 
     issuedByRole: charge.issuedByRole,
     cancelledAt: serializeDate(charge.cancelledAt),
     cancelReason: charge.cancelReason,
-    payments: payments.map(serializeRoomPayment),
+    payments: payments.map(payment => serializeRoomPayment(payment, { studentNames })),
   };
 }
 

@@ -96,6 +96,18 @@ describe('authoritative room assignment resolution', () => {
 });
 
 describe('configured member roster and historical admission', () => {
+  test('empty v3 student registry stays empty instead of fabricating legacy members', async () => {
+    const service = createMemberService({
+      runtimeProfile: 'v3',
+      resolver: { listCurrent: async () => [], listAll: async () => [] },
+      accounts: { listAll: async () => [] },
+      stays: { listAllStays: async () => [] },
+      rooms: { findAssignmentOnDate: async () => null },
+    });
+    assert.deepEqual(await service.listMembers(), []);
+    assert.equal(await service.findMemberById('gaurav'), null);
+  });
+
   test('lists all configured identities without fabricating stays', async () => {
     const service = createMemberService({
       resolver: {

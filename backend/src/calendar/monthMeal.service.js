@@ -83,10 +83,14 @@ export function createMonthMealService({
   snapshots = null,
   corrections = null,
   timezone = env.appTimezone,
+  runtimeProfile = env.runtimeProfile,
 } = {}) {
   return Object.freeze({
     async getMonth(month) {
       try {
+        if (runtimeProfile === 'v3' && !students) {
+          throw new HttpError(503, 'Student registry is unavailable for v3 calendar.');
+        }
         const documents = await repository.findInDateRange(
           firstDateOfMonth(month),
           lastDateOfMonth(month),
@@ -113,6 +117,7 @@ export function createMonthMealService({
           days,
         };
       } catch (error) {
+        if (error instanceof HttpError) throw error;
         if (/historical meal (?:correction )?snapshot/i.test(error.message)) {
           throw new HttpError(503, error.message, { cause: error });
         }

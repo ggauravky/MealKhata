@@ -1,9 +1,8 @@
-import { MEMBER_IDS } from '../config/members.js';
 import { DEFAULT_MEAL_STATUS, MEAL_TYPES } from './meal.constants.js';
-import { normalizeParticipantIds } from './mealParticipants.js';
+import { resolveMealParticipants } from './mealParticipants.js';
 
-export function createDefaultMeals(participants = MEMBER_IDS) {
-  const participantIds = normalizeParticipantIds(participants);
+export function createDefaultMeals(participants, options) {
+  const participantIds = resolveMealParticipants(participants, options);
   return Object.fromEntries(
     MEAL_TYPES.map((mealType) => [
       mealType,
@@ -12,12 +11,13 @@ export function createDefaultMeals(participants = MEMBER_IDS) {
   );
 }
 
-export function createDefaultMealDay(date, participants = MEMBER_IDS) {
+export function createDefaultMealDay(date, participants, options) {
+  const participantIds = resolveMealParticipants(participants, options);
   return {
     date,
     schemaVersion: 3,
-    participantOrder: normalizeParticipantIds(participants),
-    meals: createDefaultMeals(participants),
+    participantOrder: participantIds,
+    meals: createDefaultMeals(participantIds, options),
     allocations: {
       morning: null,
       night: null,
