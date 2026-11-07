@@ -1,0 +1,242 @@
+/**
+ * MealKhata 2.0 - Finance Routes
+ * Read-only endpoints for unified financial dashboard, reports, and PDF statements.
+ */
+
+import { Router } from 'express';
+import { ROLES } from '../auth/permissions.js';
+import { studentResolver } from '../students/studentResolver.service.js';
+import { assertSafeStudentId } from '../students/studentId.js';
+import { requireAdminOrAbove, requireAuthenticated, requireSuperAdmin } from '../middleware/authorize.js';
+import { isValidLogicalMonth } from '../utils/month.js';
+import { HttpError } from '../utils/HttpError.js';
+import { financialOverviewService } from '../finance/financialOverview.service.js';
+import { monthlyFinancialPdfService } from '../finance/monthlyFinancialPdf.service.js';
+import { creditAllocationService } from '../finance/creditAllocation.service.js';
+
+function validateMonthParam(req, res, next) {
+  const month = req.params.month;
+  if (!isValidLogicalMonth(month)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Month must be a valid calendar month in YYYY-MM format.',
+    });
+  }
+  return next();
+}
+
+async function validateStudentId(studentId, students) {
+  try {
+    assertSafeStudentId(studentId);
+  } catch {
+    throw new HttpError(400, `Invalid member ID: ${studentId}`);
+  }
+  if (students) await students.assertKnown(studentId);
+}
+
+export function createFinanceRouter({
+  overviewService = financialOverviewService,
+  pdfService = monthlyFinancialPdfService,
+  credits = creditAllocationService,
+  students = null,
+} = {}) {
+  const router = Router();
+
+  router.get('/unallocated-credits', requireSuperAdmin, async (req, res, next) => {
+    try {
+      const data = await credits.listCredits({
+        memberId: req.query.memberId || null,
+        status: req.query.status || null,
+        actorRole: req.auth.role,
+      });
+      return res.json({ success: true, data });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post('/unallocated-credits/:creditId/allocation-preview', requireSuperAdmin, async (req, res, next) => {
+    try {
+      const data = await credits.previewAllocation({
+        ...req.body,
+        creditId: req.params.creditId,
+        actorRole: req.auth.role,
+      });
+      return res.json({ success: true, data });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post('/unallocated-credits/:creditId/allocate', requireSuperAdmin, async (req, res, next) => {
+    try {
+      const data = await credits.allocate({
+        ...req.body,
+        creditId: req.params.creditId,
+        actorRole: req.auth.role,
+      });
+      return res.json({ success: true, data });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  // 1. Household Unified Overview (Admin / Super Admin only)
+  router.get('/overview/:month', requireAdminOrAbove, validateMonthParam, async (req, res, next) => {
+    try {
+      const month = req.params.month;
+      const data = await overviewService.getHouseholdFinancialOverview({
+        month,
+        actorRole: req.auth.role,
+      });
+      return res.json({ success: true, data });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  // 2. Member Unified Overview for current user (Authenticated members)
+  router.get('/me/:month', requireAuthenticated, validateMonthParam, async (req, res, next) => {
+    try {
+      const month = req.params.month;
+      let targetMemberId = req.auth.memberId;
+
+      // If Admin without member identity, allow query param override or default
+      if (!targetMemberId && (req.auth.role === ROLES.ADMIN || req.auth.role === ROLES.SUPERADMIN)) {
+        targetMemberId = req.query.memberId || null;
+      }
+
+      if (!targetMemberId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Member identity required to view personal financial overview.',
+        });
+      }
+      await validateStudentId(targetMemberId, req.auth.role === ROLES.MEMBER ? null : students);
+
+      const data = await overviewService.getMemberFinancialOverview({
+        memberId: targetMemberId,
+        month,
+        actorRole: req.auth.role,
+      });
+      return res.json({ success: true, data });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  // 3. Member Unified Overview by ID (Admin / Super Admin only)
+  router.get('/members/:memberId/:month', requireAdminOrAbove, validateMonthParam, async (req, res, next) => {
+    try {
+      const { memberId, month } = req.params;
+      await validateStudentId(memberId, students);
+
+      const data = await overviewService.getMemberFinancialOverview({
+        memberId,
+        month,
+        actorRole: req.auth.role,
+      });
+      return res.json({ success: true, data });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  // 4. Download Personal Statement PDF (Authenticated Member)
+  router.get('/monthly/:month/my-statement.pdf', requireAuthenticated, validateMonthParam, async (req, res, next) => {
+    try {
+      const month = req.params.month;
+      let targetMemberId = req.auth.memberId;
+
+      if (!targetMemberId && (req.auth.role === ROLES.ADMIN || req.auth.role === ROLES.SUPERADMIN)) {
+        targetMemberId = req.query.memberId || null;
+      }
+
+      if (!targetMemberId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Member identity required to download personal statement.',
+        });
+      }
+      await validateStudentId(targetMemberId, req.auth.role === ROLES.MEMBER ? null : students);
+
+      const pdfDoc = await pdfService.generateMemberStatementPdf({
+        memberId: targetMemberId,
+        month,
+        actorRole: req.auth.role,
+      });
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="MealKhata-Personal-Statement-${targetMemberId}-${month}.pdf"`,
+      );
+      res.setHeader('Cache-Control', 'no-store');
+
+      pdfDoc.pipe(res);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  // 5. Download Household Statement PDF (Admin / Super Admin only)
+  router.get(
+    '/monthly/:month/household-statement.pdf',
+    requireAdminOrAbove,
+    validateMonthParam,
+    async (req, res, next) => {
+      try {
+        const month = req.params.month;
+        const pdfDoc = await pdfService.generateHouseholdStatementPdf({
+          month,
+          actorRole: req.auth.role,
+        });
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="MealKhata-Household-Statement-${month}.pdf"`,
+        );
+        res.setHeader('Cache-Control', 'no-store');
+
+        pdfDoc.pipe(res);
+      } catch (error) {
+        return next(error);
+      }
+    },
+  );
+
+  // 6. Download Specific Member Statement PDF (Admin / Super Admin only)
+  router.get(
+    '/monthly/:month/members/:memberId/statement.pdf',
+    requireAdminOrAbove,
+    validateMonthParam,
+    async (req, res, next) => {
+      try {
+        const { memberId, month } = req.params;
+        await validateStudentId(memberId, students);
+
+        const pdfDoc = await pdfService.generateMemberStatementPdf({
+          memberId,
+          month,
+          actorRole: req.auth.role,
+        });
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="MealKhata-Personal-Statement-${memberId}-${month}.pdf"`,
+        );
+        res.setHeader('Cache-Control', 'no-store');
+
+        pdfDoc.pipe(res);
+      } catch (error) {
+        return next(error);
+      }
+    },
+  );
+
+  return router;
+}
+
+export const financeRouter = createFinanceRouter({ students: studentResolver });

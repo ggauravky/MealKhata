@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { PageHeader } from '../components/common/PageHeader.jsx';
 import { AttentionSection } from '../components/dashboard/AttentionSection.jsx';
+import { DashboardRoomFeeCard } from '../components/dashboard/DashboardRoomFeeCard.jsx';
+import { DashboardExpenseCard } from '../components/dashboard/DashboardExpenseCard.jsx';
 import { HouseholdMonthlyCard } from '../components/dashboard/HouseholdMonthlyCard.jsx';
 import { HouseholdTodayCard } from '../components/dashboard/HouseholdTodayCard.jsx';
 import { NextReminderCard } from '../components/dashboard/NextReminderCard.jsx';
@@ -13,21 +15,29 @@ import { ErrorState } from '../components/ui/ErrorState.jsx';
 import { Skeleton } from '../components/ui/skeleton.jsx';
 import { useAuth } from '../hooks/useAuth.js';
 import { useDashboard } from '../hooks/useDashboard.js';
+import { useOperationalStudents } from '../hooks/useOperationalStudents.js';
 import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
+import { useMemberFinance, useHouseholdFinance } from '../hooks/useFinance.js';
+import { FinancialOverviewCard } from '../components/finance/FinancialOverviewCard.jsx';
+import { FinancialHouseholdSummary } from '../components/finance/FinancialHouseholdSummary.jsx';
+import { DashboardStayCard } from '../components/dashboard/DashboardStayCard.jsx';
 import { usePwa } from '../hooks/usePwa.js';
 import { api } from '../lib/api.js';
-import { formatLogicalDate } from '../lib/logicalDate.js';
+import { formatLogicalDate, getIndiaCurrentLogicalMonth } from '../lib/logicalDate.js';
+import { resolveDayParticipants } from '../lib/operationalRoster.js';
 
 export function DashboardPage() {
   useDocumentTitle('Dashboard');
   const auth = useAuth();
   const { isOnline } = usePwa();
   const dashboard = useDashboard();
+  const studentRoster = useOperationalStudents({ includeArchived: true, enabled: auth.authenticated && auth.role !== 'viewer' });
   const [pendingRow, setPendingRow] = useState('');
   const [saveMessage, setSaveMessage] = useState('');
   const [saveError, setSaveError] = useState('');
 
   const data = dashboard.data;
+  const dayParticipants = resolveDayParticipants(data?.meals, studentRoster.data);
 
   const handleMealChange = async (mealType, memberId, status) => {
     if (!isOnline) {
@@ -51,6 +61,7 @@ export function DashboardPage() {
 
       if (response.data) {
         dashboard.applyMealDayUpdate(response.data);
+        dashboard.refresh();
       }
 
       if (response.allocationReset) {
@@ -73,6 +84,9 @@ export function DashboardPage() {
 
   const isMember = auth.role === 'member';
   const isAdminOrSuper = auth.role === 'admin' || auth.role === 'superadmin';
+  const currentMonth = data?.today ? data.today.slice(0, 7) : getIndiaCurrentLogicalMonth();
+  const memberFinance = useMemberFinance(currentMonth);
+  const householdFinance = useHouseholdFinance(currentMonth);
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -108,6 +122,11 @@ export function DashboardPage() {
         />
       )}
 
+      {studentRoster.error && (
+        <ErrorState compact title="Student names unavailable" message={studentRoster.error}
+          actionLabel="Try again" onAction={studentRoster.refresh} />
+      )}
+
       {data && (
         <>
           {saveError && (
@@ -128,6 +147,24 @@ export function DashboardPage() {
 
           {/* Attention items if present */}
           <AttentionSection items={data.attention} />
+
+          {/* Phase 3 Unified Financial Overview (Member) */}
+          {isMember && memberFinance.data && (
+            <FinancialOverviewCard
+              overview={memberFinance.data}
+              onRefresh={memberFinance.refresh}
+            />
+          )}
+
+          {/* Phase 3 Unified Financial Overview (Admin / SuperAdmin) */}
+          {isAdminOrSuper && householdFinance.data && (
+            <FinancialHouseholdSummary
+              household={householdFinance.data}
+            />
+          )}
+
+          {/* Phase 4 Hostel Stay Lifecycle Card */}
+          <DashboardStayCard />
 
           {/* Member view: 1. Personal Meals Today */}
           {isMember && data.personalHero && (
@@ -151,22 +188,26 @@ export function DashboardPage() {
           {isAdminOrSuper && data.meals && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <MealCard
+                participants={dayParticipants}
                 mealType="morning"
                 title="Morning"
                 meals={data.meals.morning}
                 allocation={data.meals.allocations?.morning}
                 allocationDetails={data.meals.allocationDetails?.morning}
+                pricing={data.meals.pricing?.morning}
                 editable={Boolean(data.meals.permissions?.canEdit) && isOnline}
                 editableMemberIds={data.meals.permissions?.editableMemberIds}
                 pendingRow={pendingRow}
                 onChange={handleMealChange}
               />
               <MealCard
+                participants={dayParticipants}
                 mealType="night"
                 title="Night"
                 meals={data.meals.night}
                 allocation={data.meals.allocations?.night}
                 allocationDetails={data.meals.allocationDetails?.night}
+                pricing={data.meals.pricing?.night}
                 editable={Boolean(data.meals.permissions?.canEdit) && isOnline}
                 editableMemberIds={data.meals.permissions?.editableMemberIds}
                 pendingRow={pendingRow}
@@ -183,6 +224,12 @@ export function DashboardPage() {
           {data.currentMonth?.household && (
             <HouseholdMonthlyCard household={data.currentMonth.household} />
           )}
+
+          {/* Phase 1 Room Fees Card */}
+          <DashboardRoomFeeCard month={data.today ? data.today.slice(0, 7) : getIndiaCurrentLogicalMonth()} />
+
+          {/* Phase 2 Other Expenses Card */}
+          <DashboardExpenseCard month={data.today ? data.today.slice(0, 7) : getIndiaCurrentLogicalMonth()} />
 
           {/* Reminder widget */}
           {data.reminders && (

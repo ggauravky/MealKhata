@@ -69,3 +69,21 @@ export function getIndiaGreeting(now = new Date(), timeZone = env.appTimezone) {
   }
   return 'Good evening';
 }
+
+export function getPreviousLogicalDate(value) {
+  if (!isValidLogicalDate(value)) {
+    throw new TypeError('value must be a valid date in YYYY-MM-DD format');
+  }
+  const d = new Date(`${value}T12:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+export function getNextLogicalDate(value) {
+  if (!isValidLogicalDate(value)) {
+    throw new TypeError('value must be a valid date in YYYY-MM-DD format');
+  }
+  const d = new Date(`${value}T12:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}

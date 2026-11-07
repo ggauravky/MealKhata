@@ -425,6 +425,427 @@ describe('Phase 12: Security & Reliability', () => {
       assert.equal(passed, false);
       assert.ok(issues.some((i) => i.includes('Closed snapshot member sums do not equal room total')));
     });
+
+    test('flags overlapping fee plans, member assignments, and room-capacity intervals', async () => {
+      const fixture = {
+        rooms: [
+          { roomId: '00000000-0000-4000-8000-000000000001', roomNumber: 'A', capacity: 1 },
+          { roomId: '00000000-0000-4000-8000-000000000002', roomNumber: 'B', capacity: 1 },
+        ],
+        room_assignments: [
+          {
+            assignmentId: '10000000-0000-4000-8000-000000000001',
+            memberId: 'gaurav',
+            roomId: '00000000-0000-4000-8000-000000000001',
+            effectiveFromMonth: '2026-10',
+            effectiveFromDate: '2026-10-01',
+            effectiveUntilMonth: '2026-10',
+            effectiveUntilDate: '2026-10-20',
+          },
+          {
+            assignmentId: '10000000-0000-4000-8000-000000000002',
+            memberId: 'gaurav',
+            roomId: '00000000-0000-4000-8000-000000000002',
+            effectiveFromMonth: '2026-10',
+            effectiveFromDate: '2026-10-15',
+            effectiveUntilMonth: null,
+            effectiveUntilDate: null,
+          },
+          {
+            assignmentId: '10000000-0000-4000-8000-000000000003',
+            memberId: 'nikhil',
+            roomId: '00000000-0000-4000-8000-000000000001',
+            effectiveFromMonth: '2026-10',
+            effectiveFromDate: '2026-10-10',
+            effectiveUntilMonth: '2026-10',
+            effectiveUntilDate: '2026-10-12',
+          },
+        ],
+        room_fee_plans: [
+          {
+            feePlanId: '20000000-0000-4000-8000-000000000001',
+            memberId: 'gaurav',
+            amountPaise: 280000,
+            effectiveFromMonth: '2026-10',
+            effectiveUntilMonth: null,
+          },
+          {
+            feePlanId: '20000000-0000-4000-8000-000000000002',
+            memberId: 'gaurav',
+            amountPaise: 300000,
+            effectiveFromMonth: '2026-10',
+            effectiveUntilMonth: null,
+          },
+        ],
+      };
+      const mockDb = {
+        collection: (name) => ({
+          find: () => ({ toArray: async () => fixture[name] || [] }),
+        }),
+      };
+
+      const { passed, issues } = await verifyDataIntegrity({ db: mockDb });
+      assert.equal(passed, false);
+      assert.ok(issues.some((issue) => issue.includes('Overlapping fee plans for member gaurav')));
+      assert.ok(issues.some((issue) => issue.includes('Overlapping room assignments for member gaurav')));
+      assert.ok(issues.some((issue) => issue.includes('Room A exceeds capacity 1')));
+    });
+
+    test('does not report inactive historical assignment or fee-plan overlaps as active conflicts', async () => {
+      const fixture = {
+        rooms: [
+          { roomId: '00000000-0000-4000-8000-000000000001', roomNumber: 'A', capacity: 1 },
+        ],
+        room_assignments: [
+          {
+            assignmentId: '10000000-0000-4000-8000-000000000001',
+            memberId: 'gaurav',
+            roomId: '00000000-0000-4000-8000-000000000001',
+            effectiveFromMonth: '2026-10',
+            effectiveFromDate: '2026-10-01',
+            effectiveUntilMonth: null,
+            effectiveUntilDate: null,
+            cancelledAt: new Date('2026-10-02T00:00:00.000Z'),
+          },
+          {
+            assignmentId: '10000000-0000-4000-8000-000000000002',
+            memberId: 'nikhil',
+            roomId: '00000000-0000-4000-8000-000000000001',
+            effectiveFromMonth: '2026-10',
+            effectiveFromDate: '2026-10-01',
+            effectiveUntilMonth: null,
+            effectiveUntilDate: null,
+          },
+        ],
+        room_fee_plans: [
+          {
+            feePlanId: '20000000-0000-4000-8000-000000000001',
+            memberId: 'gaurav',
+            amountPaise: 280000,
+            effectiveFromMonth: '2026-10',
+            effectiveUntilMonth: null,
+            supersededAt: new Date('2026-10-02T00:00:00.000Z'),
+          },
+          {
+            feePlanId: '20000000-0000-4000-8000-000000000002',
+            memberId: 'gaurav',
+            amountPaise: 300000,
+            effectiveFromMonth: '2026-10',
+            effectiveUntilMonth: null,
+          },
+        ],
+      };
+      const mockDb = {
+        collection: (name) => ({
+          find: () => ({ toArray: async () => fixture[name] || [] }),
+        }),
+      };
+
+      const { issues } = await verifyDataIntegrity({ db: mockDb });
+      assert.ok(!issues.some((issue) => issue.includes('Overlapping fee plans')));
+      assert.ok(!issues.some((issue) => issue.includes('Overlapping room assignments')));
+      assert.ok(!issues.some((issue) => issue.includes('exceeds capacity')));
+    });
+
+    test('flags reversed Room Assignment and Fee Plan intervals', async () => {
+      const fixture = {
+        rooms: [
+          { roomId: '00000000-0000-4000-8000-000000000001', roomNumber: 'A', capacity: 1 },
+        ],
+        room_assignments: [
+          {
+            assignmentId: '10000000-0000-4000-8000-000000000001',
+            memberId: 'gaurav',
+            roomId: '00000000-0000-4000-8000-000000000001',
+            effectiveFromMonth: '2026-10',
+            effectiveFromDate: '2026-10-20',
+            effectiveUntilMonth: '2026-10',
+            effectiveUntilDate: '2026-10-01',
+          },
+        ],
+        room_fee_plans: [
+          {
+            feePlanId: '20000000-0000-4000-8000-000000000001',
+            memberId: 'gaurav',
+            amountPaise: 280000,
+            effectiveFromMonth: '2026-11',
+            effectiveUntilMonth: '2026-10',
+          },
+        ],
+      };
+      const mockDb = {
+        collection: (name) => ({
+          find: () => ({ toArray: async () => fixture[name] || [] }),
+        }),
+      };
+
+      const { passed, issues } = await verifyDataIntegrity({ db: mockDb });
+      assert.equal(passed, false);
+      assert.ok(issues.some((issue) => issue.includes('Assignment 10000000-0000-4000-8000-000000000001 ends before it starts')));
+      assert.ok(issues.some((issue) => issue.includes('Fee plan 20000000-0000-4000-8000-000000000001 ends before it starts')));
+    });
+
+    test('flags broken Stay, deposit, transaction, and clearance references', async () => {
+      const fixture = {
+        rooms: [
+          { roomId: '00000000-0000-4000-8000-000000000001', roomNumber: 'A', capacity: 1 },
+        ],
+        hostel_stays: [
+          {
+            stayId: 'stay-checked-out',
+            memberId: 'gaurav',
+            joinedOn: '2026-10-01',
+            actualLeftOn: '2026-10-10',
+            initialRoomId: '00000000-0000-4000-8000-000000000001',
+            currentRoomId: '00000000-0000-4000-8000-000000000099',
+            status: 'CHECKED_OUT',
+          },
+        ],
+        hostel_deposit_accounts: [
+          {
+            depositAccountId: 'deposit-open',
+            stayId: 'stay-checked-out',
+            memberId: 'gaurav',
+            expectedDepositPaise: 0,
+            status: 'OPEN',
+          },
+          {
+            depositAccountId: 'deposit-orphan',
+            stayId: 'missing-stay',
+            memberId: 'nikhil',
+            expectedDepositPaise: 10000,
+            status: 'OPEN',
+          },
+        ],
+        hostel_deposit_transactions: [
+          {
+            depositTransactionId: 'tx-orphan',
+            depositAccountId: 'missing-account',
+            stayId: 'missing-stay',
+            memberId: 'nikhil',
+            type: 'RECEIVED',
+            amountPaise: 10000,
+            status: 'recorded',
+          },
+        ],
+        hostel_clearances: [
+          {
+            clearanceId: 'clearance-orphan',
+            stayId: 'missing-stay',
+            memberId: 'nikhil',
+            sequence: 1,
+            clearanceStatus: 'NO_DUES',
+            depositSummary: { heldPaise: 0 },
+          },
+        ],
+      };
+      const mockDb = {
+        collection: (name) => ({
+          find: () => ({ toArray: async () => fixture[name] || [] }),
+        }),
+      };
+
+      const { passed, issues } = await verifyDataIntegrity({ db: mockDb });
+      assert.equal(passed, false);
+      assert.ok(issues.some((issue) => issue.includes('currentRoomId references missing room')));
+      assert.ok(issues.some((issue) => issue.includes('Deposit account deposit-orphan references missing stay')));
+      assert.ok(issues.some((issue) => issue.includes('Transaction tx-orphan references missing deposit account')));
+      assert.ok(issues.some((issue) => issue.includes('Clearance clearance-orphan references missing stay')));
+      assert.ok(issues.some((issue) => issue.includes('Checked-out stay stay-checked-out has OPEN deposit account')));
+    });
+
+    test('accepts a not-required deposit and a fully audited revoked clearance on a restored active Stay', async () => {
+      const fixture = {
+        rooms: [{ roomId: 'room-a', roomNumber: 'A', capacity: 1 }],
+        room_assignments: [{
+          assignmentId: 'assignment-current',
+          memberId: 'gaurav',
+          roomId: 'room-a',
+          effectiveFromMonth: '2026-10',
+          effectiveFromDate: '2026-10-01',
+          effectiveUntilMonth: null,
+          effectiveUntilDate: null,
+        }],
+        hostel_stays: [{
+          stayId: 'stay-restored',
+          memberId: 'gaurav',
+          joinedOn: '2026-10-01',
+          actualLeftOn: null,
+          initialRoomId: 'room-a',
+          currentRoomId: 'room-a',
+          status: 'ACTIVE',
+        }],
+        hostel_deposit_accounts: [{
+          depositAccountId: 'deposit-none',
+          stayId: 'stay-restored',
+          memberId: 'gaurav',
+          expectedDepositPaise: 0,
+          status: 'NOT_REQUIRED',
+        }],
+        hostel_clearances: [{
+          clearanceId: 'clearance-old',
+          stayId: 'stay-restored',
+          memberId: 'gaurav',
+          sequence: 1,
+          clearanceStatus: 'NO_DUES',
+          validityStatus: 'REVOKED',
+          revokedAt: new Date('2026-10-21T00:00:00.000Z'),
+          revokedByRole: 'superadmin',
+          revocationReason: 'Incorrect checkout restored',
+          restorationId: 'restore-1',
+          depositSummary: { heldPaise: 0 },
+        }, {
+          clearanceId: 'clearance-superseded',
+          stayId: 'stay-restored',
+          memberId: 'gaurav',
+          sequence: 0,
+          clearanceStatus: 'NO_DUES',
+          validityStatus: 'SUPERSEDED',
+          supersededAt: new Date('2026-10-20T00:00:00.000Z'),
+          supersededByRole: 'superadmin',
+          supersessionReason: 'Verified replacement issued',
+          supersededByClearanceId: 'clearance-old',
+          depositSummary: { heldPaise: 0 },
+        }],
+      };
+      const mockDb = {
+        collection: (name) => ({ find: () => ({ toArray: async () => fixture[name] || [] }) }),
+      };
+
+      const { issues } = await verifyDataIntegrity({ db: mockDb });
+      assert.ok(!issues.some((issue) => issue.includes('deposit-none')));
+      assert.ok(!issues.some((issue) => issue.includes('clearance-old')));
+      assert.ok(!issues.some((issue) => issue.includes('clearance-superseded')));
+    });
+
+    test('flags active Stays without a matching current assignment and invalid current clearances', async () => {
+      const fixture = {
+        rooms: [{ roomId: 'room-a', roomNumber: 'A', capacity: 1 }],
+        room_assignments: [{
+          assignmentId: 'assignment-ended',
+          memberId: 'gaurav',
+          roomId: 'room-a',
+          effectiveFromMonth: '2026-10',
+          effectiveFromDate: '2026-10-01',
+          effectiveUntilMonth: '2026-10',
+          effectiveUntilDate: '2026-10-20',
+        }],
+        hostel_stays: [{
+          stayId: 'stay-active-ended-assignment',
+          memberId: 'gaurav',
+          joinedOn: '2026-10-01',
+          actualLeftOn: null,
+          initialRoomId: 'room-a',
+          currentRoomId: 'room-a',
+          admissionAssignmentId: 'assignment-ended',
+          status: 'ACTIVE',
+        }, {
+          stayId: 'stay-checked-out-clearances',
+          memberId: 'nikhil',
+          joinedOn: '2026-10-01',
+          actualLeftOn: '2026-10-20',
+          initialRoomId: 'room-a',
+          currentRoomId: 'room-a',
+          status: 'CHECKED_OUT',
+        }],
+        hostel_clearances: [{
+          clearanceId: 'clearance-one',
+          stayId: 'stay-checked-out-clearances',
+          memberId: 'nikhil',
+          sequence: 1,
+          clearanceStatus: 'NO_DUES',
+          validityStatus: 'ACTIVE',
+          depositSummary: { heldPaise: 0 },
+        }, {
+          clearanceId: 'clearance-two',
+          stayId: 'stay-checked-out-clearances',
+          memberId: 'nikhil',
+          sequence: 2,
+          clearanceStatus: 'NO_DUES',
+          validityStatus: 'ACTIVE',
+          depositSummary: { heldPaise: 0 },
+        }, {
+          clearanceId: 'clearance-bad-link',
+          stayId: 'stay-checked-out-clearances',
+          memberId: 'nikhil',
+          sequence: 0,
+          clearanceStatus: 'NO_DUES',
+          validityStatus: 'SUPERSEDED',
+          supersededAt: new Date('2026-10-20T00:00:00.000Z'),
+          supersededByRole: 'superadmin',
+          supersessionReason: 'Fixture replacement',
+          supersededByClearanceId: 'missing-clearance',
+          depositSummary: { heldPaise: 0 },
+        }],
+      };
+      const mockDb = {
+        collection: (name) => ({ find: () => ({ toArray: async () => fixture[name] || [] }) }),
+      };
+
+      const { passed, issues } = await verifyDataIntegrity({ db: mockDb });
+      assert.equal(passed, false);
+      assert.ok(issues.some((issue) => issue.includes('has no uncancelled current Room Assignment')));
+      assert.ok(issues.some((issue) => issue.includes('multiple active clearances')));
+      assert.ok(issues.some((issue) => issue.includes('references invalid replacement missing-clearance')));
+    });
+
+    test('flags fabricated not-required deposit history and active clearance on an active Stay', async () => {
+      const fixture = {
+        rooms: [{ roomId: 'room-a', roomNumber: 'A', capacity: 1 }],
+        hostel_stays: [{
+          stayId: 'stay-active',
+          memberId: 'gaurav',
+          joinedOn: '2026-10-01',
+          actualLeftOn: null,
+          initialRoomId: 'room-a',
+          currentRoomId: 'room-a',
+          status: 'ACTIVE',
+        }],
+        hostel_deposit_accounts: [{
+          depositAccountId: 'deposit-invalid-none',
+          stayId: 'stay-active',
+          memberId: 'gaurav',
+          expectedDepositPaise: 10000,
+          status: 'NOT_REQUIRED',
+        }],
+        hostel_deposit_transactions: [{
+          depositTransactionId: 'tx-fabricated',
+          depositAccountId: 'deposit-invalid-none',
+          stayId: 'stay-active',
+          memberId: 'gaurav',
+          type: 'RECEIVED',
+          amountPaise: 10000,
+          status: 'recorded',
+        }],
+        hostel_clearances: [{
+          clearanceId: 'clearance-active',
+          stayId: 'stay-active',
+          memberId: 'gaurav',
+          sequence: 1,
+          clearanceStatus: 'NO_DUES',
+          validityStatus: 'ACTIVE',
+          depositSummary: { heldPaise: 0 },
+        }, {
+          clearanceId: 'clearance-invalid-superseded',
+          stayId: 'stay-active',
+          memberId: 'gaurav',
+          sequence: 0,
+          clearanceStatus: 'NO_DUES',
+          validityStatus: 'SUPERSEDED',
+          depositSummary: { heldPaise: 0 },
+        }],
+      };
+      const mockDb = {
+        collection: (name) => ({ find: () => ({ toArray: async () => fixture[name] || [] }) }),
+      };
+
+      const { passed, issues } = await verifyDataIntegrity({ db: mockDb });
+      assert.equal(passed, false);
+      assert.ok(issues.some((issue) => issue.includes('NOT_REQUIRED account deposit-invalid-none must have zero expected deposit')));
+      assert.ok(issues.some((issue) => issue.includes('NOT_REQUIRED account deposit-invalid-none has recorded deposit transactions')));
+      assert.ok(issues.some((issue) => issue.includes('Active stay stay-active has active clearance clearance-active')));
+      assert.ok(issues.some((issue) => issue.includes('Superseded clearance clearance-invalid-superseded is missing supersession audit metadata')));
+    });
   });
 
   describe('Full Recovery Drill Simulation', () => {

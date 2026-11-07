@@ -3,6 +3,7 @@ import { app } from './app.js';
 import { connectDatabase, disconnectDatabase } from './config/db.js';
 import { env, validateEnvironment } from './config/env.js';
 import { LIFECYCLE_STATES, setLifecycleState } from './config/lifecycle.js';
+import { assertRuntimeDatabaseProfile } from './config/runtimeDatabaseProfile.js';
 import { createSocketServer } from './socket.js';
 import { logger } from './utils/logger.js';
 
@@ -22,6 +23,7 @@ let shuttingDown = false;
 export async function startServer() {
   validateEnvironment();
   await connectDatabase();
+  await assertRuntimeDatabaseProfile();
 
   return new Promise((resolve) => {
     httpServer.listen(env.port, () => {
@@ -75,7 +77,7 @@ export async function shutdown(signal = 'MANUAL', { exitCode = 0 } = {}) {
       process.exit(exitCode);
     }
   } catch (error) {
-    logger.error('server.shutdown.error', { signal, message: error.message });
+    logger.error('server.shutdown.error', { signal, name: error?.name });
     clearTimeout(forceExitTimer);
     process.exit(1);
   }
@@ -86,22 +88,20 @@ process.once('SIGTERM', () => void shutdown('SIGTERM', { exitCode: 0 }));
 
 process.on('uncaughtException', (error) => {
   logger.error('process.uncaught_exception', {
-    name: error.name,
-    message: error.message,
+    name: error?.name,
   });
   void shutdown('uncaughtException', { exitCode: 1 });
 });
 
 process.on('unhandledRejection', (reason) => {
-  const message = reason instanceof Error ? reason.message : String(reason);
-  logger.error('process.unhandled_rejection', { message });
+  logger.error('process.unhandled_rejection', { name: reason instanceof Error ? reason.name : 'UnknownRejection' });
   void shutdown('unhandledRejection', { exitCode: 1 });
 });
 
 // Run startup only when invoked directly
 if (process.argv[1] && process.argv[1].endsWith('server.js')) {
   startServer().catch((error) => {
-    logger.error('server.start_failed', { message: error.message });
+    logger.error('server.start_failed', { name: error?.name });
     void disconnectDatabase().finally(() => {
       process.exit(1);
     });

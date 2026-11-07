@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.0.0-rc] - Unreleased
+
+### Added
+- Dynamic MongoDB student roster, optional canonical accounts, eligibility, archival and historical lookup; original student IDs remain stable.
+- Exact integer-paise meal allocation and reports for arbitrary student counts, with historical snapshot and correction authority.
+- Local-only blue-green migration rehearsal with read-only v2 archive baselines, authenticated legacy snapshot sidecars, full frozen-source meal-domain delta replay, pre/post verification and rollback checklist.
+- Chromium browser acceptance on an isolated MongoDB replica set and a feature-branch CI path for quality and browser checks.
+
+### Fixed
+- Final delta replays changed legacy snapshots, correction chains and monthly rates atomically with meal days and its checkpoint; a one-paisa drift fails verification.
+- Migration, restore and snapshot database tools require explicit isolated-test classification and local cluster identity for Task 14 execution.
+- Meal sharing row saves prevent overlapping clicks; meal audit uses resolved student names and its markup has no invalid nested paragraph.
+
+### Release status
+- Production cutover, real financial start date, Atlas target connection, deployment and live rollback remain subject to separate review and approval.
+
 ## [1.0.0] - 2026-10-01
 
 ### Added

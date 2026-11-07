@@ -1,0 +1,2108 @@
+import mongoose from 'mongoose';
+import { createHash, randomUUID } from 'node:crypto';
+import { env } from '../config/env.js';
+import { isSafeStudentId } from '../students/studentId.js';
+import { studentResolver } from '../students/studentResolver.service.js';
+import { STUDENT_STATUSES } from '../students/student.constants.js';
+import { financialBoundaryService } from '../finance/financialBoundary.service.js';
+import { HttpError } from '../utils/HttpError.js';
+import { isValidLogicalMonth, getPreviousLogicalMonth, compareLogicalMonths, getClampedDueDate, lastDateOfMonth } from '../utils/month.js';
+import { getLogicalDateInTimeZone, getPreviousLogicalDate, isValidLogicalDate } from '../utils/date.js';
+import { guardFinancialMutation } from '../finance/financialMutationGuard.js';
+import { runFinancialTransaction } from '../finance/financialTransaction.js';
+
+export function calculateMaxSimultaneousOccupancy({
+  roomAssignments = [],
+  targetAssignment,
+}) {
+  const targetFrom = targetAssignment.effectiveFromDate || `${targetAssignment.effectiveFromMonth}-01`;
+  const targetUntil = targetAssignment.effectiveUntilDate || (targetAssignment.effectiveUntilMonth ? lastDateOfMonth(targetAssignment.effectiveUntilMonth) : '9999-12-31');
+
+  const overlapping = [];
+  for (const a of roomAssignments) {
+    if (a.cancelledAt) continue;
+    if (a.assignmentId && a.assignmentId === targetAssignment.assignmentId) continue;
+    if (a.memberId === targetAssignment.memberId) continue;
+
+    const aFrom = a.effectiveFromDate || `${a.effectiveFromMonth}-01`;
+    const aUntil = a.effectiveUntilDate || (a.effectiveUntilMonth ? lastDateOfMonth(a.effectiveUntilMonth) : '9999-12-31');
+
+    if (aFrom <= targetUntil && targetFrom <= aUntil) {
+      overlapping.push({
+        from: aFrom > targetFrom ? aFrom : targetFrom,
+        until: aUntil < targetUntil ? aUntil : targetUntil,
+      });
+    }
+  }
+
+  const testDates = new Set();
+  testDates.add(targetFrom);
+  for (const interval of overlapping) {
+    testDates.add(interval.from);
+  }
+
+  let maxOccupancy = 0;
+  for (const date of testDates) {
+    let count = 1; // 1 for target assignment
+    for (const interval of overlapping) {
+      if (interval.from <= date && date <= interval.until) {
+        count += 1;
+      }
+    }
+    if (count > maxOccupancy) {
+      maxOccupancy = count;
+    }
+  }
+
+  return maxOccupancy;
+}
+
+export function findFeePlanScheduleConflicts(existingPlans, proposedPlan) {
+  const proposedUntil = proposedPlan.effectiveUntilMonth || '9999-12';
+  return existingPlans
+    .filter((plan) => !plan.supersededAt)
+    .filter((plan) => {
+      const existingUntil = plan.effectiveUntilMonth || '9999-12';
+      return plan.effectiveFromMonth <= proposedUntil
+        && proposedPlan.effectiveFromMonth <= existingUntil;
+    })
+    .map((plan) => {
+      const existingUntil = plan.effectiveUntilMonth || '9999-12';
+      return {
+        feePlanId: plan.feePlanId,
+        existingFromMonth: plan.effectiveFromMonth,
+        existingUntilMonth: plan.effectiveUntilMonth,
+        conflictFromMonth: plan.effectiveFromMonth > proposedPlan.effectiveFromMonth
+          ? plan.effectiveFromMonth
+          : proposedPlan.effectiveFromMonth,
+        conflictUntilMonth: existingUntil < proposedUntil ? existingUntil : proposedUntil,
+      };
+    });
+}
+import {
+  DEFAULT_DUE_DAY,
+  isValidRoomFeeAmount,
+  isValidRoomPaymentAmount,
+  isValidUuid,
+  MAX_INSTRUCTIONS_LENGTH,
+  MAX_REASON_LENGTH,
+  MAX_RECIPIENT_NAME_LENGTH,
+  MAX_REFERENCE_LENGTH,
+  MAX_ROOM_CAPACITY,
+  MAX_ROOM_LABEL_LENGTH,
+  MAX_ROOM_NUMBER_LENGTH,
+  MAX_UPI_ID_LENGTH,
+  MIN_DUE_DAY,
+  MAX_DUE_DAY,
+  MIN_ROOM_CAPACITY,
+  RECIPIENT_MODES,
+  ROOM_CHARGE_STATUSES,
+  ROOM_PAYMENT_METHODS,
+  ROOM_PAYMENT_STATUSES,
+} from './roomFee.constants.js';
+import {
+  canAssignRooms,
+  canIssueRoomCharges,
+  canManageFeePlans,
+  canManageRooms,
+  canRecordRoomPayment,
+  canViewAllRoomFees,
+  canVoidRoomPayment,
+  canAdjustRoomCharge,
+  canCancelRoomCharge,
+  canManageRoomPaymentSettings,
+} from './roomFee.permissions.js';
+import {
+  computeChargeFinancials,
+  serializeFeePlan,
+  serializePaymentSettings,
+  serializeRoom,
+  serializeRoomAssignment,
+  serializeRoomCharge,
+  serializeRoomPayment,
+} from './roomFee.serializer.js';
+
+export function createRoomFeeService({
+  repository,
+  students = null,
+  runtimeProfile = env.runtimeProfile,
+  boundary = null,
+  timezone = 'Asia/Kolkata',
+  now = () => new Date(),
+}) {
+  if (runtimeProfile === 'v3' && !students) {
+    throw new TypeError('Student directory is required for v3 Room Fees');
+  }
+  const getMembers = async ({ activeOnly = false } = {}) => {
+    if (students) return (await students.listAll())
+      .filter(student => !activeOnly || student.status === STUDENT_STATUSES.ACTIVE)
+      .map((student) => ({ id: student.studentId, name: student.displayName }));
+    const assignments = await repository.findAllAssignments?.() ?? [];
+    return [...new Set(assignments.map((assignment) => assignment.memberId))]
+      .filter(isSafeStudentId).sort().map((id) => ({ id, name: id }));
+  };
+  const getStudentNames = async () => students
+    ? new Map((await students.listAll()).map(({ studentId, displayName }) => [studentId, displayName]))
+    : null;
+  const assertKnownMember = async (memberId) => {
+    if (!isSafeStudentId(memberId)) throw new HttpError(400, 'Invalid member ID.');
+    if (students) await students.assertKnown(memberId);
+  };
+  function getCurrentMonth() {
+    return getLogicalDateInTimeZone(now(), timezone).slice(0, 7);
+  }
+
+  function validateReconciliationRequest({ memberId, schedule, reason, actorRole }) {
+    if (actorRole !== 'superadmin') {
+      throw new HttpError(403, 'Only Super Admin can reconcile Fee Plans.');
+    }
+    if (!isSafeStudentId(memberId)) {
+      throw new HttpError(400, 'Invalid member ID.');
+    }
+    if (typeof reason !== 'string' || !reason.trim() || reason.trim().length > MAX_REASON_LENGTH) {
+      throw new HttpError(400, `Reason is required and must not exceed ${MAX_REASON_LENGTH} characters.`);
+    }
+    if (!Array.isArray(schedule) || schedule.length === 0) {
+      throw new HttpError(400, 'At least one Fee Plan schedule period is required.');
+    }
+
+    const normalizedSchedule = schedule.map((period) => {
+      const effectiveUntilMonth = period.effectiveUntilMonth ?? null;
+      const dueDay = period.dueDay === undefined ? DEFAULT_DUE_DAY : period.dueDay;
+      if (!isValidLogicalMonth(period.effectiveFromMonth)) {
+        throw new HttpError(400, 'Every schedule period requires a valid effectiveFromMonth.');
+      }
+      if (effectiveUntilMonth !== null && !isValidLogicalMonth(effectiveUntilMonth)) {
+        throw new HttpError(400, 'effectiveUntilMonth must be in YYYY-MM format or null.');
+      }
+      if (effectiveUntilMonth && compareLogicalMonths(period.effectiveFromMonth, effectiveUntilMonth) > 0) {
+        throw new HttpError(400, 'A schedule period cannot end before it starts.');
+      }
+      if (!isValidRoomFeeAmount(period.amountPaise)) {
+        throw new HttpError(400, 'Every schedule period requires a valid non-negative amount in paise.');
+      }
+      if (!Number.isInteger(dueDay) || dueDay < MIN_DUE_DAY || dueDay > MAX_DUE_DAY) {
+        throw new HttpError(400, `Every dueDay must be between ${MIN_DUE_DAY} and ${MAX_DUE_DAY}.`);
+      }
+      return {
+        effectiveFromMonth: period.effectiveFromMonth,
+        effectiveUntilMonth,
+        amountPaise: period.amountPaise,
+        dueDay,
+      };
+    }).sort((a, b) => compareLogicalMonths(a.effectiveFromMonth, b.effectiveFromMonth));
+
+    for (let index = 1; index < normalizedSchedule.length; index += 1) {
+      const previous = normalizedSchedule[index - 1];
+      const current = normalizedSchedule[index];
+      if (!previous.effectiveUntilMonth
+        || compareLogicalMonths(current.effectiveFromMonth, previous.effectiveUntilMonth) <= 0) {
+        throw new HttpError(400, 'The approved Fee Plan schedule must not contain overlapping periods.');
+      }
+    }
+
+    return { normalizedSchedule, normalizedReason: reason.trim() };
+  }
+
+  async function buildFeePlanReconciliationPreview({
+    memberId,
+    schedule,
+    reason,
+    actorRole,
+    session = null,
+    scheduleRevision = null,
+  }) {
+    const { normalizedSchedule, normalizedReason } = validateReconciliationRequest({
+      memberId,
+      schedule,
+      reason,
+      actorRole,
+    });
+    const [plans, charges, persistedState] = await Promise.all([
+      repository.findFeePlansForMember(memberId, { session }),
+      repository.findChargesForMember(memberId, { session }),
+      repository.getFeeScheduleState(memberId, { session }),
+    ]);
+    const studentNames = await getStudentNames();
+    const activePlans = plans.filter((plan) => !plan.supersededAt);
+    const overlappingPairs = [];
+    for (let left = 0; left < activePlans.length; left += 1) {
+      for (let right = left + 1; right < activePlans.length; right += 1) {
+        const first = activePlans[left];
+        const second = activePlans[right];
+        const firstUntil = first.effectiveUntilMonth || '9999-12';
+        const secondUntil = second.effectiveUntilMonth || '9999-12';
+        if (first.effectiveFromMonth <= secondUntil && second.effectiveFromMonth <= firstUntil) {
+          overlappingPairs.push({
+            feePlanIds: [first.feePlanId, second.feePlanId].sort(),
+            fromMonth: first.effectiveFromMonth > second.effectiveFromMonth
+              ? first.effectiveFromMonth
+              : second.effectiveFromMonth,
+            untilMonth: firstUntil < secondUntil ? firstUntil : secondUntil,
+          });
+        }
+      }
+    }
+    overlappingPairs.sort((a, b) => a.feePlanIds.join(':').localeCompare(b.feePlanIds.join(':')));
+
+    const chargesByPlan = new Map();
+    for (const charge of charges) {
+      if (!charge.feePlanId) continue;
+      if (!chargesByPlan.has(charge.feePlanId)) chargesByPlan.set(charge.feePlanId, []);
+      chargesByPlan.get(charge.feePlanId).push(charge.chargeId);
+    }
+    const referencedPlans = plans
+      .filter((plan) => chargesByPlan.has(plan.feePlanId))
+      .map((plan) => ({
+        feePlanId: plan.feePlanId,
+        chargeIds: chargesByPlan.get(plan.feePlanId).sort(),
+      }))
+      .sort((a, b) => a.feePlanId.localeCompare(b.feePlanId));
+    const revision = scheduleRevision ?? persistedState?.revision ?? 0;
+    const fingerprint = {
+      memberId,
+      revision,
+      schedule: normalizedSchedule,
+      reason: normalizedReason,
+      plans: plans.map((plan) => ({
+        feePlanId: plan.feePlanId,
+        amountPaise: plan.amountPaise,
+        effectiveFromMonth: plan.effectiveFromMonth,
+        effectiveUntilMonth: plan.effectiveUntilMonth,
+        dueDay: plan.dueDay,
+        supersededAt: plan.supersededAt ? new Date(plan.supersededAt).toISOString() : null,
+        updatedAt: plan.updatedAt ? new Date(plan.updatedAt).toISOString() : null,
+      })).sort((a, b) => a.feePlanId.localeCompare(b.feePlanId)),
+      charges: charges.map((charge) => ({
+        chargeId: charge.chargeId,
+        feePlanId: charge.feePlanId,
+        baseAmountPaise: charge.baseAmountPaise,
+        updatedAt: charge.updatedAt ? new Date(charge.updatedAt).toISOString() : null,
+      })).sort((a, b) => a.chargeId.localeCompare(b.chargeId)),
+    };
+    const previewToken = createHash('sha256').update(JSON.stringify(fingerprint)).digest('hex');
+
+    return {
+      memberId,
+      scheduleRevision: revision,
+      currentPlans: plans.map(plan => serializeFeePlan(plan, { studentNames })),
+      proposedSchedule: normalizedSchedule,
+      overlappingPairs,
+      referencedPlans,
+      changes: {
+        supersedePlanIds: activePlans.map((plan) => plan.feePlanId).sort(),
+        createPeriods: normalizedSchedule,
+      },
+      canApply: true,
+      previewToken,
+    };
+  }
+
+  return Object.freeze({
+    // --- Room Management ---
+    async createRoom({ roomNumber, roomLabel, capacity = 2, actorRole }) {
+      if (!canManageRooms(actorRole)) {
+        throw new HttpError(403, 'Permission denied to manage rooms.');
+      }
+
+      if (typeof roomNumber !== 'string' || !roomNumber.trim() || roomNumber.trim().length > MAX_ROOM_NUMBER_LENGTH) {
+        throw new HttpError(400, `Room number is required and must not exceed ${MAX_ROOM_NUMBER_LENGTH} characters.`);
+      }
+
+      const normalizedNumber = roomNumber.trim();
+      const existing = await repository.findRoomByNumber(normalizedNumber);
+      if (existing) {
+        throw new HttpError(409, `Room ${normalizedNumber} already exists.`);
+      }
+
+      const trimmedLabel = typeof roomLabel === 'string' ? roomLabel.trim() : '';
+      if (trimmedLabel.length > MAX_ROOM_LABEL_LENGTH) {
+        throw new HttpError(400, `Room label must not exceed ${MAX_ROOM_LABEL_LENGTH} characters.`);
+      }
+      const finalLabel = trimmedLabel || `Room ${normalizedNumber}`;
+
+      const numCapacity = capacity;
+      if (!Number.isInteger(numCapacity) || numCapacity < MIN_ROOM_CAPACITY || numCapacity > MAX_ROOM_CAPACITY) {
+        throw new HttpError(400, `Capacity must be an integer between ${MIN_ROOM_CAPACITY} and ${MAX_ROOM_CAPACITY}.`);
+      }
+
+      const roomId = randomUUID();
+      const room = await repository.createRoom({
+        roomId,
+        roomNumber: normalizedNumber,
+        roomLabel: finalLabel,
+        capacity: numCapacity,
+        active: true,
+      });
+
+      return serializeRoom(room);
+    },
+
+    async updateRoom(roomId, updates, actorRole) {
+      if (!canManageRooms(actorRole)) {
+        throw new HttpError(403, 'Permission denied to manage rooms.');
+      }
+
+      const room = await repository.findRoomById(roomId);
+      if (!room) {
+        throw new HttpError(404, 'Room not found.');
+      }
+
+      const allowedUpdates = {};
+      if (updates.roomLabel !== undefined) {
+        if (typeof updates.roomLabel !== 'string') {
+          throw new HttpError(400, 'Room label must be a string.');
+        }
+        const trimmedLabel = updates.roomLabel.trim();
+        if (trimmedLabel.length > MAX_ROOM_LABEL_LENGTH) {
+          throw new HttpError(400, `Room label must not exceed ${MAX_ROOM_LABEL_LENGTH} characters.`);
+        }
+        allowedUpdates.roomLabel = trimmedLabel || `Room ${room.roomNumber}`;
+      }
+
+      if (updates.capacity !== undefined) {
+        const numCapacity = updates.capacity;
+        if (!Number.isInteger(numCapacity) || numCapacity < MIN_ROOM_CAPACITY || numCapacity > MAX_ROOM_CAPACITY) {
+          throw new HttpError(400, `Capacity must be an integer between ${MIN_ROOM_CAPACITY} and ${MAX_ROOM_CAPACITY}.`);
+        }
+
+        const todayDate = getLogicalDateInTimeZone(now(), timezone);
+        const assignments = await repository.findAssignmentsForRoom(roomId);
+        const activeOccupants = assignments.filter((a) => {
+          if (a.cancelledAt) return false;
+          const fromDate = a.effectiveFromDate || `${a.effectiveFromMonth}-01`;
+          const untilDate = a.effectiveUntilDate || (a.effectiveUntilMonth ? lastDateOfMonth(a.effectiveUntilMonth) : null);
+          return fromDate <= todayDate && (!untilDate || untilDate >= todayDate);
+        });
+
+        if (numCapacity < activeOccupants.length) {
+          throw new HttpError(
+            409,
+            `Cannot reduce capacity to ${numCapacity}: room currently has ${activeOccupants.length} active occupant(s).`
+          );
+        }
+
+        // Check committed future intervals
+        const futureDates = new Set([todayDate]);
+        for (const a of assignments) {
+          if (a.cancelledAt) continue;
+          const fromDate = a.effectiveFromDate || `${a.effectiveFromMonth}-01`;
+          if (fromDate >= todayDate) futureDates.add(fromDate);
+        }
+        for (const fDate of futureDates) {
+          let count = 0;
+          for (const a of assignments) {
+            if (a.cancelledAt) continue;
+            const fromDate = a.effectiveFromDate || `${a.effectiveFromMonth}-01`;
+            const untilDate = a.effectiveUntilDate || (a.effectiveUntilMonth ? lastDateOfMonth(a.effectiveUntilMonth) : null);
+            if (fromDate <= fDate && (!untilDate || untilDate >= fDate)) {
+              count += 1;
+            }
+          }
+          if (count > numCapacity) {
+            throw new HttpError(
+              409,
+              `Cannot reduce capacity to ${numCapacity}: committed assignments reach ${count} occupants during ${fDate}.`
+            );
+          }
+        }
+
+        allowedUpdates.capacity = numCapacity;
+      }
+
+      if (updates.active !== undefined) {
+        if (typeof updates.active !== 'boolean') {
+          throw new HttpError(400, 'Room active state must be a boolean.');
+        }
+        allowedUpdates.active = updates.active;
+      }
+
+      const updated = await repository.updateRoom(roomId, allowedUpdates);
+      return serializeRoom(updated);
+    },
+
+    async getRooms({ activeOnly = false } = {}) {
+      const rooms = await repository.findAllRooms({ activeOnly });
+      const studentNames = await getStudentNames();
+      const todayDate = getLogicalDateInTimeZone(now(), timezone);
+      const assignments = await repository.findAllAssignments();
+
+      // Determine active occupants per room as of today
+      const occupantMap = new Map();
+      for (const a of assignments) {
+        if (a.cancelledAt) continue;
+        const fromDate = a.effectiveFromDate || `${a.effectiveFromMonth}-01`;
+        const untilDate = a.effectiveUntilDate || (a.effectiveUntilMonth ? lastDateOfMonth(a.effectiveUntilMonth) : null);
+        if (fromDate <= todayDate && (!untilDate || untilDate >= todayDate)) {
+          if (!occupantMap.has(a.roomId)) occupantMap.set(a.roomId, []);
+          occupantMap.get(a.roomId).push(a.memberId);
+        }
+      }
+
+      return rooms.map((room) =>
+        serializeRoom(room, { currentOccupants: occupantMap.get(room.roomId) || [], studentNames })
+      );
+    },
+
+    async getRoom(roomId) {
+      const room = await repository.findRoomById(roomId);
+      if (!room) {
+        throw new HttpError(404, 'Room not found.');
+      }
+      const todayDate = getLogicalDateInTimeZone(now(), timezone);
+      const assignments = await repository.findAssignmentsForRoom(roomId);
+      const activeOccupants = assignments
+        .filter((a) => {
+          if (a.cancelledAt) return false;
+          const fromDate = a.effectiveFromDate || `${a.effectiveFromMonth}-01`;
+          const untilDate = a.effectiveUntilDate || (a.effectiveUntilMonth ? lastDateOfMonth(a.effectiveUntilMonth) : null);
+          return fromDate <= todayDate && (!untilDate || untilDate >= todayDate);
+        })
+        .map((a) => a.memberId);
+
+      return serializeRoom(room, { currentOccupants: activeOccupants,
+        studentNames: await getStudentNames() });
+    },
+
+    // --- Room Assignments ---
+    async assignMemberToRoom({
+      memberId,
+      roomId,
+      effectiveFromMonth: rawFromMonth,
+      effectiveUntilMonth = null,
+      effectiveFromDate = null,
+      effectiveUntilDate = null,
+      actorRole,
+      isAdmission = false,
+      session = null,
+    }) {
+      const effectiveFromMonth = rawFromMonth || (effectiveFromDate ? effectiveFromDate.slice(0, 7) : null);
+      const currentMonth = getCurrentMonth();
+      if (!isAdmission && !canAssignRooms({ role: actorRole, effectiveFromMonth, currentMonth })) {
+        throw new HttpError(403, 'Permission denied to assign rooms for this period.');
+      }
+
+      if (!isSafeStudentId(memberId)) {
+        throw new HttpError(400, 'Invalid member ID.');
+      }
+      await assertKnownMember(memberId);
+      if (boundary && effectiveFromMonth) {
+        await boundary.assertOperationalFinancialDate(effectiveFromDate ?? `${effectiveFromMonth}-01`);
+      }
+
+      if (!isValidLogicalMonth(effectiveFromMonth)) {
+        throw new HttpError(400, 'effectiveFromMonth must be in YYYY-MM format.');
+      }
+
+      if (effectiveUntilMonth !== null && !isValidLogicalMonth(effectiveUntilMonth)) {
+        throw new HttpError(400, 'effectiveUntilMonth must be in YYYY-MM format or null.');
+      }
+
+      if (effectiveUntilMonth && compareLogicalMonths(effectiveFromMonth, effectiveUntilMonth) > 0) {
+        throw new HttpError(400, 'effectiveUntilMonth cannot be earlier than effectiveFromMonth.');
+      }
+
+      const targetFromDate = effectiveFromDate || `${effectiveFromMonth}-01`;
+      const targetUntilDate = effectiveUntilDate || (effectiveUntilMonth ? lastDateOfMonth(effectiveUntilMonth) : null);
+
+      if (targetUntilDate && targetFromDate > targetUntilDate) {
+        throw new HttpError(400, 'effectiveUntilDate cannot be earlier than effectiveFromDate.');
+      }
+      const studentNames = await getStudentNames();
+
+      const execute = async (activeSession) => {
+        const room =
+          (await repository.findRoomById(roomId, { session: activeSession })) ||
+          (await repository.findRoomByNumber(roomId, { session: activeSession }));
+        if (!room || !room.active) {
+          throw new HttpError(400, 'Selected room does not exist or is inactive.');
+        }
+
+        if (activeSession) {
+          if (typeof repository.lockAssignmentSchedule === 'function') {
+            await repository.lockAssignmentSchedule(memberId, { session: activeSession });
+          }
+          // Database-backed concurrency guard: touch occupancyRevision on room document
+          // inside the transaction to serialize concurrent occupancy checks for the same room.
+          await repository.updateRoom(room.roomId, { $inc: { occupancyRevision: 1 } }, { session: activeSession });
+        }
+
+        // 1. Room capacity check using exact simultaneous occupancy validation across all intervals
+        const roomAssignments = await repository.findAssignmentsForRoom(room.roomId, { session: activeSession });
+        const maxSimultaneousOccupancy = calculateMaxSimultaneousOccupancy({
+          roomAssignments,
+          targetAssignment: {
+            memberId,
+            effectiveFromMonth,
+            effectiveUntilMonth,
+            effectiveFromDate: targetFromDate,
+            effectiveUntilDate: targetUntilDate,
+          },
+          roomCapacity: room.capacity,
+        });
+
+        if (maxSimultaneousOccupancy > room.capacity) {
+          throw new HttpError(409, `Room ${room.roomNumber} is at maximum capacity (${room.capacity}) during the requested period.`);
+        }
+
+        // 2. Check member's existing assignments for overlap and identify prior assignment to auto-cap
+        const memberAssignments = await repository.findAssignmentsForMember(memberId, { session: activeSession });
+        let assignmentToCap = null;
+        let cappedUntilDate = null;
+        let cappedUntilMonth = null;
+
+        for (const a of memberAssignments) {
+          if (a.cancelledAt) continue;
+          const aFrom = a.effectiveFromDate || `${a.effectiveFromMonth}-01`;
+          const aUntil = a.effectiveUntilDate || (a.effectiveUntilMonth ? lastDateOfMonth(a.effectiveUntilMonth) : null);
+
+          // If an open-ended assignment exists starting before the new one, plan to auto-cap it
+          if (!aUntil && aFrom < targetFromDate) {
+            cappedUntilDate = getPreviousLogicalDate(targetFromDate);
+            cappedUntilMonth = cappedUntilDate.slice(0, 7);
+            assignmentToCap = a;
+            continue;
+          }
+
+          const overlaps =
+            aFrom <= (targetUntilDate || '9999-99-99') &&
+            targetFromDate <= (aUntil || '9999-99-99');
+
+          if (overlaps) {
+            throw new HttpError(409, `Member ${memberId} already has an active room assignment during ${aFrom} - ${aUntil || 'present'}.`);
+          }
+        }
+
+        // 3. Apply auto-cap to prior assignment if applicable
+        if (assignmentToCap && cappedUntilDate && cappedUntilMonth) {
+          await repository.updateAssignment(
+            assignmentToCap.assignmentId,
+            {
+              effectiveUntilMonth: cappedUntilMonth,
+              effectiveUntilDate: cappedUntilDate,
+            },
+            { session: activeSession },
+          );
+        }
+
+        const assignmentId = randomUUID();
+        const assignment = await repository.createAssignment(
+          {
+            assignmentId,
+            roomId: room.roomId,
+            memberId,
+            effectiveFromMonth,
+            effectiveUntilMonth,
+            effectiveFromDate: targetFromDate,
+            effectiveUntilDate: targetUntilDate,
+            assignedAt: now(),
+            assignedByRole: actorRole,
+          },
+          { session: activeSession },
+        );
+
+        const roomMap = new Map([[room.roomId, room]]);
+        return serializeRoomAssignment(assignment, roomMap, { studentNames });
+      };
+
+      if (session) return execute(session);
+      if (repository.requiresTransactions) {
+        return runFinancialTransaction(execute, { retryOnDuplicateKey: true });
+      }
+      return execute(null);
+    },
+
+    async getAllAssignments() {
+      const assignments = await repository.findAllAssignments();
+      const rooms = await repository.findAllRooms();
+      const roomMap = new Map(rooms.map((r) => [r.roomId, r]));
+      const studentNames = await getStudentNames();
+      return assignments.map((a) => serializeRoomAssignment(a, roomMap, { studentNames }));
+    },
+
+    async getAssignmentsForMember(memberId) {
+      if (!isSafeStudentId(memberId)) {
+        throw new HttpError(400, 'Invalid member ID.');
+      }
+      const assignments = await repository.findAssignmentsForMember(memberId);
+      const rooms = await repository.findAllRooms();
+      const roomMap = new Map(rooms.map((r) => [r.roomId, r]));
+      const studentNames = await getStudentNames();
+      return assignments.map((a) => serializeRoomAssignment(a, roomMap, { studentNames }));
+    },
+
+    async getAssignmentById(assignmentId) {
+      const assignment = await repository.findAssignmentById(assignmentId);
+      if (!assignment || assignment.cancelledAt) return null;
+      const room = await repository.findRoomById(assignment.roomId);
+      return serializeRoomAssignment(assignment, new Map([[room?.roomId, room]]),
+        { studentNames: await getStudentNames() });
+    },
+
+    async rollbackCreatedAssignment(assignmentId) {
+      const deleted = await repository.deleteAssignment(assignmentId);
+      if (!deleted) {
+        throw new HttpError(404, 'Assignment not found.');
+      }
+      return { success: true };
+    },
+
+    async cancelAdmissionArtifacts({ assignmentId, feePlanId = null, reason, actorRole, session = null }) {
+      if (actorRole !== 'superadmin') {
+        throw new HttpError(403, 'Only Super Admin can cancel admission room artifacts.');
+      }
+      if (!assignmentId && !feePlanId) {
+        throw new HttpError(409, 'No Stay-owned admission artifacts were identified safely.');
+      }
+
+      if (assignmentId) {
+        const assignment = await repository.findAssignmentById(assignmentId, { session });
+        if (!assignment) {
+          throw new HttpError(409, 'The admission room assignment no longer exists.');
+        }
+        if (session && typeof repository.lockAssignmentSchedule === 'function') {
+          await repository.lockAssignmentSchedule(assignment.memberId, { session });
+        }
+        await repository.updateAssignment(
+          assignmentId,
+          {
+            cancelledAt: now(),
+            cancelledByRole: actorRole,
+            cancelReason: reason,
+          },
+          { session },
+        );
+      }
+
+      if (feePlanId) {
+        const feePlan = await repository.findFeePlanById(feePlanId, { session });
+        if (!feePlan) {
+          throw new HttpError(409, 'The admission fee plan no longer exists.');
+        }
+        await repository.updateFeePlan(
+          feePlanId,
+          { supersededAt: now(), supersededBy: actorRole },
+          { session },
+        );
+      }
+
+      return { success: true };
+    },
+
+    async correctAdmissionArtifacts({
+      assignmentId,
+      feePlanId = null,
+      memberId,
+      roomId,
+      effectiveFromDate,
+      actorRole,
+      session = null,
+    }) {
+      if (actorRole !== 'superadmin') {
+        throw new HttpError(403, 'Only Super Admin can correct admission room artifacts.');
+      }
+      if (!isSafeStudentId(memberId) || !isValidLogicalDate(effectiveFromDate)) {
+        throw new HttpError(400, 'A valid member and admission date are required.');
+      }
+      if (!roomId || !roomId.trim()) {
+        throw new HttpError(400, 'A corrected room is required.');
+      }
+
+      if (session && typeof repository.lockAssignmentSchedule === 'function') {
+        await repository.lockAssignmentSchedule(memberId, { session });
+      }
+      const assignment = await repository.findAssignmentById(assignmentId, { session });
+      if (!assignment || assignment.memberId !== memberId || assignment.cancelledAt) {
+        throw new HttpError(409, 'The admission room assignment cannot be corrected safely.');
+      }
+      const room = (await repository.findRoomById(roomId.trim(), { session }))
+        || (await repository.findRoomByNumber(roomId.trim(), { session }));
+      if (!room || !room.active) {
+        throw new HttpError(400, 'Selected room does not exist or is inactive.');
+      }
+
+      if (session) {
+        await repository.updateRoom(room.roomId, { $inc: { occupancyRevision: 1 } }, { session });
+      }
+      const targetAssignment = {
+        ...assignment,
+        roomId: room.roomId,
+        effectiveFromMonth: effectiveFromDate.slice(0, 7),
+        effectiveFromDate,
+      };
+      const roomAssignments = await repository.findAssignmentsForRoom(room.roomId, { session });
+      if (calculateMaxSimultaneousOccupancy({
+        roomAssignments,
+        targetAssignment,
+        roomCapacity: room.capacity,
+      }) > room.capacity) {
+        throw new HttpError(409, `Room ${room.roomNumber} is at maximum capacity during the corrected admission period.`);
+      }
+
+      const memberAssignments = await repository.findAssignmentsForMember(memberId, { session });
+      const targetUntil = targetAssignment.effectiveUntilDate
+        || (targetAssignment.effectiveUntilMonth ? lastDateOfMonth(targetAssignment.effectiveUntilMonth) : null);
+      for (const other of memberAssignments) {
+        if (other.assignmentId === assignmentId || other.cancelledAt) continue;
+        const otherFrom = other.effectiveFromDate || `${other.effectiveFromMonth}-01`;
+        const otherUntil = other.effectiveUntilDate
+          || (other.effectiveUntilMonth ? lastDateOfMonth(other.effectiveUntilMonth) : null);
+        if (otherFrom <= (targetUntil || '9999-12-31') && effectiveFromDate <= (otherUntil || '9999-12-31')) {
+          throw new HttpError(409, 'The corrected admission would overlap another room assignment for this member.');
+        }
+      }
+
+      const updatedAssignment = await repository.updateAssignment(assignmentId, {
+        roomId: room.roomId,
+        effectiveFromMonth: effectiveFromDate.slice(0, 7),
+        effectiveFromDate,
+      }, { session });
+
+      let updatedFeePlan = null;
+      if (feePlanId) {
+        const feePlan = await repository.findFeePlanById(feePlanId, { session });
+        if (!feePlan || feePlan.memberId !== memberId) {
+          throw new HttpError(409, 'The admission fee plan cannot be corrected safely.');
+        }
+        updatedFeePlan = await repository.updateFeePlan(
+          feePlanId,
+          { effectiveFromMonth: effectiveFromDate.slice(0, 7) },
+          { session },
+        );
+      }
+
+      return { assignment: updatedAssignment, feePlan: updatedFeePlan };
+    },
+
+    async endActiveRoomAssignment({ memberId, endMonth, endDate = null, session = null }) {
+      if (session && typeof repository.lockAssignmentSchedule === 'function') {
+        await repository.lockAssignmentSchedule(memberId, { session });
+      }
+      const assignments = await repository.findAssignmentsForMember(memberId, { session });
+      const targetMonth = endDate ? endDate.slice(0, 7) : endMonth;
+      const targetDate = endDate || (targetMonth ? lastDateOfMonth(targetMonth) : null);
+
+      for (const a of assignments) {
+        if (a.cancelledAt) continue;
+        const fromDate = a.effectiveFromDate || `${a.effectiveFromMonth}-01`;
+        const untilDate = a.effectiveUntilDate || (a.effectiveUntilMonth ? lastDateOfMonth(a.effectiveUntilMonth) : null);
+
+        if (fromDate <= (targetDate || '9999-99-99') && (!untilDate || untilDate >= targetDate)) {
+          const cappedDate = targetDate || `${targetMonth}-28`;
+          const cappedMonth = targetMonth || cappedDate.slice(0, 7);
+          await repository.updateAssignment(
+            a.assignmentId,
+            {
+              effectiveUntilMonth: cappedMonth,
+              effectiveUntilDate: cappedDate,
+            },
+            { session },
+          );
+        }
+      }
+      return { success: true };
+    },
+
+    async previewRestoreAssignment({
+      memberId,
+      roomId,
+      occupancyFromDate,
+      assignmentAction,
+      assignmentId = null,
+      session = null,
+    }) {
+      if (!isSafeStudentId(memberId)) throw new HttpError(400, 'Invalid member ID.');
+      if (!isValidLogicalDate(occupancyFromDate)) {
+        throw new HttpError(400, 'occupancyFromDate must be a valid YYYY-MM-DD date.');
+      }
+      if (!['REOPEN_EXISTING', 'CREATE_NEW', 'LINK_EXISTING'].includes(assignmentAction)) {
+        throw new HttpError(400, 'A valid assignmentAction is required.');
+      }
+
+      const room =
+        (await repository.findRoomById(roomId, { session }))
+        || (await repository.findRoomByNumber(roomId, { session }));
+      if (!room || !room.active) throw new HttpError(400, 'Selected room does not exist or is inactive.');
+
+      const memberAssignments = await repository.findAssignmentsForMember(memberId, { session });
+      const selectedAssignment = assignmentId
+        ? memberAssignments.find((assignment) => assignment.assignmentId === assignmentId) || null
+        : null;
+      const conflicts = [];
+      if (assignmentAction !== 'CREATE_NEW' && !selectedAssignment) {
+        conflicts.push({ code: 'ASSIGNMENT_NOT_FOUND', message: 'The selected Room Assignment does not belong to this resident.' });
+      }
+      if (selectedAssignment && selectedAssignment.roomId !== room.roomId) {
+        conflicts.push({ code: 'ASSIGNMENT_ROOM_MISMATCH', message: 'The selected Room Assignment belongs to a different room.' });
+      }
+
+      const selectedFrom = selectedAssignment
+        ? selectedAssignment.effectiveFromDate || `${selectedAssignment.effectiveFromMonth}-01`
+        : null;
+      const selectedUntil = selectedAssignment
+        ? selectedAssignment.effectiveUntilDate
+          || (selectedAssignment.effectiveUntilMonth ? lastDateOfMonth(selectedAssignment.effectiveUntilMonth) : null)
+        : null;
+      if (selectedAssignment?.cancelledAt) {
+        conflicts.push({
+          code: 'ASSIGNMENT_CANCELLED',
+          assignmentId: selectedAssignment.assignmentId,
+          message: 'A cancelled Room Assignment cannot be linked or reopened.',
+        });
+      }
+      if (assignmentAction === 'LINK_EXISTING' && selectedAssignment && !selectedAssignment.cancelledAt) {
+        if (selectedUntil) {
+          conflicts.push({
+            code: 'ASSIGNMENT_NOT_ACTIVE',
+            assignmentId: selectedAssignment.assignmentId,
+            message: 'LINK_EXISTING requires an open-ended Room Assignment. Reopen this historical assignment instead.',
+          });
+        }
+        if (selectedFrom > occupancyFromDate) {
+          conflicts.push({
+            code: 'ASSIGNMENT_DOES_NOT_COVER_OCCUPANCY',
+            assignmentId: selectedAssignment.assignmentId,
+            message: 'The selected Room Assignment starts after the approved continuous occupancy date.',
+          });
+        }
+      }
+
+      const proposedAssignment = assignmentAction === 'CREATE_NEW'
+        ? {
+          assignmentId: null,
+          memberId,
+          roomId: room.roomId,
+          effectiveFromDate: occupancyFromDate,
+          effectiveFromMonth: occupancyFromDate.slice(0, 7),
+          effectiveUntilDate: null,
+          effectiveUntilMonth: null,
+        }
+        : assignmentAction === 'REOPEN_EXISTING'
+          ? {
+          ...selectedAssignment,
+          effectiveFromDate: occupancyFromDate,
+          effectiveFromMonth: occupancyFromDate.slice(0, 7),
+          effectiveUntilDate: null,
+          effectiveUntilMonth: null,
+          }
+          : selectedAssignment;
+
+      for (const assignment of memberAssignments) {
+        if (assignment.cancelledAt || assignment.assignmentId === selectedAssignment?.assignmentId) continue;
+        const from = assignment.effectiveFromDate || `${assignment.effectiveFromMonth}-01`;
+        const until = assignment.effectiveUntilDate
+          || (assignment.effectiveUntilMonth ? lastDateOfMonth(assignment.effectiveUntilMonth) : null);
+        if (occupancyFromDate <= (until || '9999-12-31')) {
+          conflicts.push({
+            code: 'MEMBER_ASSIGNMENT_OVERLAP',
+            assignmentId: assignment.assignmentId,
+            message: `Resident already has an overlapping Room Assignment from ${from} to ${until || 'present'}.`,
+          });
+        }
+      }
+
+      if (conflicts.length === 0) {
+        const roomAssignments = await repository.findAssignmentsForRoom(room.roomId, { session });
+        const occupancy = calculateMaxSimultaneousOccupancy({
+          roomAssignments,
+          targetAssignment: proposedAssignment,
+          roomCapacity: room.capacity,
+        });
+        if (occupancy > room.capacity) {
+          conflicts.push({
+            code: 'ROOM_CAPACITY_CONFLICT',
+            message: `Room ${room.roomNumber} exceeds capacity ${room.capacity} during the restored period.`,
+          });
+        }
+      }
+
+      return { room, currentAssignment: selectedAssignment, proposedAssignment, conflicts };
+    },
+
+    async previewActiveStayAssignmentRepair({
+      memberId,
+      roomId,
+      occupancyFromDate,
+      assignmentAction,
+      assignmentId = null,
+      session = null,
+    }) {
+      const actionMap = {
+        EXTEND_EXISTING_ASSIGNMENT: 'REOPEN_EXISTING',
+        LINK_VALID_ASSIGNMENT: 'LINK_EXISTING',
+        CREATE_NEW_ASSIGNMENT: 'CREATE_NEW',
+      };
+      const restoreAction = actionMap[assignmentAction];
+      if (!restoreAction) throw new HttpError(400, 'A valid assignmentAction is required.');
+
+      let effectiveOccupancyFromDate = occupancyFromDate;
+      if (assignmentAction === 'EXTEND_EXISTING_ASSIGNMENT') {
+        const selected = assignmentId
+          ? await repository.findAssignmentById(assignmentId, { session })
+          : null;
+        effectiveOccupancyFromDate = selected
+          ? selected.effectiveFromDate || `${selected.effectiveFromMonth}-01`
+          : occupancyFromDate;
+      }
+
+      const preview = await this.previewRestoreAssignment({
+        memberId,
+        roomId,
+        occupancyFromDate: effectiveOccupancyFromDate,
+        assignmentAction: restoreAction,
+        assignmentId,
+        session,
+      });
+      return {
+        ...preview,
+        assignmentAction,
+        effectiveOccupancyFromDate,
+      };
+    },
+
+    async repairActiveStayAssignment({
+      memberId,
+      roomId,
+      occupancyFromDate,
+      assignmentAction,
+      assignmentId = null,
+      actorRole,
+      session,
+    }) {
+      if (!session) throw new HttpError(503, 'Database transaction support is required.');
+      const preview = await this.previewActiveStayAssignmentRepair({
+        memberId,
+        roomId,
+        occupancyFromDate,
+        assignmentAction,
+        assignmentId,
+        session,
+      });
+      const actionMap = {
+        EXTEND_EXISTING_ASSIGNMENT: 'REOPEN_EXISTING',
+        LINK_VALID_ASSIGNMENT: 'LINK_EXISTING',
+        CREATE_NEW_ASSIGNMENT: 'CREATE_NEW',
+      };
+      return this.restoreAssignmentForResident({
+        memberId,
+        roomId,
+        occupancyFromDate: preview.effectiveOccupancyFromDate,
+        assignmentAction: actionMap[assignmentAction],
+        assignmentId,
+        actorRole,
+        session,
+      });
+    },
+
+    async restoreAssignmentForResident({
+      memberId,
+      roomId,
+      occupancyFromDate,
+      assignmentAction,
+      assignmentId = null,
+      actorRole,
+      session,
+    }) {
+      if (!session) throw new HttpError(503, 'Database transaction support is required.');
+      const room =
+        (await repository.findRoomById(roomId, { session }))
+        || (await repository.findRoomByNumber(roomId, { session }));
+      if (!room) throw new HttpError(400, 'Selected room does not exist.');
+      if (typeof repository.lockAssignmentSchedule === 'function') {
+        await repository.lockAssignmentSchedule(memberId, { session });
+      }
+      await repository.updateRoom(room.roomId, { $inc: { occupancyRevision: 1 } }, { session });
+
+      const preview = await this.previewRestoreAssignment({
+        memberId,
+        roomId: room.roomId,
+        occupancyFromDate,
+        assignmentAction,
+        assignmentId,
+        session,
+      });
+      if (preview.conflicts.length > 0) {
+        const error = new HttpError(409, 'Room Assignment conflicts prevent resident restoration.');
+        error.details = { code: 'RESTORATION_ASSIGNMENT_CONFLICT', conflicts: preview.conflicts };
+        throw error;
+      }
+      if (assignmentAction === 'LINK_EXISTING') return preview.currentAssignment;
+      if (assignmentAction === 'REOPEN_EXISTING') {
+        return repository.updateAssignment(
+          assignmentId,
+          {
+            effectiveFromDate: occupancyFromDate,
+            effectiveFromMonth: occupancyFromDate.slice(0, 7),
+            effectiveUntilDate: null,
+            effectiveUntilMonth: null,
+          },
+          { session },
+        );
+      }
+      return repository.createAssignment({
+        assignmentId: randomUUID(),
+        memberId,
+        roomId: preview.room.roomId,
+        effectiveFromDate: occupancyFromDate,
+        effectiveFromMonth: occupancyFromDate.slice(0, 7),
+        effectiveUntilDate: null,
+        effectiveUntilMonth: null,
+        assignedAt: now(),
+        assignedByRole: actorRole,
+      }, { session });
+    },
+
+    // --- Fee Plans ---
+    async createFeePlan({
+      memberId,
+      amountPaise,
+      effectiveFromMonth,
+      effectiveUntilMonth = null,
+      dueDay = DEFAULT_DUE_DAY,
+      reason = null,
+      actorRole,
+      isAdmission = false,
+      session = null,
+    }) {
+      const currentMonth = getCurrentMonth();
+      if (!isAdmission && !canManageFeePlans({ role: actorRole, effectiveFromMonth, currentMonth })) {
+        throw new HttpError(403, 'Permission denied to manage fee plans for this period.');
+      }
+
+      if (!isSafeStudentId(memberId)) {
+        throw new HttpError(400, 'Invalid member ID.');
+      }
+      await assertKnownMember(memberId);
+      if (boundary && isValidLogicalMonth(effectiveFromMonth)) {
+        await boundary.assertFullOperationalMonth(effectiveFromMonth);
+      }
+
+      if (!isValidRoomFeeAmount(amountPaise)) {
+        throw new HttpError(400, 'Fee amount must be a non-negative safe integer in paise.');
+      }
+
+      if (!isValidLogicalMonth(effectiveFromMonth)) {
+        throw new HttpError(400, 'effectiveFromMonth must be in YYYY-MM format.');
+      }
+
+      if (effectiveUntilMonth !== null && !isValidLogicalMonth(effectiveUntilMonth)) {
+        throw new HttpError(400, 'effectiveUntilMonth must be in YYYY-MM format or null.');
+      }
+
+      if (effectiveUntilMonth && compareLogicalMonths(effectiveFromMonth, effectiveUntilMonth) > 0) {
+        throw new HttpError(400, 'effectiveUntilMonth cannot be earlier than effectiveFromMonth.');
+      }
+
+      const numDueDay = dueDay;
+      if (!Number.isInteger(numDueDay) || numDueDay < MIN_DUE_DAY || numDueDay > MAX_DUE_DAY) {
+        throw new HttpError(400, `dueDay must be an integer between ${MIN_DUE_DAY} and ${MAX_DUE_DAY}.`);
+      }
+
+      const normalizedReason = typeof reason === 'string' && reason.trim() ? reason.trim().slice(0, MAX_REASON_LENGTH) : null;
+      const studentNames = await getStudentNames();
+
+      const execute = async (activeSession) => {
+        if (typeof repository.lockFeeSchedule === 'function') {
+          const scheduleState = await repository.getFeeScheduleState(memberId, { session: activeSession });
+          const lockedState = await repository.lockFeeSchedule(
+            memberId,
+            scheduleState?.revision ?? 0,
+            actorRole,
+            { session: activeSession },
+          );
+          if (!lockedState) {
+            throw new HttpError(409, 'The Fee Plan schedule changed concurrently. Please retry.');
+          }
+        }
+
+        const existingPlans = await repository.findFeePlansForMember(memberId, { session: activeSession });
+        const proposedPlan = { effectiveFromMonth, effectiveUntilMonth };
+        const conflicts = findFeePlanScheduleConflicts(existingPlans, proposedPlan);
+        const autoCapCandidate = conflicts.length === 1
+          ? existingPlans.find((plan) => (
+            plan.feePlanId === conflicts[0].feePlanId
+            && !plan.effectiveUntilMonth
+            && compareLogicalMonths(plan.effectiveFromMonth, effectiveFromMonth) < 0
+          ))
+          : null;
+
+        if (conflicts.length > 0 && !autoCapCandidate) {
+          const conflict = new HttpError(
+            409,
+            'Fee Plan overlaps an existing effective plan. Review or reconcile the existing schedule before creating this plan.',
+          );
+          conflict.details = {
+            code: 'FEE_PLAN_OVERLAP',
+            memberId,
+            conflicts,
+          };
+          throw conflict;
+        }
+
+        if (autoCapCandidate) {
+          await repository.updateFeePlan(
+            autoCapCandidate.feePlanId,
+            { effectiveUntilMonth: getPreviousLogicalMonth(effectiveFromMonth) },
+            { session: activeSession },
+          );
+        }
+
+        const feePlanId = randomUUID();
+        const plan = await repository.createFeePlan(
+          {
+            feePlanId,
+            memberId,
+            amountPaise,
+            effectiveFromMonth,
+            effectiveUntilMonth,
+            dueDay: numDueDay,
+            reason: normalizedReason,
+            createdByRole: actorRole,
+          },
+          { session: activeSession },
+        );
+
+        return serializeFeePlan(plan, { studentNames });
+      };
+
+      try {
+        if (session) return await execute(session);
+        if (repository.requiresTransactions) {
+          return await runFinancialTransaction(execute, { retryOnDuplicateKey: true });
+        }
+        return await execute(null);
+      } catch (err) {
+        if (err.code === 11000 || err.code === 112 || err.message?.includes('WriteConflict')) {
+          const conflict = new HttpError(409, 'The Fee Plan schedule changed concurrently. Please retry.');
+          conflict.details = { code: 'FEE_PLAN_SCHEDULE_CONFLICT' };
+          throw conflict;
+        }
+        throw err;
+      }
+    },
+
+    async getFeePlansForMember(memberId) {
+      if (!isSafeStudentId(memberId)) {
+        throw new HttpError(400, 'Invalid member ID.');
+      }
+      await assertKnownMember(memberId);
+      const plans = await repository.findFeePlansForMember(memberId);
+      const studentNames = await getStudentNames();
+      return plans.map(plan => serializeFeePlan(plan, { studentNames }));
+    },
+
+    async getActiveFeePlan(memberId, month) {
+      const plan = await repository.findActiveFeePlan(memberId, month);
+      return serializeFeePlan(plan, { studentNames: await getStudentNames() });
+    },
+
+    async previewFeePlanReconciliation({ memberId, schedule, reason, actorRole }) {
+      await assertKnownMember(memberId);
+      return buildFeePlanReconciliationPreview({ memberId, schedule, reason, actorRole });
+    },
+
+    async reconcileFeePlans({ memberId, schedule, reason, actorRole, previewToken }) {
+      await assertKnownMember(memberId);
+      if (typeof previewToken !== 'string' || !/^[a-f0-9]{64}$/.test(previewToken)) {
+        throw new HttpError(400, 'A valid reconciliation previewToken is required.');
+      }
+      const studentNames = await getStudentNames();
+
+      const applyReconciliation = async (session) => {
+        const currentState = await repository.getFeeScheduleState(memberId, { session });
+        const expectedRevision = currentState?.revision ?? 0;
+        const lockedState = await repository.lockFeeSchedule(
+          memberId,
+          expectedRevision,
+          actorRole,
+          { session },
+        );
+        if (!lockedState) {
+          const conflict = new HttpError(409, 'The Fee Plan schedule changed after preview. Generate a new preview.');
+          conflict.details = { code: 'FEE_PLAN_RECONCILIATION_CONFLICT' };
+          throw conflict;
+        }
+
+        const preview = await buildFeePlanReconciliationPreview({
+          memberId,
+          schedule,
+          reason,
+          actorRole,
+          session,
+          scheduleRevision: expectedRevision,
+        });
+        if (preview.previewToken !== previewToken) {
+          const stale = new HttpError(409, 'The Fee Plan reconciliation preview is stale. Generate a new preview.');
+          stale.details = { code: 'FEE_PLAN_RECONCILIATION_STALE' };
+          throw stale;
+        }
+
+        const reconciliationId = randomUUID();
+        const changedAt = now();
+        for (const feePlanId of preview.changes.supersedePlanIds) {
+          await repository.updateFeePlan(feePlanId, {
+            supersededAt: changedAt,
+            supersededBy: actorRole,
+            supersededReason: reason.trim(),
+            supersededReconciliationId: reconciliationId,
+          }, { session });
+        }
+
+        const createdPlans = [];
+        for (const period of preview.proposedSchedule) {
+          const plan = await repository.createFeePlan({
+            feePlanId: randomUUID(),
+            memberId,
+            ...period,
+            reason: reason.trim(),
+            createdByRole: actorRole,
+            createdReconciliationId: reconciliationId,
+          }, { session });
+          createdPlans.push(serializeFeePlan(plan, { studentNames }));
+        }
+
+        return {
+          reconciliationId,
+          memberId,
+          supersededPlanIds: preview.changes.supersedePlanIds,
+          createdPlans,
+          preservedReferencedPlans: preview.referencedPlans,
+          scheduleRevision: lockedState.revision,
+        };
+      };
+
+      try {
+        if (repository.requiresTransactions) {
+          return await runFinancialTransaction(applyReconciliation, { retryOnDuplicateKey: true });
+        }
+        return await applyReconciliation(null);
+      } catch (error) {
+        if (error.code === 11000 || error.code === 112 || error.message?.includes('WriteConflict')) {
+          const conflict = new HttpError(409, 'The Fee Plan schedule changed concurrently. Generate a new preview.');
+          conflict.details = { code: 'FEE_PLAN_RECONCILIATION_CONFLICT' };
+          throw conflict;
+        }
+        throw error;
+      }
+    },
+
+    // --- Monthly Charges ---
+    async previewCharges(month, actorRole) {
+      if (!canViewAllRoomFees(actorRole)) {
+        throw new HttpError(403, 'Permission denied to preview room charges.');
+      }
+
+      if (!isValidLogicalMonth(month)) {
+        throw new HttpError(400, 'month must be in YYYY-MM format.');
+      }
+
+      const membersSummary = [];
+      let totalProposedPaise = 0;
+      let canIssueAny = false;
+
+      const rooms = await repository.findAllRooms();
+      const roomMap = new Map(rooms.map((r) => [r.roomId, r]));
+
+      for (const member of await getMembers({ activeOnly: true })) {
+        const memberId = member.id;
+
+        // Check if member has completed hostel stay prior to this month
+        let completedStay = false;
+        try {
+          if (mongoose.connection && mongoose.connection.readyState === 1 && mongoose.models.HostelStay) {
+            const stays = await mongoose.models.HostelStay.find({ memberId }).lean();
+            if (stays.length > 0) {
+              const coversMonth = stays.some((s) => {
+                const joinM = s.joinedOn.slice(0, 7);
+                const leftM = s.actualLeftOn ? s.actualLeftOn.slice(0, 7) : null;
+                return joinM <= month && (!leftM || leftM >= month);
+              });
+              if (!coversMonth) {
+                completedStay = true;
+              }
+            }
+          }
+        } catch (_err) {
+          completedStay = false;
+        }
+
+        if (completedStay) {
+          membersSummary.push({
+            memberId,
+            memberName: member.name,
+            roomId: null,
+            roomNumber: null,
+            roomLabel: null,
+            amountPaise: null,
+            dueDate: null,
+            status: 'blocked_completed_stay',
+            blockingReason: 'Member has completed hostel stay.',
+          });
+          continue;
+        }
+
+        const assignment = await repository.findActiveAssignment(memberId, month);
+        const plan = await repository.findActiveFeePlan(memberId, month);
+        const existingCharge = await repository.findChargeByMemberAndMonth(memberId, month);
+
+        const room = assignment ? roomMap.get(assignment.roomId) : null;
+
+        if (existingCharge) {
+          membersSummary.push({
+            memberId,
+            memberName: member.name,
+            roomId: existingCharge.roomId,
+            roomNumber: existingCharge.roomNumber,
+            roomLabel: room?.roomLabel ?? `Room ${existingCharge.roomNumber}`,
+            amountPaise: existingCharge.baseAmountPaise,
+            dueDate: existingCharge.dueDate,
+            status: 'already_issued',
+            blockingReason: 'Charge already issued for this month.',
+            chargeId: existingCharge.chargeId,
+          });
+        } else if (!assignment) {
+          membersSummary.push({
+            memberId,
+            memberName: member.name,
+            roomId: null,
+            roomNumber: null,
+            roomLabel: null,
+            amountPaise: plan?.amountPaise ?? null,
+            dueDate: null,
+            status: 'blocked_missing_room',
+            blockingReason: 'No room assigned for this month.',
+          });
+        } else if (!plan) {
+          membersSummary.push({
+            memberId,
+            memberName: member.name,
+            roomId: room.roomId,
+            roomNumber: room.roomNumber,
+            roomLabel: room.roomLabel,
+            amountPaise: null,
+            dueDate: null,
+            status: 'blocked_missing_fee_plan',
+            blockingReason: 'Room fee not configured for this month.',
+          });
+        } else {
+          canIssueAny = true;
+          totalProposedPaise += plan.amountPaise;
+          const dueDate = getClampedDueDate(month, plan.dueDay);
+
+          membersSummary.push({
+            memberId,
+            memberName: member.name,
+            roomId: room.roomId,
+            roomNumber: room.roomNumber,
+            roomLabel: room.roomLabel,
+            amountPaise: plan.amountPaise,
+            dueDate,
+            status: 'ready_to_issue',
+            blockingReason: null,
+          });
+        }
+      }
+
+      return {
+        month,
+        totalProposedPaise,
+        canIssue: canIssueAny,
+        members: membersSummary,
+      };
+    },
+
+    async issueCharges(month, actorRole) {
+      const currentMonth = getCurrentMonth();
+      if (!canIssueRoomCharges({ role: actorRole, month, currentMonth })) {
+        throw new HttpError(403, 'Permission denied to issue charges for this month.');
+      }
+
+      if (!isValidLogicalMonth(month)) {
+        throw new HttpError(400, 'month must be in YYYY-MM format.');
+      }
+      if (boundary) await boundary.assertFullOperationalMonth(month);
+      const studentNames = await getStudentNames();
+
+      const issueWithinTransaction = async (session = null) => {
+        const rooms = await repository.findAllRooms({ session });
+        const roomMap = new Map(rooms.map((r) => [r.roomId, r]));
+        const issuedCharges = [];
+        let skippedCount = 0;
+
+        for (const member of await getMembers({ activeOnly: true })) {
+          const memberId = member.id;
+
+          // Check if member has completed hostel stay prior to this month
+          let completedStay = false;
+          if (mongoose.connection && mongoose.connection.readyState === 1 && mongoose.models.HostelStay) {
+            const stayQuery = mongoose.models.HostelStay.find({ memberId });
+            if (session) stayQuery.session(session);
+            const stays = await stayQuery.lean();
+            if (stays.length > 0) {
+              const coversMonth = stays.some((s) => {
+                const joinM = s.joinedOn.slice(0, 7);
+                const leftM = s.actualLeftOn ? s.actualLeftOn.slice(0, 7) : null;
+                return joinM <= month && (!leftM || leftM >= month);
+              });
+              if (!coversMonth) {
+                completedStay = true;
+              }
+            }
+          }
+
+          if (completedStay) {
+            skippedCount++;
+            continue;
+          }
+
+          const existingCharge = await repository.findChargeByMemberAndMonth(memberId, month, { session });
+          if (existingCharge) {
+            skippedCount++;
+            continue;
+          }
+
+          const assignment = await repository.findActiveAssignment(memberId, month, { session });
+          const plan = await repository.findActiveFeePlan(memberId, month, { session });
+
+          if (!assignment || !plan) {
+            skippedCount++;
+            continue;
+          }
+
+          const room = roomMap.get(assignment.roomId);
+          if (!room) {
+            skippedCount++;
+            continue;
+          }
+
+          const dueDate = getClampedDueDate(month, plan.dueDay);
+          const chargeId = randomUUID();
+
+          if (session) {
+            await guardFinancialMutation({
+              memberId,
+              effectiveMonth: month,
+              actorRole,
+              session,
+            });
+          }
+
+          const charge = await repository.createCharge(
+            {
+              chargeId,
+              memberId,
+              roomId: room.roomId,
+              roomNumber: room.roomNumber,
+              month,
+              feePlanId: plan.feePlanId,
+              baseAmountPaise: plan.amountPaise,
+              dueDate,
+              status: ROOM_CHARGE_STATUSES.ISSUED,
+              adjustments: [],
+              issuedAt: now(),
+              issuedByRole: actorRole,
+            },
+            session ? { session } : {},
+          );
+          issuedCharges.push(serializeRoomCharge(charge, { payments: [], now: now(), studentNames }));
+        }
+
+        return {
+          month,
+          issuedCount: issuedCharges.length,
+          skippedCount,
+          charges: issuedCharges,
+        };
+      };
+
+      if (repository.requiresTransactions) {
+        return runFinancialTransaction(issueWithinTransaction, { retryOnDuplicateKey: true });
+      }
+      return issueWithinTransaction();
+    },
+
+    async adjustCharge({ chargeId, amountPaise, reason, actorRole }) {
+      if (!canAdjustRoomCharge(actorRole)) {
+        throw new HttpError(403, 'Only Super Admin can adjust issued room charges.');
+      }
+
+      const charge = await repository.findChargeById(chargeId);
+      if (!charge) {
+        throw new HttpError(404, 'Room charge not found.');
+      }
+
+      if (charge.status === ROOM_CHARGE_STATUSES.CANCELLED) {
+        throw new HttpError(400, 'Cannot adjust a cancelled room charge.');
+      }
+
+      const numAmount = Number(amountPaise);
+      if (!Number.isSafeInteger(numAmount)) {
+        throw new HttpError(400, 'Adjustment amount must be a safe integer in paise.');
+      }
+
+      if (typeof reason !== 'string' || !reason.trim() || reason.trim().length > MAX_REASON_LENGTH) {
+        throw new HttpError(400, `Adjustment reason is required and must not exceed ${MAX_REASON_LENGTH} characters.`);
+      }
+
+      const currentAdjustments = charge.adjustments || [];
+      const currentAdjustmentTotal = currentAdjustments.reduce((sum, a) => sum + a.amountPaise, 0);
+      const newFinalBill = charge.baseAmountPaise + currentAdjustmentTotal + numAmount;
+
+      if (newFinalBill < 0) {
+        throw new HttpError(400, `Adjustment cannot reduce the total charge below ₹0 (current: ₹${(charge.baseAmountPaise + currentAdjustmentTotal) / 100}).`);
+      }
+      const studentNames = await getStudentNames();
+
+      if (typeof repository.atomicAdjustCharge === 'function') {
+        const updated = await repository.atomicAdjustCharge({
+          chargeId,
+          numAmount,
+          reason: reason.trim(),
+          actorRole,
+        });
+        const payments = await repository.findPaymentsForCharge(chargeId);
+        return serializeRoomCharge(updated, { payments, now: now(), studentNames });
+      }
+
+      const adjustment = {
+        adjustmentId: randomUUID(),
+        amountPaise: numAmount,
+        reason: reason.trim(),
+        createdAt: now(),
+        createdByRole: actorRole,
+      };
+
+      const updatedAdjustments = [...currentAdjustments, adjustment];
+      const updated = await repository.updateCharge(chargeId, { adjustments: updatedAdjustments });
+      const payments = await repository.findPaymentsForCharge(chargeId);
+
+      return serializeRoomCharge(updated, { payments, now: now(), studentNames });
+    },
+
+    async cancelCharge({ chargeId, reason, actorRole }) {
+      if (!canCancelRoomCharge(actorRole)) {
+        throw new HttpError(403, 'Only Super Admin can cancel issued room charges.');
+      }
+
+      const normalizedReason = typeof reason === 'string' && reason.trim() ? reason.trim().slice(0, MAX_REASON_LENGTH) : 'Cancelled by Super Admin';
+      const studentNames = await getStudentNames();
+
+      if (typeof repository.executeAtomicCancelCharge === 'function') {
+        const updated = await repository.executeAtomicCancelCharge({
+          chargeId,
+          reason: normalizedReason,
+          actorRole,
+        });
+        const payments = await repository.findPaymentsForCharge(chargeId);
+        return serializeRoomCharge(updated, { payments, now: now(), studentNames });
+      }
+
+      const charge = await repository.findChargeById(chargeId);
+      if (!charge) {
+        throw new HttpError(404, 'Room charge not found.');
+      }
+
+      const payments = await repository.findPaymentsForCharge(chargeId);
+      const activePayments = payments.filter((p) => p.status === ROOM_PAYMENT_STATUSES.VERIFIED);
+      if (activePayments.length > 0) {
+        throw new HttpError(409, 'Cannot cancel a charge with active recorded payments. Void the payments first.');
+      }
+
+      const updated = await repository.updateCharge(chargeId, {
+        status: ROOM_CHARGE_STATUSES.CANCELLED,
+        cancelledAt: now(),
+        cancelReason: normalizedReason,
+      });
+
+      return serializeRoomCharge(updated, { payments, now: now(), studentNames });
+    },
+
+    async getChargesForMonth(month, actorRole) {
+      if (!canViewAllRoomFees(actorRole)) {
+        throw new HttpError(403, 'Permission denied.');
+      }
+      const charges = await repository.findChargesForMonth(month);
+      const payments = await repository.findPaymentsForMonth(month);
+
+      const paymentsByCharge = new Map();
+      for (const p of payments) {
+        if (!paymentsByCharge.has(p.chargeId)) paymentsByCharge.set(p.chargeId, []);
+        paymentsByCharge.get(p.chargeId).push(p);
+      }
+      const studentNames = await getStudentNames();
+
+      return charges.map((c) =>
+        serializeRoomCharge(c, { payments: paymentsByCharge.get(c.chargeId) || [], now: now(), studentNames })
+      );
+    },
+
+    // --- Room Payments ---
+    async recordPayment({
+      chargeId,
+      memberId,
+      month,
+      amountPaise,
+      method,
+      reference = null,
+      idempotencyKey,
+      actorRole,
+    }) {
+      if (!canRecordRoomPayment(actorRole)) {
+        throw new HttpError(403, 'Only Admin or Super Admin can record verified room payments.');
+      }
+
+      if (!isValidUuid(idempotencyKey)) {
+        throw new HttpError(400, 'A valid UUID idempotencyKey is required.');
+      }
+
+      let targetMemberId = memberId;
+      let targetMonth = month;
+      if (!targetMemberId || !targetMonth) {
+        const charge = await repository.findChargeById(chargeId);
+        if (!charge) {
+          throw new HttpError(404, 'Room charge not found.');
+        }
+        targetMemberId = targetMemberId || charge.memberId;
+        targetMonth = targetMonth || charge.month;
+      }
+      await assertKnownMember(targetMemberId);
+      if (boundary) await boundary.assertFullOperationalMonth(targetMonth);
+      const studentNames = await getStudentNames();
+
+      // Idempotency: return existing payment if previously recorded with this key
+      const existingKey = await repository.findPaymentByIdempotencyKey(idempotencyKey);
+      if (existingKey) {
+        const isMatch =
+          existingKey.chargeId === chargeId &&
+          existingKey.memberId === targetMemberId &&
+          existingKey.month === targetMonth &&
+          existingKey.amountPaise === amountPaise &&
+          existingKey.method === method;
+
+        if (!isMatch) {
+          throw new HttpError(409, 'Idempotency key reused with conflicting payment payload.');
+        }
+        return serializeRoomPayment(existingKey, { studentNames });
+      }
+
+      if (!isValidRoomPaymentAmount(amountPaise)) {
+        throw new HttpError(400, 'Payment amount must be a positive safe integer in paise.');
+      }
+
+      if (!ROOM_PAYMENT_METHODS.includes(method)) {
+        throw new HttpError(400, `Invalid payment method. Must be one of: ${ROOM_PAYMENT_METHODS.join(', ')}.`);
+      }
+
+      if (typeof repository.executeAtomicRoomPayment === 'function') {
+        const settings = await repository.getPaymentSettings();
+        const recipientSnapshot = {
+          recipientMode: settings.recipientMode,
+          recipientName: settings.recipientName,
+          upiId: settings.upiId,
+        };
+        const normalizedRef = typeof reference === 'string' && reference.trim() ? reference.trim().slice(0, MAX_REFERENCE_LENGTH) : null;
+        const payment = await repository.executeAtomicRoomPayment({
+          chargeId,
+          memberId: targetMemberId,
+          month: targetMonth,
+          amountPaise,
+          method,
+          reference: normalizedRef,
+          recipientSnapshot,
+          idempotencyKey,
+          actorRole,
+        });
+        return serializeRoomPayment(payment, { studentNames });
+      }
+
+      const charge = await repository.findChargeById(chargeId);
+      if (!charge) {
+        throw new HttpError(404, 'Room charge not found.');
+      }
+
+      if (charge.status === ROOM_CHARGE_STATUSES.CANCELLED) {
+        throw new HttpError(400, 'Cannot record payment against a cancelled room charge.');
+      }
+
+      if (charge.memberId !== memberId || charge.month !== month) {
+        throw new HttpError(400, 'Charge member or month does not match payment payload.');
+      }
+
+      // Check remaining balance
+      const existingPayments = await repository.findPaymentsForCharge(chargeId);
+      const financials = computeChargeFinancials({ charge, payments: existingPayments, now: now() });
+
+      if (amountPaise > financials.remainingAmountPaise) {
+        throw new HttpError(
+          400,
+          `Payment amount (₹${amountPaise / 100}) exceeds remaining balance of ₹${financials.remainingAmountPaise / 100}.`
+        );
+      }
+
+      // Snapshot recipient settings
+      const settings = await repository.getPaymentSettings();
+      const recipientSnapshot = {
+        recipientMode: settings.recipientMode,
+        recipientName: settings.recipientName,
+        upiId: settings.upiId,
+      };
+
+      const normalizedRef = typeof reference === 'string' && reference.trim() ? reference.trim().slice(0, MAX_REFERENCE_LENGTH) : null;
+      const roomPaymentId = randomUUID();
+
+      const payment = await repository.createPayment({
+        roomPaymentId,
+        chargeId,
+        memberId,
+        month,
+        amountPaise,
+        method,
+        reference: normalizedRef,
+        recipientSnapshot,
+        idempotencyKey,
+        status: ROOM_PAYMENT_STATUSES.VERIFIED,
+        recordedAt: now(),
+        recordedByRole: actorRole,
+      });
+
+      return serializeRoomPayment(payment, { studentNames });
+    },
+
+    async voidPayment({ roomPaymentId, reason, actorRole }) {
+      if (!canVoidRoomPayment(actorRole)) {
+        throw new HttpError(403, 'Only Super Admin can void room payments.');
+      }
+
+      if (typeof reason !== 'string' || !reason.trim() || reason.trim().length > MAX_REASON_LENGTH) {
+        throw new HttpError(400, `Void reason is required and must not exceed ${MAX_REASON_LENGTH} characters.`);
+      }
+      const studentNames = await getStudentNames();
+
+      if (typeof repository.executeAtomicVoidPayment === 'function') {
+        const updated = await repository.executeAtomicVoidPayment({
+          roomPaymentId,
+          reason: reason.trim(),
+          actorRole,
+        });
+        return serializeRoomPayment(updated, { studentNames });
+      }
+
+      const payment = await repository.findPaymentById(roomPaymentId);
+      if (!payment) {
+        throw new HttpError(404, 'Room payment not found.');
+      }
+
+      if (payment.status === ROOM_PAYMENT_STATUSES.VOIDED) {
+        return serializeRoomPayment(payment, { studentNames });
+      }
+
+      const updated = await repository.updatePayment(roomPaymentId, {
+        status: ROOM_PAYMENT_STATUSES.VOIDED,
+        voidedAt: now(),
+        voidedByRole: actorRole,
+        voidReason: reason.trim(),
+      });
+
+      return serializeRoomPayment(updated, { studentNames });
+    },
+
+    async getPaymentsForCharge(chargeId) {
+      const payments = await repository.findPaymentsForCharge(chargeId);
+      const studentNames = await getStudentNames();
+      return payments.map(payment => serializeRoomPayment(payment, { studentNames }));
+    },
+
+    async getPaymentsForMonth(month, actorRole) {
+      if (!canViewAllRoomFees(actorRole)) {
+        throw new HttpError(403, 'Permission denied.');
+      }
+      const payments = await repository.findPaymentsForMonth(month);
+      const studentNames = await getStudentNames();
+      return payments.map(payment => serializeRoomPayment(payment, { studentNames }));
+    },
+
+    async getAllPayments({ limit = 100 } = {}, actorRole) {
+      if (!canViewAllRoomFees(actorRole)) {
+        throw new HttpError(403, 'Permission denied.');
+      }
+      const payments = await repository.findAllPayments({ limit });
+      const studentNames = await getStudentNames();
+      return payments.map(payment => serializeRoomPayment(payment, { studentNames }));
+    },
+
+    // --- Member-Specific Data Queries ---
+    async getMemberAccommodation(memberId, targetDate = null) {
+      if (!isSafeStudentId(memberId)) {
+        throw new HttpError(400, 'Invalid member ID.');
+      }
+      await assertKnownMember(memberId);
+
+      const date = targetDate || getLogicalDateInTimeZone(now(), timezone);
+      if (!isValidLogicalDate(date)) {
+        throw new HttpError(400, 'Invalid accommodation date.');
+      }
+
+      const assignment = await repository.findAssignmentOnDate(memberId, date);
+      const room = assignment ? await repository.findRoomById(assignment.roomId) : null;
+      const feePlan = await repository.findActiveFeePlan(memberId, date.slice(0, 7));
+      const studentNames = await getStudentNames();
+
+      return {
+        currentRoom: room ? serializeRoom(room) : null,
+        currentAssignment: assignment
+          ? serializeRoomAssignment(assignment, new Map([[room?.roomId, room]]), { studentNames })
+          : null,
+        currentFeePlan: feePlan ? serializeFeePlan(feePlan, { studentNames }) : null,
+      };
+    },
+
+    async getMemberOverview({ memberId, targetMonth = null }) {
+      if (!isSafeStudentId(memberId)) {
+        throw new HttpError(400, 'Invalid member ID.');
+      }
+      await assertKnownMember(memberId);
+      const studentNames = await getStudentNames();
+
+      const month = targetMonth || getCurrentMonth();
+      const assignment = await repository.findActiveAssignment(memberId, month);
+      let room = null;
+      if (assignment) {
+        room = await repository.findRoomById(assignment.roomId);
+      }
+
+      const feePlan = await repository.findActiveFeePlan(memberId, month);
+      const charge = await repository.findChargeByMemberAndMonth(memberId, month);
+      let serializedCharge = null;
+
+      if (charge) {
+        const payments = await repository.findPaymentsForCharge(charge.chargeId);
+        serializedCharge = serializeRoomCharge(charge, { payments, now: now(), studentNames });
+      }
+
+      // Member lifetime stats across all issued charges
+      const allMemberCharges = await repository.findChargesForMember(memberId);
+      const allMemberPayments = await repository.findPaymentsForMember(memberId);
+
+      let totalBilledPaise = 0;
+      let totalPaidPaise = 0;
+      let totalOutstandingPaise = 0;
+      let paidMonthsCount = 0;
+      let partialMonthsCount = 0;
+      let dueMonthsCount = 0;
+
+      for (const c of allMemberCharges) {
+        if (c.status === ROOM_CHARGE_STATUSES.CANCELLED) continue;
+        const cPayments = allMemberPayments.filter((p) => p.chargeId === c.chargeId);
+        const fin = computeChargeFinancials({ charge: c, payments: cPayments, now: now() });
+        totalBilledPaise += fin.finalBillAmountPaise;
+        totalPaidPaise += fin.paidAmountPaise;
+        totalOutstandingPaise += fin.remainingAmountPaise;
+
+        if (fin.paymentStatus === 'paid') paidMonthsCount++;
+        else if (fin.paymentStatus === 'partial') partialMonthsCount++;
+        else dueMonthsCount++;
+      }
+
+      const settings = await repository.getPaymentSettings();
+
+      return {
+        memberId,
+        month,
+        currentRoom: room ? serializeRoom(room) : null,
+        currentAssignment: assignment ? serializeRoomAssignment(assignment, new Map([[room?.roomId, room]]), { studentNames }) : null,
+        currentFeePlan: feePlan ? serializeFeePlan(feePlan, { studentNames }) : null,
+        scheduledFeePaise: feePlan ? feePlan.amountPaise : null,
+        currentMonthCharge: serializedCharge,
+        summaryMetrics: {
+          totalBilledPaise,
+          totalPaidPaise,
+          totalOutstandingPaise,
+          issuedMonthsCount: allMemberCharges.filter((c) => c.status !== ROOM_CHARGE_STATUSES.CANCELLED).length,
+          paidMonthsCount,
+          partialMonthsCount,
+          dueMonthsCount,
+        },
+        recipientSettings: serializePaymentSettings(settings),
+      };
+    },
+
+    async getMemberHistory(memberId) {
+      if (!isSafeStudentId(memberId)) {
+        throw new HttpError(400, 'Invalid member ID.');
+      }
+      await assertKnownMember(memberId);
+      const studentNames = await getStudentNames();
+
+      const charges = await repository.findChargesForMember(memberId);
+      const payments = await repository.findPaymentsForMember(memberId);
+
+      const paymentsByCharge = new Map();
+      for (const p of payments) {
+        if (!paymentsByCharge.has(p.chargeId)) paymentsByCharge.set(p.chargeId, []);
+        paymentsByCharge.get(p.chargeId).push(p);
+      }
+
+      const serializedCharges = charges.map((c) =>
+        serializeRoomCharge(c, { payments: paymentsByCharge.get(c.chargeId) || [], now: now(), studentNames })
+      );
+
+      // Summary metrics
+      let totalBilledPaise = 0;
+      let totalPaidPaise = 0;
+      let totalOutstandingPaise = 0;
+
+      for (const sc of serializedCharges) {
+        if (sc.status === ROOM_CHARGE_STATUSES.CANCELLED) continue;
+        totalBilledPaise += sc.finalBillAmountPaise;
+        totalPaidPaise += sc.paidAmountPaise;
+        totalOutstandingPaise += sc.remainingAmountPaise;
+      }
+
+      return {
+        memberId,
+        charges: serializedCharges,
+        summaryMetrics: {
+          totalBilledPaise,
+          totalPaidPaise,
+          totalOutstandingPaise,
+          issuedCount: serializedCharges.filter((c) => c.status !== ROOM_CHARGE_STATUSES.CANCELLED).length,
+        },
+      };
+    },
+
+    async getMemberPayments(memberId) {
+      if (!isSafeStudentId(memberId)) {
+        throw new HttpError(400, 'Invalid member ID.');
+      }
+      await assertKnownMember(memberId);
+      const payments = await repository.findPaymentsForMember(memberId);
+      const studentNames = await getStudentNames();
+      return payments.map(payment => serializeRoomPayment(payment, { studentNames }));
+    },
+
+    // --- Admin Monthly Overview ---
+    async getMonthlySummary(month, actorRole) {
+      if (!canViewAllRoomFees(actorRole)) {
+        throw new HttpError(403, 'Permission denied.');
+      }
+
+      if (!isValidLogicalMonth(month)) {
+        throw new HttpError(400, 'month must be in YYYY-MM format.');
+      }
+
+      const rooms = await repository.findAllRooms();
+      const roomMap = new Map(rooms.map((r) => [r.roomId, r]));
+
+      const memberSummaries = [];
+      let totalBilledPaise = 0;
+      let totalCollectedPaise = 0;
+      let totalOutstandingPaise = 0;
+      let membersBilledCount = 0;
+      let membersPaidCount = 0;
+      let membersPendingCount = 0;
+      const members = await getMembers();
+      const studentNames = students
+        ? new Map(members.map(member => [member.id, member.name])) : null;
+
+      for (const member of members) {
+        const memberId = member.id;
+        const assignment = await repository.findActiveAssignment(memberId, month);
+        const room = assignment ? roomMap.get(assignment.roomId) : null;
+        const plan = await repository.findActiveFeePlan(memberId, month);
+        const charge = await repository.findChargeByMemberAndMonth(memberId, month);
+
+        let serializedCharge = null;
+        if (charge) {
+          const payments = await repository.findPaymentsForCharge(charge.chargeId);
+          serializedCharge = serializeRoomCharge(charge, { payments, now: now(), studentNames });
+
+          if (charge.status !== ROOM_CHARGE_STATUSES.CANCELLED) {
+            totalBilledPaise += serializedCharge.finalBillAmountPaise;
+            totalCollectedPaise += serializedCharge.paidAmountPaise;
+            totalOutstandingPaise += serializedCharge.remainingAmountPaise;
+            membersBilledCount++;
+
+            if (serializedCharge.paymentStatus === 'paid') {
+              membersPaidCount++;
+            } else {
+              membersPendingCount++;
+            }
+          }
+        }
+
+        memberSummaries.push({
+          memberId,
+          memberName: member.name,
+          room: room ? serializeRoom(room) : null,
+          assignment: assignment ? serializeRoomAssignment(assignment, roomMap, { studentNames }) : null,
+          feePlan: plan ? serializeFeePlan(plan, { studentNames }) : null,
+          charge: serializedCharge,
+          status: serializedCharge ? serializedCharge.paymentStatus : (plan ? 'not_issued' : 'not_configured'),
+        });
+      }
+
+      return {
+        month,
+        household: {
+          totalBilledPaise,
+          totalCollectedPaise,
+          totalOutstandingPaise,
+          membersBilledCount,
+          membersPaidCount,
+          membersPendingCount,
+        },
+        members: memberSummaries,
+      };
+    },
+
+    // --- Settings ---
+    async getPaymentSettings() {
+      const settings = await repository.getPaymentSettings();
+      return serializePaymentSettings(settings);
+    },
+
+    async updatePaymentSettings(updates, actorRole) {
+      if (!canManageRoomPaymentSettings(actorRole)) {
+        throw new HttpError(403, 'Permission denied to update room payment settings.');
+      }
+
+      const allowed = {};
+      if (updates.recipientMode !== undefined) {
+        if (!Object.values(RECIPIENT_MODES).includes(updates.recipientMode)) {
+          throw new HttpError(400, 'Invalid recipient mode.');
+        }
+        allowed.recipientMode = updates.recipientMode;
+      }
+
+      if (updates.recipientName !== undefined) {
+        if (typeof updates.recipientName !== 'string' || !updates.recipientName.trim() || updates.recipientName.trim().length > MAX_RECIPIENT_NAME_LENGTH) {
+          throw new HttpError(400, `Recipient name is required and must not exceed ${MAX_RECIPIENT_NAME_LENGTH} characters.`);
+        }
+        allowed.recipientName = updates.recipientName.trim();
+      }
+
+      if (updates.upiId !== undefined) {
+        allowed.upiId = typeof updates.upiId === 'string' && updates.upiId.trim() ? updates.upiId.trim().slice(0, MAX_UPI_ID_LENGTH) : null;
+      }
+
+      if (updates.paymentInstructions !== undefined) {
+        allowed.paymentInstructions = typeof updates.paymentInstructions === 'string' && updates.paymentInstructions.trim() ? updates.paymentInstructions.trim().slice(0, MAX_INSTRUCTIONS_LENGTH) : null;
+      }
+
+      if (updates.defaultDueDay !== undefined) {
+        const numDueDay = updates.defaultDueDay;
+        if (!Number.isInteger(numDueDay) || numDueDay < MIN_DUE_DAY || numDueDay > MAX_DUE_DAY) {
+          throw new HttpError(400, `defaultDueDay must be an integer between ${MIN_DUE_DAY} and ${MAX_DUE_DAY}.`);
+        }
+        allowed.defaultDueDay = numDueDay;
+      }
+
+      allowed.updatedByRole = actorRole;
+      const updated = await repository.updatePaymentSettings(allowed);
+      return serializePaymentSettings(updated);
+    },
+  });
+}
+
+import { roomRepository } from './room.repository.js';
+export const roomFeeService = createRoomFeeService({ repository: roomRepository, students: studentResolver, boundary: financialBoundaryService });

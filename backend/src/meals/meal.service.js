@@ -5,11 +5,21 @@ import { HttpError } from '../utils/HttpError.js';
 import { DEFAULT_MEAL_STATUS, getMealPath, MEAL_TYPES } from './meal.constants.js';
 import { createDefaultMealDay } from './meal.defaults.js';
 import { mealRepository } from './meal.repository.js';
-import { serializeHistory, serializeMealDay } from './meal.serializer.js';
+import { serializeHistory, serializeLegacyMealSnapshot, serializeMealDay } from './meal.serializer.js';
 import {
+  calculateMemberShareUnits,
   deriveParticipationStatuses,
   validatePlateAllocation,
 } from './plateAllocation.service.js';
+import { stayRepository } from '../stays/stay.repository.js';
+import { MEMBER_IDS } from '../config/members.js';
+import { studentResolver } from '../students/studentResolver.service.js';
+import { extractMealParticipantIds, normalizeParticipantIds } from './mealParticipants.js';
+import { resolvePhysicalPlateLimit } from './plateAllocation.constants.js';
+import { mealHistorySnapshotRepository } from './mealHistorySnapshot.repository.js';
+import { mealHistoricalCorrectionRepository } from './mealHistoricalCorrection.repository.js';
+import { resolveHistoricalMealAuthority } from './mealHistoricalCorrection.service.js';
+import { assertMemberNotCheckedOut } from './mealCheckoutGuard.js';
 
 const MAX_CONCURRENT_RETRIES = 12;
 
@@ -20,14 +30,91 @@ function isDuplicateKeyError(error) {
 export function createMealService({
   repository = mealRepository,
   settlements = null,
+  stays = null,
+  students = null,
+  snapshots = null,
+  corrections = null,
   timezone = env.appTimezone,
+  runtimeProfile = env.runtimeProfile,
 } = {}) {
+  const listEligibleStudentIds = async (date) => {
+    if (!students) {
+      if (runtimeProfile === 'v3') {
+        throw new HttpError(503, 'Student registry is unavailable for v3 meals.');
+      }
+      return MEMBER_IDS;
+    }
+    const eligibleStudents = await students.listEligibleOn(date);
+    return eligibleStudents.map(({ studentId }) => studentId);
+  };
+
+  const createDefaultDayForDate = async (date) => (
+    createDefaultMealDay(date, await listEligibleStudentIds(date))
+  );
+
+  const participantsForDay = async (document, date) => document
+    ? normalizeParticipantIds(document.participantOrder?.length ? document.participantOrder : extractMealParticipantIds(document))
+    : listEligibleStudentIds(date);
+
+  const verifiedSnapshot = async (document) => resolveHistoricalMealAuthority(document, {
+    snapshots,
+    corrections: corrections ?? { listByDate: async () => [] },
+  });
+
+  const serializeDay = async (document, date) => {
+    if (runtimeProfile === 'v3' && document && document.schemaVersion !== 3 && snapshots) {
+      return {
+        ...serializeLegacyMealSnapshot(await verifiedSnapshot(document), { timezone }),
+        ...(document.financialClassification ? { financialClassification: document.financialClassification } : {}),
+        ...(document.cutoverClassificationSource ? { cutoverClassificationSource: document.cutoverClassificationSource } : {}),
+        ...(document.importedFromLegacy ? { importedFromLegacy: true } : {}),
+      };
+    }
+    return serializeMealDay(document, date, {
+      timezone,
+      ...(document ? {} : { participants: await listEligibleStudentIds(date) }),
+    });
+  };
+
+  const runFinancialMutation = async (date, actorRole, work, proposedIds = []) => {
+    const previous = await repository.findByDate(date);
+    if (runtimeProfile === 'v3' && previous && previous.schemaVersion !== 3 && snapshots) {
+      await verifiedSnapshot(previous);
+      throw new HttpError(409, 'Historical meal correction requires an explicit revision-aware correction.');
+    }
+    const memberIds = normalizeParticipantIds([
+      ...(previous ? extractMealParticipantIds(previous) : await listEligibleStudentIds(date)),
+      ...proposedIds,
+    ]);
+    if (typeof repository.executeFinancialMutation === 'function') {
+      return repository.executeFinancialMutation({ date, memberIds, actorRole }, async ({ session, guard }) => work({
+        session,
+        guard: async () => {
+          const current = await repository.findByDate(date, { session });
+          if (runtimeProfile === 'v3' && current && current.schemaVersion !== 3 && snapshots) {
+            await verifiedSnapshot(current);
+            throw new HttpError(409, 'Historical meal correction requires an explicit revision-aware correction.');
+          }
+          const currentIds = current
+            ? extractMealParticipantIds(current)
+            : await listEligibleStudentIds(date);
+          await guard({ memberIds: normalizeParticipantIds([...memberIds, ...currentIds]) });
+        },
+      }));
+    }
+    return work({ session: null, guard: async () => {} });
+  };
+
   return Object.freeze({
     async getDay(date) {
       try {
         const document = await repository.findByDate(date);
-        return serializeMealDay(document, date, { timezone });
+        return serializeDay(document, date);
       } catch (error) {
+        if (error instanceof HttpError) throw error;
+        if (/historical meal (?:correction )?snapshot/i.test(error.message)) {
+          throw new HttpError(503, error.message, { cause: error });
+        }
         throw new HttpError(503, 'Meal data is temporarily unavailable.', { cause: error });
       }
     },
@@ -35,8 +122,27 @@ export function createMealService({
     async getHistory(date, limit) {
       try {
         const document = await repository.findByDate(date);
-        return serializeHistory(document, date, limit);
+        if (runtimeProfile === 'v3' && document && document.schemaVersion !== 3 && snapshots) await verifiedSnapshot(document);
+        const history = serializeHistory(document, date, limit);
+        if (runtimeProfile === 'v3' && document && document.schemaVersion !== 3 && corrections) {
+          const correctionEvents = (await corrections.listByDate(date)).map((record) => ({
+            changedAt: new Date(record.createdAt).toISOString(),
+            actorRole: record.actorRole,
+            actorMemberId: null,
+            mealType: record.mealType,
+            changeType: record.operation,
+            reason: record.reason,
+            revision: record.revision,
+            type: 'historical_correction',
+          }));
+          history.items = [...history.items, ...correctionEvents]
+            .sort((a, b) => b.changedAt.localeCompare(a.changedAt)).slice(0, limit);
+        }
+        return history;
       } catch (error) {
+        if (/historical meal (?:correction )?snapshot/i.test(error.message)) {
+          throw new HttpError(503, error.message, { cause: error });
+        }
         throw new HttpError(503, 'Meal history is temporarily unavailable.', { cause: error });
       }
     },
@@ -54,6 +160,10 @@ export function createMealService({
         throw new HttpError(409, 'This month is closed. Reopen the month before changing meals.');
       }
 
+      if (status === 'taking' && stays) {
+        await assertMemberNotCheckedOut(memberId, date, stays);
+      }
+
       const path = getMealPath(mealType, memberId);
 
       if (!path) {
@@ -61,8 +171,12 @@ export function createMealService({
       }
 
       try {
-        for (let attempt = 0; attempt < MAX_CONCURRENT_RETRIES; attempt += 1) {
-          const currentDocument = await repository.findByDate(date);
+        return await runFinancialMutation(date, actorRole, async ({ session, guard }) => {
+          for (let attempt = 0; attempt < MAX_CONCURRENT_RETRIES; attempt += 1) {
+            const currentDocument = await repository.findByDate(date, { session });
+          if (currentDocument && !(await participantsForDay(currentDocument, date)).includes(memberId)) {
+            throw new HttpError(409, 'Student is not a participant in this saved meal.');
+          }
           const currentStatus = currentDocument?.meals?.[mealType]?.[memberId] ?? DEFAULT_MEAL_STATUS;
           const currentAllocation = currentDocument?.allocations?.[mealType];
           const hasCustomAllocation = currentAllocation && currentAllocation.mode === 'custom';
@@ -71,7 +185,7 @@ export function createMealService({
             return {
               changed: false,
               allocationReset: false,
-              data: serializeMealDay(currentDocument, date, { timezone }),
+              data: await serializeDay(currentDocument, date),
             };
           }
 
@@ -86,20 +200,27 @@ export function createMealService({
           };
 
           if (!currentDocument) {
-            const newDocument = createDefaultMealDay(date);
+            const newDocument = await createDefaultDayForDate(date);
+            if (!Object.hasOwn(newDocument.meals[mealType], memberId)) {
+              if (!students) throw new HttpError(400, 'Invalid member.');
+              if (typeof students.assertKnown === 'function') await students.assertKnown(memberId);
+              throw new HttpError(409, 'Student is not eligible for meals on this date.');
+            }
             newDocument.meals[mealType][memberId] = status;
             newDocument.revision = 1;
             newDocument.changes.push(statusChange);
 
             try {
-              const created = await repository.create(newDocument);
+              await guard();
+              const created = await repository.create(newDocument, { session });
               return {
                 changed: true,
                 allocationReset: false,
-                data: serializeMealDay(created, date, { timezone }),
+                data: await serializeDay(created, date),
               };
             } catch (error) {
               if (isDuplicateKeyError(error)) {
+                if (session) throw error;
                 continue;
               }
               throw error;
@@ -118,6 +239,7 @@ export function createMealService({
               reason: `Reset because ${memberId} changed status to ${status}`,
             };
 
+            await guard();
             const updated = await repository.updateMealStatusWithAllocationReset({
               date,
               path,
@@ -127,16 +249,17 @@ export function createMealService({
               revision: currentDocument.revision,
               statusChange,
               allocationResetChange,
-            });
+            }, { session });
 
             if (updated) {
               return {
                 changed: true,
                 allocationReset: true,
-                data: serializeMealDay(updated, date, { timezone }),
+                data: await serializeDay(updated, date),
               };
             }
           } else {
+            await guard();
             const updated = await repository.updateIfCurrent({
               date,
               path,
@@ -144,21 +267,22 @@ export function createMealService({
               to: status,
               revision: currentDocument.revision,
               change: statusChange,
-            });
+            }, { session });
 
             if (updated) {
               return {
                 changed: true,
                 allocationReset: false,
-                data: serializeMealDay(updated, date, { timezone }),
+                data: await serializeDay(updated, date),
               };
             }
           }
-        }
+          }
 
-        throw new Error('Concurrent meal updates did not settle');
+          throw new Error('Concurrent meal updates did not settle');
+        }, [memberId]);
       } catch (error) {
-        if (error instanceof HttpError) {
+        if (error instanceof HttpError || error.statusCode) {
           throw error;
         }
 
@@ -172,6 +296,7 @@ export function createMealService({
       date,
       mealType,
       allocation,
+      expectedRevision = null,
       actorRole,
       actorMemberId = null,
       changedAt = new Date(),
@@ -179,13 +304,41 @@ export function createMealService({
       if (settlements && (await settlements.isMonthClosed(date.slice(0, 7)))) {
         throw new HttpError(409, 'This month is closed. Reopen the month before changing plate allocation.');
       }
+      if (expectedRevision !== null && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0)) {
+        throw new HttpError(400, 'Expected revision must be a non-negative integer.');
+      }
 
-      const validatedAllocation = validatePlateAllocation(allocation);
-      const derivedStatuses = deriveParticipationStatuses(validatedAllocation);
+      const existingDay = await repository.findByDate(date);
+      if (expectedRevision !== null && (existingDay?.revision ?? 0) !== expectedRevision) {
+        throw new HttpError(409, 'Meal revision changed. Refresh and retry the allocation.');
+      }
+      const participantIds = await participantsForDay(existingDay, date);
+      const validatedAllocation = validatePlateAllocation(allocation, {
+        participants: participantIds,
+        maxPhysicalPlates: resolvePhysicalPlateLimit(participantIds.length),
+      });
+      const derivedStatuses = deriveParticipationStatuses(validatedAllocation, { participants: participantIds });
+
+      if (stays && validatedAllocation.plates) {
+        for (const [mId, units] of Object.entries(calculateMemberShareUnits(validatedAllocation, { participants: participantIds }))) {
+          if (mId !== 'totalUnits' && units > 0) {
+            await assertMemberNotCheckedOut(mId, date, stays);
+          }
+        }
+      }
 
       try {
-        for (let attempt = 0; attempt < MAX_CONCURRENT_RETRIES; attempt += 1) {
-          const currentDocument = await repository.findByDate(date);
+        return await runFinancialMutation(date, actorRole, async ({ session, guard }) => {
+          for (let attempt = 0; attempt < MAX_CONCURRENT_RETRIES; attempt += 1) {
+            const currentDocument = await repository.findByDate(date, { session });
+          if (expectedRevision !== null && (currentDocument?.revision ?? 0) !== expectedRevision) {
+            throw new HttpError(409, 'Meal revision changed. Refresh and retry the allocation.');
+          }
+          const currentIds = await participantsForDay(currentDocument, date);
+          if (currentIds.length !== participantIds.length
+            || currentIds.some((studentId, index) => studentId !== participantIds[index])) {
+            throw new HttpError(409, 'Meal participants changed. Refresh and retry the allocation.');
+          }
           const currentAllocation = currentDocument?.allocations?.[mealType] ?? null;
 
           const allocationChange = {
@@ -200,7 +353,7 @@ export function createMealService({
           };
 
           if (!currentDocument) {
-            const newDocument = createDefaultMealDay(date);
+            const newDocument = await createDefaultDayForDate(date);
             newDocument.allocations = {
               morning: null,
               night: null,
@@ -211,19 +364,22 @@ export function createMealService({
             newDocument.allocationChanges = [allocationChange];
 
             try {
-              const created = await repository.create(newDocument);
+              await guard();
+              const created = await repository.create(newDocument, { session });
               return {
                 changed: true,
-                data: serializeMealDay(created, date, { timezone }),
+                data: await serializeDay(created, date),
               };
             } catch (error) {
               if (isDuplicateKeyError(error)) {
+                if (session) throw error;
                 continue;
               }
               throw error;
             }
           }
 
+          await guard();
           const updated = await repository.updateAllocationIfCurrent({
             date,
             mealType,
@@ -231,19 +387,20 @@ export function createMealService({
             derivedStatuses,
             revision: currentDocument.revision,
             allocationChange,
-          });
+          }, { session });
 
           if (updated) {
             return {
               changed: true,
-              data: serializeMealDay(updated, date, { timezone }),
+              data: await serializeDay(updated, date),
             };
           }
-        }
+          }
 
-        throw new Error('Concurrent allocation updates did not settle');
+          throw new Error('Concurrent allocation updates did not settle');
+        }, participantIds);
       } catch (error) {
-        if (error instanceof HttpError) {
+        if (error instanceof HttpError || error.statusCode) {
           throw error;
         }
 
@@ -265,14 +422,15 @@ export function createMealService({
       }
 
       try {
-        for (let attempt = 0; attempt < MAX_CONCURRENT_RETRIES; attempt += 1) {
-          const currentDocument = await repository.findByDate(date);
+        return await runFinancialMutation(date, actorRole, async ({ session, guard }) => {
+          for (let attempt = 0; attempt < MAX_CONCURRENT_RETRIES; attempt += 1) {
+            const currentDocument = await repository.findByDate(date, { session });
           const currentAllocation = currentDocument?.allocations?.[mealType] ?? null;
 
           if (!currentAllocation) {
             return {
               changed: false,
-              data: serializeMealDay(currentDocument, date, { timezone }),
+              data: await serializeDay(currentDocument, date),
             };
           }
 
@@ -287,24 +445,26 @@ export function createMealService({
             reason: 'Reset to individual plates',
           };
 
+          await guard();
           const updated = await repository.clearAllocationIfCurrent({
             date,
             mealType,
             revision: currentDocument.revision,
             allocationChange,
-          });
+          }, { session });
 
           if (updated) {
             return {
               changed: true,
-              data: serializeMealDay(updated, date, { timezone }),
+              data: await serializeDay(updated, date),
             };
           }
-        }
+          }
 
-        throw new Error('Concurrent allocation clears did not settle');
+          throw new Error('Concurrent allocation clears did not settle');
+        });
       } catch (error) {
-        if (error instanceof HttpError) {
+        if (error instanceof HttpError || error.statusCode) {
           throw error;
         }
 
@@ -353,8 +513,9 @@ export function createMealService({
           : null;
 
       try {
-        for (let attempt = 0; attempt < MAX_CONCURRENT_RETRIES; attempt += 1) {
-          const currentDocument = await repository.findByDate(date);
+        return await runFinancialMutation(date, actorRole, async ({ session, guard }) => {
+          for (let attempt = 0; attempt < MAX_CONCURRENT_RETRIES; attempt += 1) {
+            const currentDocument = await repository.findByDate(date, { session });
           const currentOverride = currentDocument?.priceOverrides?.[mealType] ?? null;
           const currentPrice = currentOverride?.pricePaise ?? null;
           const currentReason = currentOverride?.reason ?? null;
@@ -362,7 +523,7 @@ export function createMealService({
           if (currentPrice === pricePaise && currentReason === normalizedReason) {
             return {
               changed: false,
-              data: serializeMealDay(currentDocument, date, { timezone }),
+              data: await serializeDay(currentDocument, date),
             };
           }
 
@@ -383,44 +544,48 @@ export function createMealService({
           };
 
           if (!currentDocument) {
-            const newDocument = createDefaultMealDay(date);
+            const newDocument = await createDefaultDayForDate(date);
             newDocument.priceOverrides[mealType] = newOverride;
             newDocument.revision = 1;
             newDocument.priceChanges.push(priceChange);
 
             try {
-              const created = await repository.create(newDocument);
+              await guard();
+              const created = await repository.create(newDocument, { session });
               return {
                 changed: true,
-                data: serializeMealDay(created, date, { timezone }),
+                data: await serializeDay(created, date),
               };
             } catch (error) {
               if (isDuplicateKeyError(error)) {
+                if (session) throw error;
                 continue;
               }
               throw error;
             }
           }
 
+          await guard();
           const updated = await repository.updatePriceOverrideIfCurrent({
             date,
             mealType,
             priceOverride: newOverride,
             revision: currentDocument.revision,
             priceChange,
-          });
+          }, { session });
 
           if (updated) {
             return {
               changed: true,
-              data: serializeMealDay(updated, date, { timezone }),
+              data: await serializeDay(updated, date),
             };
           }
-        }
+          }
 
-        throw new Error('Concurrent price updates did not settle');
+          throw new Error('Concurrent price updates did not settle');
+        });
       } catch (error) {
-        if (error instanceof HttpError) {
+        if (error instanceof HttpError || error.statusCode) {
           throw error;
         }
 
@@ -450,14 +615,15 @@ export function createMealService({
       }
 
       try {
-        for (let attempt = 0; attempt < MAX_CONCURRENT_RETRIES; attempt += 1) {
-          const currentDocument = await repository.findByDate(date);
+        return await runFinancialMutation(date, actorRole, async ({ session, guard }) => {
+          for (let attempt = 0; attempt < MAX_CONCURRENT_RETRIES; attempt += 1) {
+            const currentDocument = await repository.findByDate(date, { session });
           const currentOverride = currentDocument?.priceOverrides?.[mealType] ?? null;
 
           if (!currentOverride) {
             return {
               changed: false,
-              data: serializeMealDay(currentDocument, date, { timezone }),
+              data: await serializeDay(currentDocument, date),
             };
           }
 
@@ -472,24 +638,26 @@ export function createMealService({
             reason: 'Reset to standard price',
           };
 
+          await guard();
           const updated = await repository.clearPriceOverrideIfCurrent({
             date,
             mealType,
             revision: currentDocument.revision,
             priceChange,
-          });
+          }, { session });
 
           if (updated) {
             return {
               changed: true,
-              data: serializeMealDay(updated, date, { timezone }),
+              data: await serializeDay(updated, date),
             };
           }
-        }
+          }
 
-        throw new Error('Concurrent price clears did not settle');
+          throw new Error('Concurrent price clears did not settle');
+        });
       } catch (error) {
-        if (error instanceof HttpError) {
+        if (error instanceof HttpError || error.statusCode) {
           throw error;
         }
 
@@ -501,4 +669,9 @@ export function createMealService({
   });
 }
 
-export const mealService = createMealService();
+export const mealService = createMealService({
+  stays: stayRepository,
+  students: studentResolver,
+  snapshots: mealHistorySnapshotRepository,
+  corrections: mealHistoricalCorrectionRepository,
+});

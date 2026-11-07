@@ -1,7 +1,8 @@
-import { MEMBER_IDS } from '../config/members.js';
 import { env } from '../config/env.js';
 import { mealService } from '../meals/meal.service.js';
 import { reminderSettingsService } from '../settings/reminderSettings.service.js';
+import { isSafeStudentId } from '../students/studentId.js';
+import { studentResolver } from '../students/studentResolver.service.js';
 import { getLogicalDateInTimeZone } from '../utils/date.js';
 import { logger } from '../utils/logger.js';
 import { pushDeliveryRepository } from './pushDelivery.repository.js';
@@ -43,6 +44,7 @@ export function createReminderDispatchService({
   subscriptions = pushSubscriptionRepository,
   deliveries = pushDeliveryRepository,
   push = webPushService,
+  resolver = env.runtimeProfile === 'v3' ? studentResolver : null,
   timezone = env.appTimezone,
 } = {}) {
   return Object.freeze({
@@ -80,13 +82,16 @@ export function createReminderDispatchService({
       }
 
       const mealDay = await meals.getDay(logicalDate);
+      const eligibleIds = resolver
+        ? new Set((await resolver.listEligibleOn(logicalDate)).map(student => student.studentId)) : null;
       let attemptedCount = 0;
       let sentCount = 0;
       let expiredCount = 0;
       let failedCount = 0;
 
       for (const mealType of dueMealTypes) {
-        for (const memberId of MEMBER_IDS) {
+        for (const memberId of Object.keys(mealDay?.meals?.[mealType] ?? {})) {
+          if (!isSafeStudentId(memberId) || (eligibleIds && !eligibleIds.has(memberId))) continue;
           const status = mealDay?.meals?.[mealType]?.[memberId];
 
           // Smart filter: Only send reminders if member is Taking

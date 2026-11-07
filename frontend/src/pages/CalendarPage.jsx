@@ -11,10 +11,13 @@ import { Badge } from '../components/ui/badge.jsx';
 import { ErrorState } from '../components/ui/ErrorState.jsx';
 import { Skeleton } from '../components/ui/skeleton.jsx';
 import { useCalendarMonth } from '../hooks/useCalendarMonth.js';
+import { useAuth } from '../hooks/useAuth.js';
+import { useOperationalStudents } from '../hooks/useOperationalStudents.js';
 import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
 import { useServerToday } from '../hooks/useServerToday.js';
 import { useSettlement } from '../hooks/useSettlement.js';
 import { formatLogicalDate } from '../lib/logicalDate.js';
+import { resolveDayParticipants } from '../lib/operationalRoster.js';
 import {
   addLogicalMonths,
   formatLogicalMonth,
@@ -26,6 +29,8 @@ const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 export function CalendarPage() {
   useDocumentTitle('Calendar');
+  const auth = useAuth();
+  const studentRoster = useOperationalStudents({ includeArchived: true, enabled: auth.authenticated && auth.role !== 'viewer' });
   const serverToday = useServerToday();
   const [searchParams] = useSearchParams();
   const queryMonth = searchParams.get('month');
@@ -65,6 +70,11 @@ export function CalendarPage() {
 
       {serverToday.error && (
         <ErrorState title="Calendar unavailable" message={serverToday.error} />
+      )}
+
+      {studentRoster.error && (
+        <ErrorState compact title="Student names unavailable" message={studentRoster.error}
+          actionLabel="Try again" onAction={studentRoster.refresh} />
       )}
 
       {month && (
@@ -278,6 +288,7 @@ export function CalendarPage() {
             />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <MealCard
+                participants={resolveDayParticipants(activeDay, studentRoster.data)}
                 mealType="morning"
                 title="Morning"
                 meals={activeDay.meals.morning}
@@ -285,6 +296,7 @@ export function CalendarPage() {
                 pricing={activeDay.pricing?.morning}
               />
               <MealCard
+                participants={resolveDayParticipants(activeDay, studentRoster.data)}
                 mealType="night"
                 title="Night"
                 meals={activeDay.meals.night}
@@ -293,6 +305,7 @@ export function CalendarPage() {
               />
             </div>
             <DailyCostSummary
+              participants={resolveDayParticipants(activeDay, studentRoster.data)}
               summary={activeDay.dailyCostSummary}
               counts={activeDay.counts}
             />

@@ -16,6 +16,7 @@ import { useAuth } from '../hooks/useAuth.js';
 import { useDocumentTitle } from '../hooks/useDocumentTitle.js';
 import { useMealDay } from '../hooks/useMealDay.js';
 import { useMealHistory } from '../hooks/useMealHistory.js';
+import { useOperationalStudents } from '../hooks/useOperationalStudents.js';
 import { usePwa } from '../hooks/usePwa.js';
 import { useSettlement } from '../hooks/useSettlement.js';
 import { api } from '../lib/api.js';
@@ -23,6 +24,7 @@ import { getRoleLabel } from '../lib/constants.js';
 import { addLogicalDays, formatIndiaTime, formatLogicalDate, isValidLogicalDate } from '../lib/logicalDate.js';
 import { formatLogicalMonth } from '../lib/logicalMonth.js';
 import { formatPaise } from '../lib/money.js';
+import { resolveDayParticipants } from '../lib/operationalRoster.js';
 
 export function AdminPage() {
   useDocumentTitle('Admin');
@@ -40,6 +42,8 @@ export function AdminPage() {
   const [pricingMealType, setPricingMealType] = useState(null);
 
   const mealDay = useMealDay(requestedDate);
+  const studentRoster = useOperationalStudents({ includeArchived: true });
+  const dayParticipants = resolveDayParticipants(mealDay.data, studentRoster.data);
   const displayedDate = mealDay.data?.date ?? '';
   const month = displayedDate ? displayedDate.slice(0, 7) : '';
   const settlement = useSettlement(month);
@@ -194,6 +198,11 @@ export function AdminPage() {
         />
       )}
 
+      {studentRoster.error && (
+        <ErrorState compact title="Student names unavailable" message={studentRoster.error}
+          actionLabel="Try again" onAction={studentRoster.refresh} />
+      )}
+
       {mealDay.data && (
         <>
           {!mealDay.data.permissions?.canEdit && auth.role === 'admin' && (
@@ -237,6 +246,7 @@ export function AdminPage() {
           {/* Morning and Night Meal Cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <MealCard
+              participants={dayParticipants}
               mealType="morning"
               title="Morning"
               meals={mealDay.data.meals.morning}
@@ -253,6 +263,7 @@ export function AdminPage() {
               onConfigurePrice={() => setPricingMealType('morning')}
             />
             <MealCard
+              participants={dayParticipants}
               mealType="night"
               title="Night"
               meals={mealDay.data.meals.night}
@@ -282,11 +293,17 @@ export function AdminPage() {
 
       {sharingMealType && mealDay.data && (
         <PlateSharingDialog
+          key={`${displayedDate}:${sharingMealType}`}
           date={displayedDate}
           mealType={sharingMealType}
+          participants={dayParticipants}
+          maxPhysicalPlates={mealDay.data.maxPhysicalPlates}
+          effectivePricePaise={mealDay.data.pricing?.[sharingMealType]?.effectivePricePaise}
+          expectedRevision={mealDay.data.revision}
           currentAllocation={mealDay.data.allocations?.[sharingMealType]}
           currentMeals={mealDay.data.meals?.[sharingMealType]}
           onClose={() => setSharingMealType(null)}
+          onConflict={mealDay.refresh}
           onSaved={(updatedMealDay) => {
             mealDay.applyServerData(updatedMealDay);
             setSaveMessage('Plate sharing allocation saved.');
@@ -431,11 +448,12 @@ export function AdminPage() {
                 }
 
                 // Status change item
-                const memberName = item.memberId[0].toUpperCase() + item.memberId.slice(1);
+                const memberName = studentRoster.data.find(student => student.id === item.memberId)?.name
+                  ?? item.memberId;
                 let actionDescription;
                 if (item.actorRole === 'member' && item.actorMemberId) {
-                  const actorName =
-                    item.actorMemberId[0].toUpperCase() + item.actorMemberId.slice(1);
+                  const actorName = studentRoster.data.find(student => student.id === item.actorMemberId)?.name
+                    ?? item.actorMemberId;
                   if (item.actorMemberId === item.memberId) {
                     actionDescription = `${actorName} changed their ${item.mealType === 'morning' ? 'Morning' : 'Night'} meal`;
                   } else {

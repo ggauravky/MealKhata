@@ -10,7 +10,7 @@ export function enforceTrustedOrigin(req, res, next) {
   const origin = req.get('origin');
   const isAllowedOrigin =
     origin === env.appOrigin ||
-    (env.nodeEnv === 'development' &&
+    ((env.nodeEnv === 'development' || env.nodeEnv === 'test') &&
       (origin === 'http://localhost:5173' || origin === 'http://localhost:5174'));
 
   if (!isAllowedOrigin) {

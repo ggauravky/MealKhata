@@ -1,9 +1,13 @@
 import { Router } from 'express';
 import { checkDatabaseReadiness } from '../config/db.js';
+import { env } from '../config/env.js';
 import { isDraining } from '../config/lifecycle.js';
+import { checkV3ReleaseReadiness } from '../config/v3ReleaseReadiness.js';
 import { APP_VERSION } from '../config/version.js';
 
-export function createHealthRouter({ readiness = checkDatabaseReadiness, drainingCheck = isDraining, version = APP_VERSION } = {}) {
+export function createHealthRouter({ readiness = env.runtimeProfile === 'v3'
+  ? checkV3ReleaseReadiness : checkDatabaseReadiness,
+drainingCheck = isDraining, version = APP_VERSION } = {}) {
   const router = Router();
 
   router.get('/health', (req, res) => {
@@ -24,7 +28,9 @@ export function createHealthRouter({ readiness = checkDatabaseReadiness, drainin
       });
     }
 
-    const ready = await readiness();
+    let ready = false;
+    try { ready = await readiness() === true; }
+    catch { /* A readiness observer failure must never make the service ready. */ }
     return res.status(ready ? 200 : 503).json({
       success: ready,
       status: ready ? 'ready' : 'unavailable',

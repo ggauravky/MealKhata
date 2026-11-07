@@ -41,7 +41,7 @@ export function generateSettlementCsv(settlement) {
   const { month, settlementId, sequence, status, closedAt, snapshot } = settlement;
   const { rates, members } = snapshot;
 
-  const memberKeys = ['gaurav', 'nikhil', 'devansh'];
+  const memberKeys = snapshot.studentIds ?? Object.keys(members ?? {});
 
   for (const memberId of memberKeys) {
     const m = members[memberId] || {
@@ -64,7 +64,7 @@ export function generateSettlementCsv(settlement) {
       settlementId,
       sequence,
       memberId,
-      MEMBER_NAMES[memberId] || memberId,
+      m.displayName || MEMBER_NAMES[memberId] || memberId,
       morningPart,
       nightPart,
       morningUnits,

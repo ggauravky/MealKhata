@@ -351,7 +351,7 @@ describe('Phase 10: Month Closing, Authorization & Snapshot Immutability', () =>
     assert.equal(settlement.month, PAST_MONTH);
     assert.equal(settlement.sequence, 1);
     assert.equal(settlement.status, 'closed');
-    assert.equal(settlement.snapshotVersion, 2);
+    assert.equal(settlement.snapshotVersion, 3);
     assert.equal(settlement.closedByRole, 'superadmin');
     assert.ok(settlement.settlementId);
 

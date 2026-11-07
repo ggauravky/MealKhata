@@ -1,0 +1,70 @@
+name: V3 isolated release readiness
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact reviewed commit SHA (40 hexadecimal characters)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  quality-and-migration:
+    name: Code, migration, security and build evidence
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require exact reviewed commit
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          [[ "$EXPECTED_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.1'
+          cache: npm
+      - run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Backend unit, isolated replica-set migration, archive and rollback tests
+        run: npm run test --workspace backend
+      - name: Frontend tests
+        run: npm run test --workspace frontend
+      - name: Frontend production build
+        run: npm run build
+      - name: Backend and deployment configuration verification
+        run: npm run verify-production-build
+      - name: Security checks
+        run: npm run security:check
+      - name: Dependency audit
+        run: npm audit --audit-level=high
+      - name: Performance baseline
+        run: npm run perf:check
+      - name: Local gate summary
+        run: |
+          echo 'Code and isolated migration gates passed.'
+          echo 'Genuine source, recovery, provider and owner approval remain external production gates.'
+
+  isolated-browser:
+    name: Disposable browser acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require exact reviewed commit
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          [[ "$EXPECTED_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.1'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e:browser

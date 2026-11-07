@@ -2,7 +2,13 @@
 
 **Meals tracked. Bills sorted.**
 
-MealKhata is a private, production-grade meal tracking and shared-accounting progressive web application (PWA) built for three roommates: **Gaurav**, **Nikhil**, and **Devansh**.
+MealKhata is a private meal tracking and shared-accounting progressive web application (PWA) with a MongoDB-managed student roster. Gaurav, Nikhil and Devansh retain their original historical IDs; Super Admins can add further students without code changes.
+
+## MealKhata 3.0 release candidate
+
+Super Admin Student Management (`/admin/members`) supports optional login provisioning, meal eligibility, archive/reactivation and historical identity lookup. Saved historical meals retain their original participants, shares, prices, costs and audit authority. A separately configured financial start date controls fresh operational dues; old historical meals remain visible without creating new unpaid balances.
+
+The v3 migration tooling is currently restricted to **local isolated-test replica sets**. See [the migration rehearsal](./docs/migrations/v3-blue-green.md) and [cutover and rollback checklist](./docs/V3_CUTOVER_AND_ROLLBACK.md). No production migration, deployment or financial start date is implied by this branch.
 
 ---
 
@@ -35,12 +41,61 @@ MealKhata simplifies daily household meal coordination and monthly shared-expens
 
 ## Screens / Workflow
 
-1. **Dashboard (`/`)**: Daily home view. Members toggle today's meals; Admins oversee roommate plate requirements; Super Admin monitors settlement and rate configuration attention items.
-2. **Calendar (`/calendar?month=YYYY-MM`)**: Household monthly view. Inspect any past, current, or future month with date-level plate counts.
-3. **Reports (`/reports?month=YYYY-MM`)**: Monthly financial report detailing breakfast/dinner plate counts, current rates, total bill, paid amounts, and projected month-end totals.
-4. **Payments (`/payments?month=YYYY-MM`)**: Financial ledger page. Members prepare and confirm personal payments via UPI deep links or copy-and-pay details; Super Admin can void mistaken entries with an audit reason.
-5. **Admin Panel (`/admin`)**: Administrative controls for configuring monthly rates, managing payment receiver details, setting reminder schedules, and closing/reopening monthly settlements.
-6. **Login (`/login`)**: Secure role-aware authentication with 7-day persistent HttpOnly sessions for Admin and Super Admin, and 12-hour sessions for Members. Sessions persist across browser closures while remaining subject to active account status and session version revocation.
+1. **Dashboard (`/`)**: Daily home view. Members toggle today's meals; authenticated members view their current month Room Fee preview; Admins oversee roommate plate requirements and have shortcuts to Room Fee Administration.
+2. **Mess Calendar (`/calendar?month=YYYY-MM`)**: Household monthly view. Inspect any past, current, or future month with date-level plate counts.
+3. **Room Fees (`/room-fees?month=YYYY-MM`)**: Member room fee portal with current month charge, payment progress bar, month-wise fee history, payment breakdown dialog, summary metrics, and verified recipient UPI instructions.
+4. **Other Expenses (`/expenses?month=YYYY-MM`)**: Shared and personal expense portal. Filter by category, view individual spending shares, track outstanding reimbursements owed and receivable, and inspect detailed participant splits.
+5. **Payments (`/payments?month=YYYY-MM`)**: Triple-ledger financial center with independent `[ Mess ]`, `[ Room Fees ]`, and `[ Expenses ]` tabs.
+6. **Reports (`/reports?month=YYYY-MM`)**: Monthly mess financial report detailing plate counts, rates, total bill, paid amounts, and projected month-end totals.
+7. **Mess Admin Panel (`/admin`)**: Administrative controls for mess monthly rates, mess receiver settings, reminders, and mess monthly settlements.
+8. **Room Fee Administration (`/admin/room-fees`)**: Dedicated hostel room admin center with Overview, Room Registry & Occupancy, Individual Fee Plans, Monthly Charge Issuance, Verified Payments, and Recipient Configuration.
+9. **Expense Administration (`/admin/expenses`)**: Management center for shared spending with Monthly Overview, Expense Ledger (Add/View/Void), Confirmed Reimbursements, and Immutable Financial Audit History.
+10. **Login (`/login`)**: Secure role-aware authentication with 7-day persistent HttpOnly sessions for Admin and Super Admin, and 12-hour sessions for Members.
+
+---
+
+## MealKhata 2.0 — Phase 1: Room Fees & Hostel Management Foundation
+
+Phase 1 introduces a dedicated, independent financial domain for hostel room fees that coexists with the existing mess domain without altering any mess records or calculations:
+
+- **Room & Occupancy Registry (`rooms`, `room_assignments`)**: Configurable rooms, occupancy limits (1 or 2 persons), and historical resident assignments with month-level effective dates.
+- **Individual Member Fee Plans (`room_fee_plans`)**: Independent monthly pricing per resident. Roommates sharing a room (e.g. Room 204) can pay different rates without automatic equal splitting. Rates support forward effective dates without retroactively altering historical charges.
+- **Explicit Monthly Charge Generation (`room_charges`)**: Idempotent preview and manual charge issuance by Admin. Unissued months never generate fake debts. Super Admin can record auditable adjustments (+/-) or cancellations.
+- **Dedicated Room Payment Ledger (`room_payments`)**: Separate collection for room payments with manual methods (UPI, Cash, Bank Transfer, Other), partial payment tracking, overpayment guards, idempotency keys, and Super Admin voiding with mandatory audit reasons.
+- **Configurable Recipient Instructions (`room_payment_settings`)**: Dynamic configuration for `hostel_owner` vs. `admin_collector`, recipient display name, optional official UPI ID (generates deep links), and custom bank instructions.
+
+---
+
+## MealKhata 2.0 — Phase 2: Other Expenses & Shared Spending
+
+Phase 2 introduces a dedicated, third independent financial domain for groceries, snacks, outside food, and household supplies:
+
+- **Dedicated Expense Collections (`expenses`, `expense_reimbursements`)**: Complete physical and logical ledger separation from Mess and Room Fees. Zero cross-ledger bleed or balance contamination.
+- **Merchant Payer vs. Beneficiary Distinction**: Explicitly separates who paid the merchant (`paidByMemberId`) from who benefited and owes a share (`allocations[]`). The payer's own consumption share is tracked as spending, not as a debt to themselves.
+- **Canonical Deterministic Split Engine**:
+  - **Equal Split**: Even division using integer division and deterministic remainder distribution (canonical member ordering).
+  - **Personal Expense**: Single beneficiary; 100% allocated to beneficiary.
+  - **Custom Split**: Exact per-member integer paise allocation strictly enforcing $\sum \text{allocations} = \text{expense total}$.
+- **Reimbursement Lifecycle & Accounting Guard**:
+  - Reimbursements settle debts between roommates; they **never** count as additional household spending.
+  - Idempotent reimbursement recording with strict debt ceilings preventing overpayment.
+  - Self-reimbursement is strictly rejected ($fromMemberId \neq toMemberId$).
+- **Immutable Financial Corrections & Void Protection**:
+  - Expenses cannot be edited in place once recorded.
+  - Super Admin can void an expense with a mandatory reason, but voiding is strictly blocked if active reimbursements exist (must void reimbursements first).
+- **Privacy & Server-Side Ownership**:
+  - Members can only view expenses and reimbursements where they are payer or beneficiary. Unrelated personal purchases are hidden.
+- **Redesigned Navigation**:
+  - **Desktop**: `MealKhata Home | Mess | Room Fees | Expenses | Payments | Reports` + Theme Toggle + Account Menu.
+  - **Mobile**: Clean 5-item bottom bar (`Home | Mess | Room | Expenses | More`), where More exposes Payments, Reports, Admin Panels, Theme, App Install, and Sign Out.
+- **Realtime & Offline Safety**:
+  - `expenses:updated` Socket.IO broadcast invalidation with safe metadata only.
+  - Strictly network-only API routing; zero offline writes.
+- **Backup & Audit Integrity**:
+  - `expenses` and `expense_reimbursements` included in encrypted backup and restore engine.
+  - Read-only data verification enforcing 8 domain invariants across allocations and reimbursements.
+- **Separation of Concerns**: Existing `meal_days`, `payments`, `monthly_settlements`, and `monthly_meal_rates` remain completely untouched. Mess payments and room payments are strictly segregated.
+- **Backup & Verification Integration**: All 6 new collections (`rooms`, `room_assignments`, `room_fee_plans`, `room_charges`, `room_payments`, `room_payment_settings`) are included in encrypted backups, `verify-indexes`, and `verify-data` checks.
 
 ---
 
@@ -110,8 +165,8 @@ All mutations capture the authenticated actor's identity (`actorRole` and `actor
 
 ## Meal Rules & Scheduling
 
-- **Default Taking**: Untouched dates default to `taking` for all three members without requiring advance database document creation.
-- **Taking vs. Skip**: `taking` corresponds to exactly 1 plate for billing; `skip` corresponds to 0 plates.
+- **Explicit Attendance**: Untouched dates show `not_set` for students eligible on that date; opening a date does not create a database document or bill.
+- **Taking vs. Skip**: `taking` contributes the student's configured plate share; `skip` contributes no meal cost. Physical plates and exact paise are calculated from saved allocations.
 - **Timezone Authority**: All date determinations, cutoff calculations, and reminders operate in `Asia/Kolkata`.
 - **Member Ownership**: Members may only modify their own meals for today. Editing other members or past/future dates is strictly rejected with `403 Forbidden`.
 - **Concurrency Control**: Meal updates use optimistic locking via document revisions (`revision` counter) to ensure concurrent edits resolve safely.
@@ -196,13 +251,10 @@ npm install
 # 2. Setup local backend configuration
 copy backend\.env.example backend\.env
 
-# 3. Generate password hashes for Admin and Super Admin
-npm run hash-password
+# 3. Configure a local MongoDB replica set and canonical account credentials
+#    in an isolated development database; see backend/.env.example.
 
-# 4. Bootstrap Member accounts in MongoDB
-npm run seed-members
-
-# 5. Start concurrent development servers
+# 4. Start concurrent development servers
 npm run dev
 ```
 
@@ -227,7 +279,9 @@ MealKhata includes non-destructive operational and maintenance scripts:
 | `npm run verify-data` | Non-destructive read-only audit validating 12 domain invariants across all collections. |
 | `npm run db:backup` | Generates a compressed, AES-256-GCM encrypted backup archive preserving BSON Extended JSON. |
 | `npm run db:backup:verify -- <file>` | Decrypts and verifies backup archive manifest, GCM auth tag, and SHA-256 payload checksum. |
-| `npm run db:restore -- <file>` | Restores a verified backup to a designated target database (`RESTORE_MONGODB_URI`). |
+| `npm run db:restore -- <file>` | Restores a verified backup only to a local replica set with `RESTORE_MONGODB_URI` and `RESTORE_TARGET_CLASSIFICATION=isolated-test`. |
+| `npm run e2e:browser` | Runs Chromium acceptance against an automatically started isolated MongoDB replica set, Express API and React frontend. |
+| `npm run migrate:v3 -- --help` | Describes local-only verified archive, sidecar, apply, delta and pre/post verification modes. |
 
 ---
 
@@ -286,3 +340,5 @@ If background push is enabled, deploy the 5-minute cron runner via [`render.push
 - **Release Checklist**: [`docs/RELEASE_CHECKLIST.md`](./docs/RELEASE_CHECKLIST.md)
 - **v1.0.0 Release Notes**: [`docs/RELEASE_NOTES_v1.0.0.md`](./docs/RELEASE_NOTES_v1.0.0.md)
 - **Changelog**: [`CHANGELOG.md`](./CHANGELOG.md)
+- **MealKhata 3.0 Migration Rehearsal**: [`docs/migrations/v3-blue-green.md`](./docs/migrations/v3-blue-green.md)
+- **MealKhata 3.0 Cutover and Rollback Checklist**: [`docs/V3_CUTOVER_AND_ROLLBACK.md`](./docs/V3_CUTOVER_AND_ROLLBACK.md)

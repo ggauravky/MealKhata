@@ -1,5 +1,6 @@
-import { MEMBER_IDS } from '../config/members.js';
 import { reportService } from '../reports/report.service.js';
+import { studentResolver } from '../students/studentResolver.service.js';
+import { assertSafeStudentId } from '../students/studentId.js';
 import { HttpError } from '../utils/HttpError.js';
 import { paymentRepository } from './payment.repository.js';
 
@@ -22,7 +23,7 @@ export function derivePaymentAmounts({ billAmountPaise, paidAmountPaise, periodT
   return { remainingAmountPaise, overpaidAmountPaise, status };
 }
 
-export function createPaymentSummaryService({ reports = reportService, repository = paymentRepository } = {}) {
+export function createPaymentSummaryService({ reports = reportService, repository = paymentRepository, students = null } = {}) {
   return Object.freeze({
     async getSummary(month) {
       try {
@@ -30,39 +31,74 @@ export function createPaymentSummaryService({ reports = reportService, repositor
           reports.getMonthlyReport(month),
           repository.findSummaryByMonth(month),
         ]);
-        const recorded = payments.filter(({ status }) => status === 'recorded');
-        const paidByMember = Object.fromEntries(MEMBER_IDS.map((memberId) => [memberId, 0]));
-        for (const payment of recorded) paidByMember[payment.memberId] += payment.amountPaise;
+        const memberIds = new Set([
+          ...Object.keys(report.projection?.members ?? {}),
+          ...Object.keys(report.toDate?.members ?? {}),
+          ...Object.keys(report.operationalToDate?.members ?? {}),
+        ]);
+        const paidByMember = {};
+        const paymentOnlyNames = {};
+        for (const payment of payments) {
+          try {
+            assertSafeStudentId(payment.memberId);
+          } catch {
+            throw new HttpError(409, `Invalid payment student reference: ${payment.memberId}`);
+          }
+          if (!memberIds.has(payment.memberId)) {
+            if (!students) throw new HttpError(409, `Unknown payment student reference: ${payment.memberId}`);
+            try {
+              const student = await students.assertKnown(payment.memberId);
+              paymentOnlyNames[payment.memberId] = student.displayName;
+            } catch {
+              throw new HttpError(409, `Unknown payment student reference: ${payment.memberId}`);
+            }
+            memberIds.add(payment.memberId);
+          }
+          if (payment.status === 'recorded') {
+            paidByMember[payment.memberId] = (paidByMember[payment.memberId] ?? 0) + payment.amountPaise;
+          } else if (payment.status !== 'voided') {
+            throw new HttpError(409, `Invalid payment status for ${payment.memberId}`);
+          }
+        }
 
         const ratesConfigured = report.rates.configured;
-        const members = Object.fromEntries(MEMBER_IDS.map((memberId) => {
+        const members = Object.fromEntries([...memberIds].map((memberId) => {
           const billAmountPaise = report.periodType === 'future'
             ? null
-            : report.toDate?.members[memberId].amountPaise ?? null;
-          const paidAmountPaise = paidByMember[memberId];
+            : report.operationalToDate
+              ? (report.operationalToDate.members?.[memberId]?.amountPaise ?? 0)
+              : (report.toDate?.members?.[memberId]?.amountPaise ?? 0);
+          const paidAmountPaise = paidByMember[memberId] ?? 0;
+          const historicalMealCostPaise = report.operationalToDate
+            ? Math.max((report.toDate?.members?.[memberId]?.amountPaise ?? 0) - billAmountPaise, 0)
+            : 0;
+          const amounts = derivePaymentAmounts({ billAmountPaise, paidAmountPaise,
+            periodType: report.periodType, ratesConfigured });
           return [memberId, {
+            displayName: report.toDate?.members?.[memberId]?.displayName
+              ?? report.projection?.members?.[memberId]?.displayName
+              ?? paymentOnlyNames[memberId] ?? memberId,
             billAmountPaise,
             paidAmountPaise,
-            ...derivePaymentAmounts({
-              billAmountPaise,
-              paidAmountPaise,
-              periodType: report.periodType,
-              ratesConfigured,
-            }),
-            projectedBillAmountPaise: report.projection.members[memberId].amountPaise,
+            historicalMealCostPaise,
+            operationalMessBillPaise: billAmountPaise,
+            operationalMessPaidPaise: paidAmountPaise,
+            operationalMessRemainingPaise: amounts.remainingAmountPaise,
+            ...amounts,
+            projectedBillAmountPaise: report.projection.members?.[memberId]?.amountPaise ?? 0,
           }];
         }));
 
         const roomBillAmountPaise = report.periodType === 'future'
           ? null
-          : report.toDate?.room.amountPaise ?? null;
+          : report.operationalToDate?.room.amountPaise ?? report.toDate?.room.amountPaise ?? null;
         const roomPaidAmountPaise = Object.values(paidByMember).reduce((total, value) => total + value, 0);
 
         return {
           month,
           periodType: report.periodType,
           today: report.today,
-          payable: report.periodType !== 'future' && ratesConfigured,
+          payable: report.periodType !== 'future' && ratesConfigured && (!report.operationalToDate || report.financialBoundary !== null),
           ratesConfigured,
           members,
           room: {
@@ -85,4 +121,4 @@ export function createPaymentSummaryService({ reports = reportService, repositor
   });
 }
 
-export const paymentSummaryService = createPaymentSummaryService();
+export const paymentSummaryService = createPaymentSummaryService({ students: studentResolver });

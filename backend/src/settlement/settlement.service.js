@@ -1,16 +1,20 @@
 import crypto from 'node:crypto';
-import { MEMBER_IDS } from '../config/members.js';
 import { paymentSummaryService } from '../payments/paymentSummary.service.js';
 import { reportService } from '../reports/report.service.js';
 import { HttpError } from '../utils/HttpError.js';
 import { isValidLogicalMonth } from '../utils/month.js';
 import { monthlySettlementRepository } from './monthlySettlement.repository.js';
 import { serializeSettlement, serializeSettlementHistory } from './monthlySettlement.serializer.js';
+import { studentResolver } from '../students/studentResolver.service.js';
+import { MEMBER_NAMES } from '../config/members.js';
+import { financialBoundaryService } from '../finance/financialBoundary.service.js';
 
 export function createSettlementService({
   reports = reportService,
   summaries = paymentSummaryService,
   repository = monthlySettlementRepository,
+  students = null,
+  boundary = null,
   now = () => new Date(),
 } = {}) {
   return Object.freeze({
@@ -55,6 +59,13 @@ export function createSettlementService({
       ]);
 
       const blockers = [];
+      if (boundary) {
+        const settings = await boundary.getFinancialBoundary();
+        if (!settings.financialStartDate) blockers.push({ type: 'boundary_unset', message: 'Financial start date is not configured.' });
+        else if ((await boundary.getMonthScope(month)).kind === 'historical') {
+          blockers.push({ type: 'historical_month', message: 'Historical months cannot be closed as operational settlements.' });
+        }
+      }
 
       if (report.periodType === 'future') {
         blockers.push({
@@ -75,7 +86,7 @@ export function createSettlementService({
         });
       }
 
-      for (const memberId of MEMBER_IDS) {
+      for (const memberId of Object.keys(summary.members ?? {})) {
         const memberSummary = summary.members[memberId];
         if (!memberSummary) continue;
 
@@ -83,6 +94,7 @@ export function createSettlementService({
           blockers.push({
             type: 'remaining_balance',
             memberId,
+            displayName: report.toDate?.members?.[memberId]?.displayName ?? memberId,
             amountPaise: memberSummary.remainingAmountPaise,
             message: `${memberId} has remaining balance to settle.`,
           });
@@ -92,6 +104,7 @@ export function createSettlementService({
           blockers.push({
             type: 'overpayment',
             memberId,
+            displayName: report.toDate?.members?.[memberId]?.displayName ?? memberId,
             amountPaise: memberSummary.overpaidAmountPaise,
             message: `Blocked: ${memberId} is overpaid. Correct the payment ledger before closing.`,
           });
@@ -119,6 +132,7 @@ export function createSettlementService({
       if (!isValidLogicalMonth(month)) {
         throw new HttpError(400, 'Month must be a valid calendar month in YYYY-MM format.');
       }
+      if (boundary) await boundary.assertOperationalMonth(month);
 
       const isClosed = await this.isMonthClosed(month);
       if (isClosed) {
@@ -137,8 +151,14 @@ export function createSettlementService({
       ]);
 
       const members = {};
-      for (const memberId of MEMBER_IDS) {
-        const toDateMember = report.toDate?.members[memberId] || { morningCount: 0, nightCount: 0, totalMeals: 0, amountPaise: 0 };
+      const studentIds = [...new Set([
+        ...Object.keys(report.operationalToDate?.members ?? report.toDate?.members ?? {}),
+        ...Object.keys(summary.members ?? {}),
+      ])];
+      const knownStudents = students ? await students.listAll() : [];
+      const studentNames = Object.fromEntries(knownStudents.map((student) => [student.studentId, student.displayName]));
+      for (const memberId of studentIds) {
+        const toDateMember = (report.operationalToDate ?? report.toDate)?.members[memberId] || { morningCount: 0, nightCount: 0, totalMeals: 0, amountPaise: 0 };
         const summaryMember = summary.members[memberId] || { paidAmountPaise: 0 };
 
         const morningParticipation = toDateMember.morningParticipationCount ?? toDateMember.morningCount ?? 0;
@@ -148,6 +168,7 @@ export function createSettlementService({
         const totalUnits = toDateMember.totalShareUnits ?? (morningUnits + nightUnits);
 
         members[memberId] = {
+          displayName: studentNames[memberId] ?? MEMBER_NAMES[memberId] ?? memberId,
           morningCount: morningParticipation,
           nightCount: nightParticipation,
           totalPlates: totalUnits / 6,
@@ -159,10 +180,11 @@ export function createSettlementService({
           billAmountPaise: toDateMember.amountPaise,
           paidAmountPaise: summaryMember.paidAmountPaise,
           remainingAmountPaise: 0,
+          overpaidAmountPaise: 0,
         };
       }
 
-      const toDateRoom = report.toDate?.room || { morningCount: 0, nightCount: 0, totalMeals: 0, amountPaise: 0 };
+      const toDateRoom = (report.operationalToDate ?? report.toDate)?.room || { morningCount: 0, nightCount: 0, totalMeals: 0, amountPaise: 0 };
       const roomMorningPlates = toDateRoom.morningPhysicalPlates ?? toDateRoom.morningCount ?? 0;
       const roomNightPlates = toDateRoom.nightPhysicalPlates ?? toDateRoom.nightCount ?? 0;
       const roomTotalPlates = toDateRoom.totalPhysicalPlates ?? toDateRoom.totalPlates ?? (roomMorningPlates + roomNightPlates);
@@ -182,6 +204,7 @@ export function createSettlementService({
       };
 
       const snapshot = {
+        studentIds,
         rates: {
           morningPricePaise: report.rates.morningPricePaise,
           nightPricePaise: report.rates.nightPricePaise,
@@ -200,7 +223,7 @@ export function createSettlementService({
           settlementId,
           month,
           sequence,
-          snapshotVersion: 2,
+          snapshotVersion: 3,
           snapshot,
           closedAt: now(),
           closedByRole: actorRole,
@@ -245,4 +268,4 @@ export function createSettlementService({
   });
 }
 
-export const settlementService = createSettlementService();
+export const settlementService = createSettlementService({ students: studentResolver, boundary: financialBoundaryService });

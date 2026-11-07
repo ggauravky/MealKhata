@@ -1,4 +1,5 @@
-import { MEMBER_IDS, MEMBER_NAMES } from '../config/members.js';
+import { MEMBER_NAMES } from '../config/members.js';
+import { studentResolver } from '../students/studentResolver.service.js';
 import { env } from '../config/env.js';
 import { monthMealService } from '../calendar/monthMeal.service.js';
 import { reportService } from '../reports/report.service.js';
@@ -85,7 +86,8 @@ function verifyExportReconciliation({
   }
 
   // 2. Sum of member bills vs Room bill
-  const memberBillsSum = MEMBER_IDS.reduce((acc, id) => acc + members[id].billAmountPaise, 0);
+  const memberIds = Object.keys(members);
+  const memberBillsSum = memberIds.reduce((acc, id) => acc + members[id].billAmountPaise, 0);
   if (memberBillsSum !== summary.roomAmountPaise) {
     throw new Error(
       `Reconciliation failure: sum of member bills (${memberBillsSum}) does not equal room bill (${summary.roomAmountPaise})`,
@@ -93,22 +95,22 @@ function verifyExportReconciliation({
   }
 
   // 3. For each member: sum of daily costs vs member bill
-  for (const id of MEMBER_IDS) {
-    const mDailySum = actualDays.reduce((acc, d) => acc + d.members[id].dailyTotalPaise, 0);
+  for (const id of memberIds) {
+    const mDailySum = actualDays.reduce((acc, d) => acc + (d.members[id]?.dailyTotalPaise ?? 0), 0);
     if (mDailySum !== members[id].billAmountPaise) {
       throw new Error(
         `Reconciliation failure for ${id}: daily costs sum (${mDailySum}) does not equal member bill (${members[id].billAmountPaise})`,
       );
     }
 
-    const mMorningSum = actualDays.reduce((acc, d) => acc + d.members[id].morning.amountPaise, 0);
+    const mMorningSum = actualDays.reduce((acc, d) => acc + (d.members[id]?.morning.amountPaise ?? 0), 0);
     if (mMorningSum !== members[id].morningAmountPaise) {
       throw new Error(
         `Reconciliation failure for ${id}: daily morning costs sum (${mMorningSum}) does not equal member morning cost (${members[id].morningAmountPaise})`,
       );
     }
 
-    const mNightSum = actualDays.reduce((acc, d) => acc + d.members[id].night.amountPaise, 0);
+    const mNightSum = actualDays.reduce((acc, d) => acc + (d.members[id]?.night.amountPaise ?? 0), 0);
     if (mNightSum !== members[id].nightAmountPaise) {
       throw new Error(
         `Reconciliation failure for ${id}: daily night costs sum (${mNightSum}) does not equal member night cost (${members[id].nightAmountPaise})`,
@@ -139,7 +141,7 @@ function verifyExportReconciliation({
     );
   }
 
-  for (const id of MEMBER_IDS) {
+  for (const id of memberIds) {
     const mPaid = recordedPayments.filter((p) => p.memberId === id).reduce((acc, p) => acc + p.amountPaise, 0);
     if (mPaid !== members[id].paidAmountPaise) {
       throw new Error(
@@ -161,7 +163,10 @@ function verifyExportReconciliation({
         `Reconciliation failure: summary paid (${summary.paidAmountPaise}) does not match frozen snapshot (${snap.room.paidAmountPaise})`,
       );
     }
-    for (const id of MEMBER_IDS) {
+    for (const id of memberIds) {
+      if (!snap.members?.[id]) {
+        throw new Error(`Reconciliation failure for ${id}: missing frozen settlement member`);
+      }
       if (members[id].billAmountPaise !== snap.members[id].billAmountPaise) {
         throw new Error(
           `Reconciliation failure for ${id}: member bill (${members[id].billAmountPaise}) does not match frozen snapshot (${snap.members[id].billAmountPaise})`,
@@ -185,6 +190,7 @@ export function createMonthlyReportExportService({
   payments = paymentRepository,
   settlements = settlementService,
   rates = monthlyRateService,
+  students = null,
   now = () => new Date(),
   timezone = env.appTimezone,
 } = {}) {
@@ -209,6 +215,17 @@ export function createMonthlyReportExportService({
           settlements.getActiveSettlement(month),
           rates.getRate(month),
         ]);
+      const knownStudents = students ? await students.listAll() : [];
+      const names = Object.fromEntries(knownStudents.map((student) => [student.studentId, student.displayName]));
+      const memberIds = [...new Set([
+        ...Object.keys(monthlyReport.projection?.members ?? {}),
+        ...Object.keys(monthlyReport.toDate?.members ?? {}),
+        ...Object.keys(paymentSummary.members ?? {}),
+        ...Object.keys(activeSettlement?.snapshot?.members ?? {}),
+        ...paymentHistory.map((payment) => payment.memberId),
+        ...monthMealData.days.flatMap((day) => day.participantOrder ?? Object.keys(day.dailyCostSummary?.members ?? {})),
+      ])];
+      const memberName = (id) => activeSettlement?.snapshot?.members?.[id]?.displayName ?? names[id] ?? MEMBER_NAMES[id] ?? id;
 
       const isClosed = Boolean(activeSettlement && activeSettlement.status === 'closed');
       let reportState = 'open_past';
@@ -251,13 +268,19 @@ export function createMonthlyReportExportService({
 
       // Process daily meal records
       const allDays = monthMealData.days.map((day) => {
-        const morningAlloc = getEffectiveMealAllocation({
+        const participants = day.participantOrder?.length
+          ? day.participantOrder
+          : [...new Set([...Object.keys(day.meals?.morning ?? {}), ...Object.keys(day.meals?.night ?? {})])];
+        const historical = day.calculationVersion?.startsWith('legacy-');
+        const morningAlloc = historical ? null : getEffectiveMealAllocation({
           statuses: day.meals?.morning,
           customAllocation: day.allocations?.morning,
+          participants,
         });
-        const nightAlloc = getEffectiveMealAllocation({
+        const nightAlloc = historical ? null : getEffectiveMealAllocation({
           statuses: day.meals?.night,
           customAllocation: day.allocations?.night,
+          participants,
         });
 
         const dayMorningPrice = resolveMealPricePaise({
@@ -271,36 +294,42 @@ export function createMonthlyReportExportService({
           fallbackPricePaise: nightPricePaise,
         });
 
-        const morningSplit = splitMealCost({
+        const morningSplit = historical ? day.allocations?.morning?.cost : splitMealCost({
           date: day.date,
           mealType: 'morning',
           effectiveAllocation: morningAlloc,
           pricePaise: dayMorningPrice,
+          participants,
         });
 
-        const nightSplit = splitMealCost({
+        const nightSplit = historical ? day.allocations?.night?.cost : splitMealCost({
           date: day.date,
           mealType: 'night',
           effectiveAllocation: nightAlloc,
           pricePaise: dayNightPrice,
+          participants,
         });
+        if (historical && (!morningSplit || !nightSplit || !day.dailyCostSummary ||
+          morningSplit.roomAmountPaise + nightSplit.roomAmountPaise !== day.dailyCostSummary.room?.totalAmountPaise)) {
+          throw new Error(`Historical cost mismatch for ${day.date}`);
+        }
 
         const dateParts = formatReportDate(day.date);
 
         const memberData = Object.fromEntries(
-          MEMBER_IDS.map((id) => {
+          memberIds.map((id) => {
             const rawMorningStatus = day.meals?.morning?.[id] ?? 'not_set';
             const rawNightStatus = day.meals?.night?.[id] ?? 'not_set';
-            const mShareUnits = morningSplit.members[id].shareUnits;
-            const nShareUnits = nightSplit.members[id].shareUnits;
-            const mCostPaise = morningSplit.members[id].amountPaise;
-            const nCostPaise = nightSplit.members[id].amountPaise;
+            const mShareUnits = morningSplit.members?.[id]?.shareUnits ?? 0;
+            const nShareUnits = nightSplit.members?.[id]?.shareUnits ?? 0;
+            const mCostPaise = morningSplit.members?.[id]?.amountPaise ?? 0;
+            const nCostPaise = nightSplit.members?.[id]?.amountPaise ?? 0;
 
             return [
               id,
               {
                 memberId: id,
-                memberName: MEMBER_NAMES[id] ?? id,
+                memberName: memberName(id),
                 morning: {
                   rawStatus: rawMorningStatus,
                   status: mapStatusLabel(rawMorningStatus),
@@ -321,8 +350,8 @@ export function createMonthlyReportExportService({
           }),
         );
 
-        const morningEating = MEMBER_IDS.filter((id) => day.meals?.morning?.[id] === 'taking').length;
-        const nightEating = MEMBER_IDS.filter((id) => day.meals?.night?.[id] === 'taking').length;
+        const morningEating = Object.values(day.meals?.morning ?? {}).filter((status) => status === 'taking').length;
+        const nightEating = Object.values(day.meals?.night ?? {}).filter((status) => status === 'taking').length;
 
         return {
           date: day.date,
@@ -398,7 +427,7 @@ export function createMonthlyReportExportService({
         };
 
         summaryMembers = Object.fromEntries(
-          MEMBER_IDS.map((id) => {
+          memberIds.map((id) => {
             const m = snap.members[id] || {};
             const mPart = m.morningParticipationCount ?? m.morningCount ?? 0;
             const nPart = m.nightParticipationCount ?? m.nightCount ?? 0;
@@ -406,8 +435,8 @@ export function createMonthlyReportExportService({
             const nUnits = m.nightShareUnits ?? (nPart * 6);
             const totalUnits = m.totalShareUnits ?? (mUnits + nUnits);
 
-            const mCost = actualDays.reduce((acc, d) => acc + d.members[id].morning.amountPaise, 0);
-            const nCost = actualDays.reduce((acc, d) => acc + d.members[id].night.amountPaise, 0);
+            const mCost = actualDays.reduce((acc, d) => acc + (d.members[id]?.morning.amountPaise ?? 0), 0);
+            const nCost = actualDays.reduce((acc, d) => acc + (d.members[id]?.night.amountPaise ?? 0), 0);
 
             const rem = m.remainingAmountPaise ?? Math.max(m.billAmountPaise - m.paidAmountPaise, 0);
             const over = m.overpaidAmountPaise ?? Math.max(m.paidAmountPaise - m.billAmountPaise, 0);
@@ -421,7 +450,7 @@ export function createMonthlyReportExportService({
               id,
               {
                 memberId: id,
-                memberName: MEMBER_NAMES[id] ?? id,
+                memberName: memberName(id),
                 morningParticipationCount: mPart,
                 nightParticipationCount: nPart,
                 totalParticipationCount: mPart + nPart,
@@ -462,11 +491,11 @@ export function createMonthlyReportExportService({
         };
 
         summaryMembers = Object.fromEntries(
-          MEMBER_IDS.map((id) => [
+          memberIds.map((id) => [
             id,
             {
               memberId: id,
-              memberName: MEMBER_NAMES[id] ?? id,
+              memberName: memberName(id),
               morningParticipationCount: 0,
               nightParticipationCount: 0,
               totalParticipationCount: 0,
@@ -508,7 +537,7 @@ export function createMonthlyReportExportService({
         };
 
         summaryMembers = Object.fromEntries(
-          MEMBER_IDS.map((id) => {
+          memberIds.map((id) => {
             const toDateM = monthlyReport.toDate?.members?.[id] ?? {};
             const payM = paymentSummary.members?.[id] ?? {};
 
@@ -516,7 +545,7 @@ export function createMonthlyReportExportService({
               id,
               {
                 memberId: id,
-                memberName: MEMBER_NAMES[id] ?? id,
+                memberName: memberName(id),
                 morningParticipationCount: toDateM.morningParticipationCount ?? 0,
                 nightParticipationCount: toDateM.nightParticipationCount ?? 0,
                 totalParticipationCount: toDateM.totalParticipationCount ?? 0,
@@ -544,13 +573,13 @@ export function createMonthlyReportExportService({
         .slice()
         .reverse()
         .map((p) => {
-          const recDateStr = p.recordedAt ? new Date(p.recordedAt).toISOString().slice(0, 10) : startDate;
+          const recDateStr = p.recordedAt ? getLogicalDateInTimeZone(new Date(p.recordedAt), 'Asia/Kolkata') : startDate;
           return {
             paymentId: p.paymentId,
             date: formatReportDate(recDateStr).displayDate,
             recordedAtIso: p.recordedAt ? new Date(p.recordedAt).toISOString() : null,
             memberId: p.memberId,
-            memberName: MEMBER_NAMES[p.memberId] ?? p.memberId,
+            memberName: memberName(p.memberId),
             amountPaise: p.amountPaise,
             status: p.status, // 'recorded' | 'voided'
             isVoid: p.status === 'voided',
@@ -617,4 +646,4 @@ export function createMonthlyReportExportService({
   });
 }
 
-export const monthlyReportExportService = createMonthlyReportExportService();
+export const monthlyReportExportService = createMonthlyReportExportService({ students: studentResolver });

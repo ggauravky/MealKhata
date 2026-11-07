@@ -1,3 +1,33 @@
+function serializeAllocation(allocation) {
+  if (!allocation) return null;
+  const cost = allocation.cost;
+  return {
+    mode: allocation.mode,
+    source: allocation.source,
+    physicalPlates: cost?.physicalPlates ?? allocation.physicalPlates ?? allocation.plates?.length ?? 0,
+    plates: (allocation.plates ?? []).map((plate) => ({ shares: { ...plate.shares } })),
+    cost: cost ? {
+      physicalPlates: cost.physicalPlates,
+      pricePaise: cost.pricePaise,
+      totalCostPaise: cost.totalCostPaise,
+      roomAmountPaise: cost.roomAmountPaise,
+      members: Object.fromEntries(Object.entries(cost.members ?? {}).map(([id, member]) => [id, {
+        shareUnits: member.shareUnits,
+        amountPaise: member.amountPaise,
+        plateEquivalent: member.plateEquivalent,
+      }])),
+    } : null,
+  };
+}
+
+function serializePricing(pricing) {
+  return {
+    defaultPricePaise: pricing?.defaultPricePaise,
+    effectivePricePaise: pricing?.effectivePricePaise,
+    isOverridden: Boolean(pricing?.isOverridden),
+  };
+}
+
 export function serializeDashboardSummary(data) {
   if (!data) return null;
 
@@ -15,8 +45,17 @@ export function serializeDashboardSummary(data) {
       date: data.meals?.date,
       saved: Boolean(data.meals?.saved),
       revision: data.meals?.revision ?? 0,
+      participantOrder: [...(data.meals?.participantOrder ?? [])],
       morning: { ...(data.meals?.morning || {}) },
       night: { ...(data.meals?.night || {}) },
+      allocations: {
+        morning: serializeAllocation(data.meals?.allocations?.morning),
+        night: serializeAllocation(data.meals?.allocations?.night),
+      },
+      pricing: {
+        morning: serializePricing(data.meals?.pricing?.morning),
+        night: serializePricing(data.meals?.pricing?.night),
+      },
       permissions: {
         canEdit: Boolean(data.meals?.permissions?.canEdit),
         editableMemberIds: [...(data.meals?.permissions?.editableMemberIds || [])],

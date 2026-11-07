@@ -1,4 +1,3 @@
-import dns from 'node:dns';
 import mongoose from 'mongoose';
 import { env } from './env.js';
 import { logger } from '../utils/logger.js';
@@ -24,7 +23,7 @@ function attachConnectionEvents() {
   });
 
   mongoose.connection.on('error', (error) => {
-    logger.error('database.error', { message: error.message });
+    logger.error('database.error', { name: error?.name, code: error?.code });
   });
 }
 
@@ -37,26 +36,7 @@ export async function connectDatabase() {
     minPoolSize: 0,
   };
 
-  try {
-    await mongoose.connect(env.mongoUri, connectOptions);
-  } catch (error) {
-    const isSrvError =
-      env.mongoUri?.startsWith('mongodb+srv://') &&
-      (error.message?.includes('querySrv') ||
-        error.code === 'ECONNREFUSED' ||
-        error.name === 'MongooseServerSelectionError');
-
-    if (isSrvError) {
-      logger.warn('database.srv_dns_fallback', {
-        message: 'SRV lookup failed with system DNS; retrying with public resolvers (8.8.8.8, 1.1.1.1)...',
-      });
-      dns.setServers(['8.8.8.8', '1.1.1.1']);
-      await mongoose.connect(env.mongoUri, connectOptions);
-      return;
-    }
-
-    throw error;
-  }
+  await mongoose.connect(env.mongoUri, connectOptions);
 }
 
 export async function disconnectDatabase() {

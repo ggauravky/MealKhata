@@ -2,6 +2,20 @@ export const SHARE_UNITS_PER_PLATE = 6;
 export const MAX_PHYSICAL_PLATES = 3;
 export const MAX_MEMBER_SHARE_UNITS = 6;
 
+export function resolvePhysicalPlateLimit(participantCount, configuredLimit = process.env.MEAL_MAX_PHYSICAL_PLATES) {
+  if (!Number.isSafeInteger(participantCount) || participantCount < 0) {
+    throw new TypeError('Participant count must be a non-negative integer');
+  }
+  if (configuredLimit === undefined || configuredLimit === '') {
+    return Math.min(100, Math.max(MAX_PHYSICAL_PLATES, participantCount));
+  }
+  const limit = Number(configuredLimit);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+    throw new TypeError('Physical plate limit must be an integer from 1 to 100');
+  }
+  return limit;
+}
+
 export const MORNING_PRICE_PAISE = 5000;
 export const NIGHT_PRICE_PAISE = 7000;
 

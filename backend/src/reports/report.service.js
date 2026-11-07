@@ -8,6 +8,8 @@ import {
   lastDateOfMonth,
 } from '../utils/month.js';
 import { calculateBillingSummary } from './billing.service.js';
+import { studentResolver } from '../students/studentResolver.service.js';
+import { financialBoundaryService, isOperationalMealDayForBoundary } from '../finance/financialBoundary.service.js';
 
 function classifyPeriod(month, today) {
   const comparison = compareLogicalMonths(month, today.slice(0, 7));
@@ -19,6 +21,8 @@ export function createReportService({
   rates = monthlyRateService,
   now = () => new Date(),
   timezone = env.appTimezone,
+  students = null,
+  boundary = null,
 } = {}) {
   return Object.freeze({
     async getMonthlyReport(month) {
@@ -44,6 +48,24 @@ export function createReportService({
           rateData,
           { startDate, endDate: periodType === 'current' ? today : endDate },
         );
+      const financialBoundary = boundary ? await boundary.getFinancialBoundary() : null;
+      const operationalToDate = !financialBoundary || periodType === 'future'
+        ? toDate
+        : calculateBillingSummary(
+          monthData.days.filter((day) =>
+            (periodType !== 'current' || day.date <= today)
+            && isOperationalMealDayForBoundary(day, financialBoundary.financialStartDate)),
+          rateData,
+          { startDate: financialBoundary.financialStartDate, endDate: periodType === 'current' ? today : endDate },
+        );
+      if (students) {
+        const names = Object.fromEntries((await students.listAll()).map((student) => [student.studentId, student.displayName]));
+        for (const summary of [projection, toDate, operationalToDate]) {
+          for (const [studentId, member] of Object.entries(summary?.members ?? {})) {
+            member.displayName = names[studentId] ?? studentId;
+          }
+        }
+      }
 
       const recordedDayCount = monthData.days.filter((day) => day.saved).length;
       const hasRecordedMeals = monthData.days.some((day) =>
@@ -84,11 +106,13 @@ export function createReportService({
         hasMealActivity,
         hasFinancialActivity,
         toDate,
+        operationalToDate,
+        financialBoundary: financialBoundary?.financialStartDate ?? null,
         projection,
       };
     },
   });
 }
 
-export const reportService = createReportService();
+export const reportService = createReportService({ students: studentResolver, boundary: financialBoundaryService });
 

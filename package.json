@@ -1,9 +1,9 @@
 {
   "name": "mealkhata",
-  "version": "1.0.0",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
-  "description": "A private meal and shared-bill tracker for three roommates.",
+  "description": "A private meal and shared-bill tracker for a dynamic student roster.",
   "workspaces": [
     "frontend",
     "backend"
@@ -12,10 +12,12 @@
     "dev": "concurrently --kill-others-on-fail --names frontend,backend --prefix-colors cyan,green \"npm run dev --workspace frontend\" \"npm run dev --workspace backend\"",
     "build": "npm run build --workspace frontend",
     "start": "npm run start --workspace backend",
-    "lint": "eslint frontend/src frontend/test frontend/vite.config.js backend/src backend/scripts backend/test eslint.config.js",
+    "lint": "eslint frontend/src frontend/test frontend/vite.config.js backend/src backend/scripts backend/test e2e playwright.config.js playwright.v3.config.js eslint.config.js",
     "test": "npm run test --workspaces --if-present",
     "hash-password": "npm run hash-password --workspace backend",
     "migrate:user-accounts": "npm run migrate:user-accounts --workspace backend",
+    "migrate:v3": "npm run migrate:v3 --workspace backend",
+    "initialize:fresh:v3": "npm run initialize:fresh:v3 --workspace backend",
     "seed-members": "npm run seed-members --workspace backend",
     "generate-vapid-keys": "npm run generate-vapid-keys --workspace backend",
     "send-push-reminders": "npm run send-push-reminders --workspace backend",
@@ -23,6 +25,9 @@
     "security:check": "npm run security:check --workspace backend",
     "verify-indexes": "npm run verify-indexes --workspace backend",
     "verify-data": "npm run verify-data --workspace backend",
+    "e2e:isolated": "node backend/scripts/startIsolatedE2E.js",
+    "e2e:browser": "playwright test --config playwright.config.js",
+    "e2e:browser:v3": "playwright test --config playwright.v3.config.js",
     "db:backup": "npm run db:backup --workspace backend",
     "db:backup:verify": "npm run db:backup:verify --workspace backend",
     "db:restore": "npm run db:restore --workspace backend",
@@ -37,16 +42,18 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "concurrently": "^10.0.5",
+    "@playwright/test": "^1.64.1",
+    "concurrently": "^10.0.6",
     "eslint": "^10.10.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.6",
-    "globals": "^17.12.0"
+    "globals": "^17.12.0",
+    "pdfjs-dist": "^6.5.438"
   },
   "overrides": {
     "compression": "^1.8.2",
     "proxy-addr": "^2.0.8",
     "morgan": "^1.12.1",
-    "ip-address": "^10.7.3"
+    "ip-address": "10.7.4"
   }
 }

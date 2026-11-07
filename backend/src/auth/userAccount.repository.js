@@ -5,28 +5,33 @@ export function createUserAccountRepository({ model = UserAccountModel } = {}) {
   const isConnected = () => mongoose.connection?.readyState === 1;
 
   return Object.freeze({
-    async findByEmail(email, { includePasswordHash = false } = {}) {
+    async findByEmail(email, { includePasswordHash = false, session = null } = {}) {
       if (!isConnected()) return null;
       const normalizedEmail = email?.trim().toLowerCase();
       let query = model.findOne({ email: normalizedEmail });
       if (includePasswordHash) {
         query = query.select('+passwordHash');
       }
+      if (session) query = query.session(session);
       return query.lean();
     },
 
-    async findByUserId(userId, { includePasswordHash = false } = {}) {
+    async findByUserId(userId, { includePasswordHash = false, session = null } = {}) {
       if (!isConnected()) return null;
       let query = model.findOne({ userId });
       if (includePasswordHash) {
         query = query.select('+passwordHash');
       }
+      if (session) query = query.session(session);
       return query.lean();
     },
 
-    async findByMemberId(memberId) {
+    async findByMemberId(memberId, { includePasswordHash = false, session = null } = {}) {
       if (!isConnected()) return null;
-      return model.findOne({ memberId }).lean();
+      let query = model.findOne({ memberId });
+      if (includePasswordHash) query = query.select('+passwordHash');
+      if (session) query = query.session(session);
+      return query.lean();
     },
 
     async listAll() {
@@ -37,6 +42,39 @@ export function createUserAccountRepository({ model = UserAccountModel } = {}) {
     async count() {
       if (!isConnected()) return 0;
       return model.countDocuments();
+    },
+
+    async createMemberAccount(data, { session = null } = {}) {
+      const normalized = { ...data, email: data.email.trim().toLowerCase() };
+      if (session) {
+        const created = await model.create([normalized], { session });
+        return created[0].toObject();
+      }
+      const created = await model.create(normalized);
+      return created.toObject();
+    },
+
+    async updateEmail(userId, email, { session = null } = {}) {
+      const options = { new: true, runValidators: true };
+      if (session) options.session = session;
+      return model.findOneAndUpdate(
+        { userId },
+        { $set: { email: email.trim().toLowerCase() }, $inc: { sessionVersion: 1 } },
+        options,
+      ).lean();
+    },
+
+    async updatePassword(userId, passwordHash, passwordChangedAt, { session = null } = {}) {
+      const options = { new: true, runValidators: true };
+      if (session) options.session = session;
+      return model.findOneAndUpdate(
+        { userId },
+        {
+          $set: { passwordHash, passwordChangedAt },
+          $inc: { sessionVersion: 1 },
+        },
+        options,
+      ).lean();
     },
 
     async upsertUserAccount({
@@ -99,12 +137,14 @@ export function createUserAccountRepository({ model = UserAccountModel } = {}) {
       ).lean();
     },
 
-    async setActive(userId, active) {
+    async setActive(userId, active, { session = null } = {}) {
       if (!isConnected()) return null;
+      const options = { new: true };
+      if (session) options.session = session;
       return model.findOneAndUpdate(
         { userId },
-        { $set: { active: Boolean(active) } },
-        { new: true },
+        { $set: { active: Boolean(active) }, $inc: { sessionVersion: 1 } },
+        options,
       ).lean();
     },
   });

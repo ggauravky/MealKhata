@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import { monthMealService } from '../calendar/monthMeal.service.js';
 import { env } from '../config/env.js';
-import { MEMBER_IDS } from '../config/members.js';
 import { ROLES } from '../auth/permissions.js';
 import { canEditDate, getLogicalDateInTimeZone } from '../utils/date.js';
 import { isValidLogicalMonth } from '../utils/month.js';
@@ -45,7 +44,7 @@ export function createCalendarRouter({
           let editableMemberIds = [];
           if (isDateEditable) {
             if (req.auth?.role === ROLES.SUPERADMIN || req.auth?.role === ROLES.ADMIN) {
-              editableMemberIds = [...MEMBER_IDS];
+              editableMemberIds = [...(day.participantOrder ?? [])];
             } else if (req.auth?.role === ROLES.MEMBER && req.auth.memberId) {
               editableMemberIds = [req.auth.memberId];
             }

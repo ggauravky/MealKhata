@@ -1,6 +1,6 @@
 import { Check, Minus, Moon, Settings2, SunMedium, Tag, Users } from 'lucide-react';
-import { ROOMMATES } from '../../lib/constants.js';
 import { formatPaise } from '../../lib/money.js';
+import { canEditMealParticipant } from '../../lib/operationalRoster.js';
 import {
   formatPlateCount,
   formatPlateFraction,
@@ -26,6 +26,7 @@ export function MealCard({
   allocation = null,
   allocationDetails = null,
   pricing = null,
+  participants = [],
   editable = false,
   editableMemberIds = null,
   pendingRow,
@@ -52,6 +53,10 @@ export function MealCard({
   if (allocationDetails) {
     physicalPlates = allocationDetails.physicalPlates ?? takingCount;
     isShared = Boolean(allocationDetails.isShared);
+  } else if (allocation?.cost) {
+    physicalPlates = allocation.cost.physicalPlates ?? takingCount;
+    isShared = allocation.mode === 'custom' || allocation.source === 'custom'
+      || Object.values(allocation.cost.members ?? {}).some((member) => member.shareUnits > 0 && member.shareUnits < 6);
   } else if (allocation && allocation.mode === 'custom' && Array.isArray(allocation.plates)) {
     physicalPlates = allocation.plates.length;
     isShared = true;
@@ -121,7 +126,7 @@ export function MealCard({
               </Badge>
             )}
           </div>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex items-center gap-1 flex-wrap">
+          <div className="text-xs text-slate-500 dark:text-slate-400 mt-1 flex items-center gap-1 flex-wrap">
             <strong className="font-semibold text-slate-800 dark:text-slate-200">
               {takingCount} taking
             </strong>
@@ -153,7 +158,7 @@ export function MealCard({
                 </span>
               </>
             )}
-          </p>
+          </div>
           {isPriceOverridden && pricing?.reason && (
             <p
               className="text-[11px] text-teal-700/80 dark:text-teal-400/80 mt-0.5 truncate max-w-xs"
@@ -196,15 +201,18 @@ export function MealCard({
       </CardHeader>
 
       <CardContent>
+        {participants.length === 0 && (
+          <p className="py-3 text-center text-xs text-slate-500 dark:text-slate-400">
+            No students eligible for this date.
+          </p>
+        )}
         <div className="space-y-0">
-          {ROOMMATES.map((member, index) => {
+          {participants.map((member, index) => {
             const rawStatus = meals[member.id];
             const currentStatus = rawStatus === 'taking' || rawStatus === 'skip' ? rawStatus : 'not_set';
             const rowId = `${mealType}:${member.id}`;
             const pending = pendingRow === rowId;
-            const isRowEditable = Boolean(
-              onChange && (editableMemberIds ? editableMemberIds.includes(member.id) : editable),
-            );
+            const isRowEditable = canEditMealParticipant({ editable, onChange, editableMemberIds, memberId: member.id });
 
             const shareUnits = getMemberShareUnits(member.id, currentStatus);
             const hasFractionalShare = isShared && shareUnits > 0 && shareUnits < 6;
@@ -254,7 +262,7 @@ export function MealCard({
                           key={option.id}
                           type="button"
                           aria-pressed={currentStatus === option.id}
-                          disabled={pending}
+                          disabled={Boolean(pendingRow)}
                           onClick={() => onChange(mealType, member.id, option.id)}
                           className={`flex items-center gap-1 rounded-sm px-2.5 py-1 text-xs font-medium transition-all ${
                             currentStatus === option.id

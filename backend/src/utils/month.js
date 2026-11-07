@@ -38,6 +38,14 @@ export function lastDateOfMonth(value) {
   return `${value}-${String(daysInLogicalMonth(value)).padStart(2, '0')}`;
 }
 
+export function getClampedDueDate(month, dueDay = 5) {
+  const maxDay = daysInLogicalMonth(month);
+  const parsedDay = Number(dueDay);
+  const safeDay = Number.isInteger(parsedDay) && parsedDay >= 1 ? parsedDay : 5;
+  const clampedDay = Math.min(safeDay, maxDay);
+  return `${month}-${String(clampedDay).padStart(2, '0')}`;
+}
+
 export function listDatesInMonth(value) {
   return Array.from(
     { length: daysInLogicalMonth(value) },

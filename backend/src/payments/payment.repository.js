@@ -1,4 +1,7 @@
 import { Payment } from './payment.model.js';
+import { guardFinancialMutation } from '../finance/financialMutationGuard.js';
+import { runFinancialTransaction } from '../finance/financialTransaction.js';
+import { claimExternalPaymentReference } from '../finance/paymentReference.service.js';
 
 function toPlainObject(document) {
   return document?.toObject ? document.toObject() : document;
@@ -47,24 +50,51 @@ export const paymentRepository = Object.freeze({
   },
 
   async create(payment) {
-    const document = await Payment.create(payment);
-    return toPlainObject(document);
+    return runFinancialTransaction(async (session) => {
+      await guardFinancialMutation({
+        memberId: payment.memberId,
+        effectiveMonth: payment.month,
+        allowPartialMonth: true,
+        actorRole: payment.recordedByRole,
+        session,
+      });
+      await claimExternalPaymentReference({
+        reference: payment.upiReference,
+        ledger: 'MESS_PAYMENT',
+        documentId: payment.paymentId,
+        memberId: payment.memberId,
+        session,
+      });
+      const [document] = await Payment.create([payment], { session });
+      return toPlainObject(document);
+    });
   },
 
   async voidIfRecorded({ paymentId, voidedAt, voidedByRole, voidReason }) {
-    return Payment.findOneAndUpdate(
-      { paymentId, status: 'recorded' },
-      {
-        $set: {
-          status: 'voided',
-          voidedAt,
-          voidedByRole,
-          voidReason,
+    return runFinancialTransaction(async (session) => {
+      const payment = await Payment.findOne({ paymentId }).session(session).lean();
+      if (!payment || payment.status !== 'recorded') return null;
+
+      await guardFinancialMutation({
+        memberId: payment.memberId,
+        effectiveMonth: payment.month,
+        allowPartialMonth: true,
+        actorRole: voidedByRole,
+        session,
+      });
+
+      return Payment.findOneAndUpdate(
+        { paymentId, status: 'recorded' },
+        {
+          $set: {
+            status: 'voided',
+            voidedAt,
+            voidedByRole,
+            voidReason,
+          },
         },
-      },
-      { new: true, runValidators: true },
-    )
-      .lean()
-      .exec();
+        { returnDocument: 'after', runValidators: true, session },
+      ).lean().exec();
+    });
   },
 });

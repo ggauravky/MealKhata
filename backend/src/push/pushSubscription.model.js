@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import mongoose from 'mongoose';
-import { MEMBER_IDS } from '../config/members.js';
+import { isSafeStudentId } from '../students/studentId.js';
 
 const pushSubscriptionSchema = new mongoose.Schema(
   {
@@ -14,7 +14,7 @@ const pushSubscriptionSchema = new mongoose.Schema(
     memberId: {
       type: String,
       required: true,
-      enum: MEMBER_IDS,
+      validate: { validator: isSafeStudentId, message: 'A valid student ID is required.' },
       index: true,
     },
     endpoint: {

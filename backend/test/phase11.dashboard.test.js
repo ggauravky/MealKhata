@@ -62,7 +62,10 @@ const dashboardRouter = createDashboardRouter({ service: dashboardService });
 const testApp = createApp({ dashboard: dashboardRouter });
 
 async function cookieFor(role, memberId = null) {
-  const token = await createSessionToken(role, { memberId });
+  const displayName = memberId
+    ? `${memberId.slice(0, 1).toUpperCase()}${memberId.slice(1)}`
+    : null;
+  const token = await createSessionToken(role, { memberId, displayName });
   return `${SESSION_COOKIE_NAME}=${token}`;
 }
 

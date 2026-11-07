@@ -9,6 +9,8 @@ export function serializePayment(document, { includeReference = false } = {}) {
     memberId: document.memberId,
     amountPaise: document.amountPaise,
     method: document.method,
+    fundingSource: document.fundingSource || 'CASH_RECEIPT',
+    sourceCreditAllocationId: document.sourceCreditAllocationId || null,
     recordedAt: serializeDate(document.recordedAt),
     status: document.status,
     voidedAt: serializeDate(document.voidedAt),

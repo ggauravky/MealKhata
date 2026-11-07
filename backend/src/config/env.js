@@ -18,6 +18,15 @@ export const env = Object.freeze({
   superAdminEmail: process.env.SUPERADMIN_EMAIL?.trim().toLowerCase() ?? '',
   superAdminPasswordHash: process.env.SUPERADMIN_PASSWORD_HASH?.trim() ?? '',
   authJwtSecret: process.env.AUTH_JWT_SECRET?.trim() ?? '',
+  runtimeProfile: process.env.MEALKHATA_RUNTIME_PROFILE?.trim() || 'v2',
+  canonicalOnlyAuth: process.env.CANONICAL_ONLY_AUTH === 'true',
+  v3BuildSha: process.env.V3_RELEASE_BUILD_SHA?.trim() ?? '',
+  observedBuildSha: process.env.RENDER_GIT_COMMIT?.trim()
+    || (process.env.NODE_ENV === 'production' ? ''
+      : process.env.MEALKHATA_OBSERVED_BUILD_SHA?.trim() || ''),
+  v3AttestationPath: process.env.V3_RELEASE_ATTESTATION_PATH?.trim() ?? '',
+  v3OwnerPublicKey: process.env.V3_RELEASE_OWNER_PUBLIC_KEY?.trim() ?? '',
+  v3OperatorPublicKey: process.env.V3_RELEASE_OPERATOR_PUBLIC_KEY?.trim() ?? '',
   appOrigin: normalizeAppOrigin(process.env.APP_ORIGIN),
   vapidPublicKey: process.env.VAPID_PUBLIC_KEY?.trim() ?? '',
   vapidPrivateKey: process.env.VAPID_PRIVATE_KEY?.trim() ?? '',
@@ -83,6 +92,18 @@ export function validateEnvironment(config = env) {
     throw new Error('NODE_ENV must be development, test, or production');
   }
 
+  if (!['v2', 'v3'].includes(config.runtimeProfile)) {
+    throw new Error('MEALKHATA_RUNTIME_PROFILE must select a known runtime profile');
+  }
+  if (config.runtimeProfile === 'v3' && config.canonicalOnlyAuth !== true) {
+    throw new Error('MealKhata v3 requires CANONICAL_ONLY_AUTH=true');
+  }
+  if (config.runtimeProfile === 'v3' && (!/^[a-f0-9]{40}$|^[a-f0-9]{64}$/.test(config.v3BuildSha ?? '')
+    || config.observedBuildSha !== config.v3BuildSha
+    || !config.v3AttestationPath || !config.v3OwnerPublicKey || !config.v3OperatorPublicKey)) {
+    throw new Error('MealKhata v3 requires a build SHA and protected release attestation configuration');
+  }
+
   if (!Number.isInteger(config.port) || config.port < 1 || config.port > 65_535) {
     throw new Error('PORT must be an integer from 1 to 65535');
   }
@@ -130,8 +151,23 @@ export function validateEnvironment(config = env) {
   if (!mongoUriPattern.test(config.mongoUri)) {
     throw new Error('MONGODB_URI must use the mongodb or mongodb+srv scheme');
   }
+  if (config.runtimeProfile === 'v3' && config.nodeEnv === 'production') {
+    let uri;
+    try { uri = new URL(config.mongoUri); }
+    catch { throw new Error('MealKhata v3 requires a valid TLS-enabled MongoDB URI'); }
+    const tls = uri.searchParams.get('tls');
+    const ssl = uri.searchParams.get('ssl');
+    const encrypted = uri.protocol === 'mongodb+srv:'
+      ? tls !== 'false' && ssl !== 'false'
+      : (tls === 'true' || ssl === 'true') && tls !== 'false' && ssl !== 'false';
+    if (!encrypted) throw new Error('MealKhata v3 requires TLS for MongoDB connections');
+  }
 
   validateVapidConfiguration(config, { required: false });
+}
+
+export function isCanonicalOnlyMode(config = env) {
+  return config.runtimeProfile === 'v3' || config.canonicalOnlyAuth === true;
 }
 
 export function validateVapidConfiguration(config = env, { required = false } = {}) {

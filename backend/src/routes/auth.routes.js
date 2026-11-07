@@ -14,6 +14,7 @@ import {
 } from '../auth/token.service.js';
 import { loginLimiter } from '../middleware/rateLimiters.js';
 import { logger } from '../utils/logger.js';
+import { createSocketTicket } from '../auth/socketTicket.service.js';
 
 export function createAuthRouter({ service = { authenticateCredentials } } = {}) {
   const router = Router();
@@ -27,6 +28,7 @@ export function createAuthRouter({ service = { authenticateCredentials } } = {})
       const token = await createSessionToken(auth.role, {
         memberId: auth.memberId,
         userId: auth.userId,
+        displayName: auth.displayName,
         sessionVersion: auth.sessionVersion,
         expiresIn: `${sessionDurationSeconds}s`,
       });
@@ -76,6 +78,14 @@ export function createAuthRouter({ service = { authenticateCredentials } } = {})
       success: true,
       session,
     });
+  });
+
+  router.get('/socket-ticket', async (req, res) => {
+    if (!req.auth?.authenticated || !req.auth.userId) {
+      return res.status(401).json({ success: false, message: 'Authentication required.' });
+    }
+    const ticket = await createSocketTicket(req.auth);
+    return res.json({ success: true, ticket, expiresInSeconds: 60 });
   });
 
   router.post('/logout', (req, res) => {

@@ -1,5 +1,3 @@
-import { MEMBERS } from '../config/members.js';
-
 export const ROLES = Object.freeze({
   VIEWER: 'viewer',
   MEMBER: 'member',
@@ -77,12 +75,11 @@ export function createViewerAuth() {
 }
 
 export function createAuthenticatedSession(role, { memberId = null, displayName = null, expiresAt = null } = {}) {
-  const member = memberId ? MEMBERS.find((item) => item.id === memberId) : null;
   const defaultDisplayName = role === ROLES.ADMIN
     ? 'Household Admin'
     : role === ROLES.SUPERADMIN
     ? 'Super Admin'
-    : (member ? member.name : null);
+    : memberId;
   const resolvedDisplayName = displayName || defaultDisplayName;
 
   return {

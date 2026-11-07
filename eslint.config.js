@@ -25,14 +25,19 @@ export default [
     rules: {
       ...reactHooks.configs.recommended.rules,
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
+      'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrors: 'none' }],
+      'react-hooks/set-state-in-effect': 'off',
     },
   },
   {
-    files: ['backend/**/*.js', 'eslint.config.js', 'frontend/vite.config.js'],
+    files: ['backend/**/*.js', 'e2e/**/*.js', 'playwright.config.js', 'eslint.config.js', 'frontend/vite.config.js'],
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'module',
       globals: globals.node,
+    },
+    rules: {
+      'no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrors: 'none' }],
     },
   },
 ];

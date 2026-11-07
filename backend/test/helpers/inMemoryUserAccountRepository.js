@@ -29,6 +29,10 @@ export class InMemoryUserAccountRepository {
     return clone(doc);
   }
 
+  async createMemberAccount(user) {
+    return this.create(user);
+  }
+
   async findByEmail(email) {
     const normalized = email?.toLowerCase().trim();
     for (const doc of this.accounts.values()) {
@@ -75,10 +79,28 @@ export class InMemoryUserAccountRepository {
     return clone(doc);
   }
 
+  async updateEmail(userId, email) {
+    const doc = this.accounts.get(userId);
+    if (!doc) return null;
+    doc.email = email.trim().toLowerCase();
+    doc.sessionVersion = (doc.sessionVersion ?? 0) + 1;
+    return clone(doc);
+  }
+
+  async updatePassword(userId, passwordHash, passwordChangedAt) {
+    const doc = this.accounts.get(userId);
+    if (!doc) return null;
+    doc.passwordHash = passwordHash;
+    doc.passwordChangedAt = passwordChangedAt;
+    doc.sessionVersion = (doc.sessionVersion ?? 0) + 1;
+    return clone(doc);
+  }
+
   async setActive(userId, active) {
     const doc = this.accounts.get(userId);
     if (!doc) return null;
     doc.active = Boolean(active);
+    doc.sessionVersion = (doc.sessionVersion ?? 0) + 1;
     return clone(doc);
   }
 }

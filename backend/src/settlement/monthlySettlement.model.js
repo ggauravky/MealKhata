@@ -1,7 +1,9 @@
 import mongoose from 'mongoose';
+import { assertSafeStudentId } from '../students/studentId.js';
 
 const memberSnapshotSchema = new mongoose.Schema(
   {
+    displayName: { type: String, required: false, trim: true },
     morningCount: { type: Number, required: false, min: 0 },
     nightCount: { type: Number, required: false, min: 0 },
     totalPlates: { type: Number, required: false, min: 0 },
@@ -56,11 +58,8 @@ const pricingAdjustmentSnapshotSchema = new mongoose.Schema(
 const settlementSnapshotSchema = new mongoose.Schema(
   {
     rates: { type: ratesSnapshotSchema, required: true },
-    members: {
-      gaurav: { type: memberSnapshotSchema, required: true },
-      nikhil: { type: memberSnapshotSchema, required: true },
-      devansh: { type: memberSnapshotSchema, required: true },
-    },
+    studentIds: { type: [String], default: undefined },
+    members: { type: Map, of: memberSnapshotSchema, required: true },
     room: { type: roomSnapshotSchema, required: true },
     pricingAdjustments: {
       type: [pricingAdjustmentSnapshotSchema],
@@ -135,6 +134,23 @@ const monthlySettlementSchema = new mongoose.Schema(
   },
 );
 
+monthlySettlementSchema.pre('validate', function validateDynamicSnapshot() {
+  if (this.snapshotVersion !== 3 || !this.snapshot) return;
+  const ids = this.snapshot.studentIds;
+  const members = this.snapshot.members;
+  const keys = members instanceof Map ? [...members.keys()] : Object.keys(members ?? {});
+  if (!Array.isArray(ids) || ids.length !== keys.length || new Set(ids).size !== ids.length ||
+      ids.some((id) => !keys.includes(id))) {
+    throw new Error('snapshot.studentIds must exactly match snapshot.members');
+  }
+  for (const id of ids) assertSafeStudentId(id);
+  const billTotal = ids.reduce((sum, id) => sum + (members instanceof Map ? members.get(id) : members[id]).billAmountPaise, 0);
+  const paidTotal = ids.reduce((sum, id) => sum + (members instanceof Map ? members.get(id) : members[id]).paidAmountPaise, 0);
+  if (billTotal !== this.snapshot.room.billAmountPaise || paidTotal !== this.snapshot.room.paidAmountPaise) {
+    throw new Error('snapshot member amounts must reconcile with room amounts');
+  }
+});
+
 // Guarantee at most ONE active 'closed' settlement per month
 monthlySettlementSchema.index(
   { month: 1, status: 1 },
@@ -142,5 +158,6 @@ monthlySettlementSchema.index(
 );
 
 monthlySettlementSchema.index({ month: 1, sequence: -1 });
+monthlySettlementSchema.index({ month: 1, sequence: 1 }, { unique: true });
 
 export const MonthlySettlement = mongoose.model('MonthlySettlement', monthlySettlementSchema);

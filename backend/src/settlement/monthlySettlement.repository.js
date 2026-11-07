@@ -63,7 +63,7 @@ export function createMonthlySettlementRepository({ model = MonthlySettlementMod
               reopenReason,
             },
           },
-          { new: true },
+          { returnDocument: 'after' },
         )
         .lean();
     },

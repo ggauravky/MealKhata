@@ -11,6 +11,7 @@ import { errorHandler } from './middleware/errorHandler.js';
 import { apiNotFound, notFound } from './middleware/notFound.js';
 import { sensitiveMutationLimiter } from './middleware/rateLimiters.js';
 import { requestCorrelation } from './middleware/requestCorrelation.js';
+import { v3MutationGate } from './middleware/v3MutationGate.js';
 import { authRouter } from './routes/auth.routes.js';
 import { healthRouter } from './routes/health.routes.js';
 import { mealRouter } from './routes/meal.routes.js';
@@ -23,6 +24,12 @@ import { reminderSettingsRouter } from './routes/reminderSettings.routes.js';
 import { pushRouter } from './routes/push.routes.js';
 import { settlementRouter } from './routes/settlement.routes.js';
 import { dashboardRouter } from './routes/dashboard.routes.js';
+import { roomFeeRouter, roomRouter } from './routes/roomFee.routes.js';
+import { expenseRouter } from './routes/expense.routes.js';
+import { financeRouter } from './routes/finance.routes.js';
+import { stayRouter } from './routes/stay.routes.js';
+import { memberRouter } from './routes/member.routes.js';
+import { studentRouter } from './routes/student.routes.js';
 
 export const PRODUCTION_TRUST_PROXY_HOPS = 1;
 export const API_RATE_LIMIT = Object.freeze({
@@ -70,6 +77,13 @@ export function createApp({
   settlements = settlementRouter,
   dashboard = dashboardRouter,
   health = healthRouter,
+  roomFees = roomFeeRouter,
+  rooms = roomRouter,
+  expenses = expenseRouter,
+  finance = financeRouter,
+  stays = stayRouter,
+  members = memberRouter,
+  students = studentRouter,
 } = {}) {
   const app = express();
 
@@ -112,6 +126,7 @@ export function createApp({
   app.use('/api', apiLimiter);
   app.use('/api', authenticate);
   app.use('/api', enforceTrustedOrigin);
+  app.use('/api', v3MutationGate);
   app.use('/api', health);
   app.use('/api/auth', auth);
   app.use('/api/meals', meals);
@@ -126,6 +141,13 @@ export function createApp({
   app.use('/api/payment-settings', sensitiveMutationLimiter, paymentSettings);
   app.use('/api/settings/reminders', sensitiveMutationLimiter, reminderSettings);
   app.use('/api/push', sensitiveMutationLimiter, push);
+  app.use('/api/room-fees', sensitiveMutationLimiter, roomFees);
+  app.use('/api/rooms', sensitiveMutationLimiter, rooms);
+  app.use('/api/expenses', sensitiveMutationLimiter, expenses);
+  app.use('/api/finance', sensitiveMutationLimiter, finance);
+  app.use('/api/stays', sensitiveMutationLimiter, stays);
+  app.use('/api/admin/members', sensitiveMutationLimiter, members);
+  app.use('/api/students', sensitiveMutationLimiter, students);
 
   app.use('/api', apiNotFound);
 

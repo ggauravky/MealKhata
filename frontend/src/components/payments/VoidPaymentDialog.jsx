@@ -1,18 +1,16 @@
 import { X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
-import { ROOMMATES } from '../../lib/constants.js';
 import { formatLogicalMonth } from '../../lib/logicalMonth.js';
 import { formatPaise } from '../../lib/money.js';
 
-export function VoidPaymentDialog({ payment, onClose, onVoided }) {
+export function VoidPaymentDialog({ payment, memberName = payment.memberId, onClose, onVoided }) {
   const dialogRef = useRef(null);
   const reasonRef = useRef(null);
   const previousFocusRef = useRef(document.activeElement);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const memberName = ROOMMATES.find(({ id }) => id === payment.memberId)?.name ?? payment.memberId;
 
   useEffect(() => {
     const previousFocus = previousFocusRef.current;

@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { MEMBER_IDS } from '../config/members.js';
+import { isSafeStudentId } from '../students/studentId.js';
 
 const pushDeliverySchema = new mongoose.Schema(
   {
@@ -12,7 +12,7 @@ const pushDeliverySchema = new mongoose.Schema(
     memberId: {
       type: String,
       required: true,
-      enum: MEMBER_IDS,
+      validate: { validator: isSafeStudentId, message: 'A valid student ID is required.' },
       index: true,
     },
     mealType: {

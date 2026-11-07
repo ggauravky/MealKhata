@@ -1,0 +1,201 @@
+import mongoose from 'mongoose';
+import { isSafeStudentId } from '../students/studentId.js';
+import { EXPENSE_CATEGORIES, EXPENSE_STATUSES, SPLIT_TYPES } from './expense.constants.js';
+
+const expenseAllocationSchema = new mongoose.Schema(
+  {
+    memberId: {
+      type: String,
+      required: true,
+      trim: true,
+      validate: isSafeStudentId,
+    },
+    amountPaise: {
+      type: Number,
+      required: true,
+      min: 1,
+    },
+  },
+  { _id: false, strict: 'throw' },
+);
+
+const expenseCorrectionSchema = new mongoose.Schema(
+  {
+    correctionId: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    correctedAt: {
+      type: Date,
+      required: true,
+      default: Date.now,
+    },
+    correctedByRole: {
+      type: String,
+      required: true,
+    },
+    reason: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 300,
+    },
+    previousSnapshot: {
+      title: { type: String, required: true },
+      category: { type: String, required: true },
+      date: { type: String, required: true },
+      month: { type: String, required: true },
+      amountPaise: { type: Number, required: true },
+      paidByMemberId: { type: String, required: true, validate: isSafeStudentId },
+      splitType: { type: String, required: true },
+      allocations: [expenseAllocationSchema],
+      description: { type: String, default: '' },
+    },
+    newSnapshot: {
+      title: { type: String, default: null },
+      category: { type: String, default: null },
+      date: { type: String, default: null },
+      month: { type: String, default: null },
+      amountPaise: { type: Number, default: null },
+      paidByMemberId: { type: String, default: null, validate: { validator: (value) => value == null || isSafeStudentId(value) } },
+      splitType: { type: String, default: null },
+      allocations: [expenseAllocationSchema],
+      description: { type: String, default: '' },
+    },
+    revision: {
+      type: String,
+      default: null,
+    },
+  },
+  { _id: false, strict: 'throw' },
+);
+
+const expenseSchema = new mongoose.Schema(
+  {
+    expenseId: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+      trim: true,
+    },
+    date: {
+      type: String,
+      required: true,
+      index: true,
+      match: /^\d{4}-\d{2}-\d{2}$/,
+    },
+    month: {
+      type: String,
+      required: true,
+      index: true,
+      match: /^\d{4}-\d{2}$/,
+    },
+    title: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 120,
+    },
+    category: {
+      type: String,
+      required: true,
+      enum: EXPENSE_CATEGORIES,
+      index: true,
+    },
+    description: {
+      type: String,
+      trim: true,
+      default: '',
+      maxlength: 500,
+    },
+    amountPaise: {
+      type: Number,
+      required: true,
+      min: 1,
+    },
+    paidByMemberId: {
+      type: String,
+      required: true,
+      trim: true,
+      index: true,
+      validate: isSafeStudentId,
+    },
+    splitType: {
+      type: String,
+      required: true,
+      enum: SPLIT_TYPES,
+      default: 'equal',
+    },
+    allocations: {
+      type: [expenseAllocationSchema],
+      required: true,
+      validate: {
+        validator(allocs) {
+          return Array.isArray(allocs) && allocs.length > 0;
+        },
+        message: 'Expense must have at least one member allocation',
+      },
+    },
+    status: {
+      type: String,
+      required: true,
+      enum: [EXPENSE_STATUSES.RECORDED, EXPENSE_STATUSES.VOIDED],
+      default: EXPENSE_STATUSES.RECORDED,
+      index: true,
+    },
+    idempotencyKey: {
+      type: String,
+      sparse: true,
+      unique: true,
+      index: true,
+      trim: true,
+    },
+    createdByRole: {
+      type: String,
+      required: true,
+      enum: ['admin', 'superadmin'],
+    },
+    createdByMemberId: {
+      type: String,
+      default: null,
+      trim: true,
+      validate: { validator: (value) => value == null || isSafeStudentId(value) },
+    },
+    voidedAt: {
+      type: Date,
+      default: null,
+    },
+    voidedByRole: {
+      type: String,
+      default: null,
+    },
+    voidReason: {
+      type: String,
+      default: null,
+      maxlength: 300,
+    },
+    corrections: {
+      type: [expenseCorrectionSchema],
+      default: [],
+    },
+    revision: {
+      type: String,
+      required: true,
+      default: () => new Date().toISOString(),
+    },
+  },
+  {
+    timestamps: true,
+    collection: 'expenses',
+    strict: 'throw',
+  },
+);
+
+// Compound indexes for query efficiency and member isolation
+expenseSchema.index({ month: 1, date: -1 });
+expenseSchema.index({ paidByMemberId: 1, month: 1 });
+expenseSchema.index({ 'allocations.memberId': 1, month: 1 });
+
+export const Expense = mongoose.models.Expense || mongoose.model('Expense', expenseSchema);

@@ -9,6 +9,7 @@ import { createSessionToken, SESSION_COOKIE_NAME } from '../src/auth/token.servi
 import { MEMBERS } from '../src/config/members.js';
 import { createDefaultMealDay } from '../src/meals/meal.defaults.js';
 import { MealDay } from '../src/meals/meal.model.js';
+import { serializeHistory, serializeMealDay } from '../src/meals/meal.serializer.js';
 import { createMealService } from '../src/meals/meal.service.js';
 import { createMealRouter } from '../src/routes/meal.routes.js';
 import { createSocketServer } from '../src/socket.js';
@@ -21,6 +22,7 @@ const DATES = Object.freeze({
   today: '2026-09-10',
   tomorrow: '2026-09-11',
 });
+const FOURTH_STUDENT_ID = 'student_0123456789abcdef0123456789abcdef';
 
 const repository = new InMemoryMealRepository();
 const broadcasts = [];
@@ -81,6 +83,66 @@ describe('public meal reads', () => {
     assert.equal(repository.count(), 0);
   });
 
+  test('3a. a missing day uses the date-eligible dynamic roster without persisting defaults', async () => {
+    const dynamicRepository = new InMemoryMealRepository();
+    const requestedDates = [];
+    const students = {
+      async listEligibleOn(date) {
+        requestedDates.push(date);
+        return [
+          { studentId: 'gaurav' },
+          { studentId: FOURTH_STUDENT_ID },
+        ];
+      },
+    };
+    const dynamicService = createMealService({
+      repository: dynamicRepository,
+      students,
+      timezone: 'Asia/Kolkata',
+    });
+
+    const day = await dynamicService.getDay(DATES.tomorrow);
+
+    assert.deepEqual(Object.keys(day.meals.morning), ['gaurav', FOURTH_STUDENT_ID]);
+    assert.deepEqual(Object.keys(day.meals.night), ['gaurav', FOURTH_STUDENT_ID]);
+    assert.deepEqual(requestedDates, [DATES.tomorrow]);
+    assert.equal(day.saved, false);
+    assert.equal(dynamicRepository.count(), 0);
+  });
+
+  test('3b. zero date-eligible students produces a valid empty unsaved day', async () => {
+    const dynamicRepository = new InMemoryMealRepository();
+    const dynamicService = createMealService({
+      repository: dynamicRepository,
+      students: { listEligibleOn: async () => [] },
+      timezone: 'Asia/Kolkata',
+    });
+
+    const day = await dynamicService.getDay(DATES.tomorrow);
+
+    assert.deepEqual(day.meals, { morning: {}, night: {} });
+    assert.equal(day.saved, false);
+    assert.equal(dynamicRepository.count(), 0);
+  });
+
+  test('3c. a new day cannot reintroduce a date-ineligible student', async () => {
+    const dynamicRepository = new InMemoryMealRepository();
+    const dynamicService = createMealService({
+      repository: dynamicRepository,
+      students: { listEligibleOn: async () => [] },
+      timezone: 'Asia/Kolkata',
+    });
+
+    await assert.rejects(dynamicService.changeStatus({
+      date: DATES.tomorrow,
+      mealType: 'morning',
+      memberId: 'gaurav',
+      status: 'taking',
+      actorRole: ROLES.SUPERADMIN,
+    }), /eligible|eligibility/i);
+    assert.equal(dynamicRepository.count(), 0);
+  });
+
   test('4. malformed logical dates return 400', async () => {
     const response = await request(testApp).get('/api/meals/2026-9-10').expect(400);
     assert.match(response.body.message, /valid calendar date/i);
@@ -105,6 +167,51 @@ describe('public meal reads', () => {
 });
 
 describe('meal mutation authorization and validation', () => {
+  test('a generated fourth student can be edited by Super Admin through the meal route', async () => {
+    const dynamicRepository = new InMemoryMealRepository();
+    const dynamicService = createMealService({
+      repository: dynamicRepository,
+      students: { listEligibleOn: async () => [
+        { studentId: 'gaurav' }, { studentId: FOURTH_STUDENT_ID },
+      ] },
+      timezone: 'Asia/Kolkata',
+    });
+    const dynamicApp = createApp({ meals: createMealRouter({
+      service: dynamicService,
+      now: () => NOW,
+      timezone: 'Asia/Kolkata',
+      broadcast: () => {},
+      settlements: null,
+    }) });
+    const response = await patchMeal(ROLES.SUPERADMIN, DATES.today, {
+      mealType: 'morning', memberId: FOURTH_STUDENT_ID, status: 'taking',
+    }, dynamicApp);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.data.meals.morning[FOURTH_STUDENT_ID], 'taking');
+    assert.ok(response.body.data.permissions.editableMemberIds.includes(FOURTH_STUDENT_ID));
+  });
+
+  test('allocation API rejects a stale expected revision for a fourth student', async () => {
+    const dynamicRepository = new InMemoryMealRepository();
+    const dynamicService = createMealService({
+      repository: dynamicRepository,
+      students: { listEligibleOn: async () => [
+        { studentId: 'gaurav' }, { studentId: FOURTH_STUDENT_ID },
+      ] },
+    });
+    const app = createApp({ meals: createMealRouter({
+      service: dynamicService, settlements: null, broadcast: () => {},
+      now: () => NOW, timezone: 'Asia/Kolkata',
+    }) });
+    const allocation = { mode: 'custom', plates: [{ shares: { [FOURTH_STUDENT_ID]: 6 } }], expectedRevision: 0 };
+    const endpoint = `/api/meals/${DATES.today}/morning/allocation`;
+    await request(app).put(endpoint).set('Origin', ORIGIN).set('Cookie', await cookieFor(ROLES.SUPERADMIN))
+      .send(allocation).expect(200);
+    const stale = await request(app).put(endpoint).set('Origin', ORIGIN).set('Cookie', await cookieFor(ROLES.SUPERADMIN))
+      .send(allocation).expect(409);
+    assert.match(stale.body.message, /revision|refresh/i);
+    assert.equal((await dynamicRepository.findByDate(DATES.today)).revision, 1);
+  });
   const validChange = { mealType: 'night', memberId: 'nikhil', status: 'skip' };
 
   test('7. Viewer PATCH returns 401', async () => {
@@ -281,13 +388,162 @@ describe('broadcast and model safety', () => {
     assert.equal(broadcasts.length, 0);
   });
 
-  test('28. constants and schema enforce exactly the Phase 3 domain', async () => {
-    const document = new MealDay(createDefaultMealDay(DATES.today));
+  test('28. schema stores validated dynamic status and plate-share maps', async () => {
+    const document = new MealDay({
+      ...createDefaultMealDay(DATES.today, ['gaurav', 'nikhil', 'devansh', FOURTH_STUDENT_ID]),
+      allocations: {
+        morning: {
+          mode: 'custom',
+          plates: [{ shares: { gaurav: 3, [FOURTH_STUDENT_ID]: 3 } }],
+        },
+        night: null,
+      },
+    });
     await document.validate();
     const indexes = MealDay.schema.indexes();
-    assert.deepEqual(MEMBERS.map(({ id }) => id), ['gaurav', 'nikhil', 'devansh']);
+    assert.equal(document.schemaVersion, 3);
+    assert.equal(document.meals.morning instanceof Map, true);
+    assert.equal(document.meals.morning.get(FOURTH_STUDENT_ID), 'not_set');
+    assert.equal(document.allocations.morning.plates[0].shares instanceof Map, true);
+    assert.equal(document.allocations.morning.plates[0].shares.get(FOURTH_STUDENT_ID), 3);
     assert.ok(indexes.some(([fields, options]) => fields.date === 1 && options.unique === true));
     assert.throws(() => new MealDay({ ...createDefaultMealDay(DATES.today), unexpected: true }), /strict/i);
+  });
+
+  test('29. defaults support zero, one, four, and many eligible students without a static roster', () => {
+    const cases = [
+      [],
+      ['gaurav'],
+      ['gaurav', 'nikhil', 'devansh', FOURTH_STUDENT_ID],
+      ['gaurav', 'nikhil', 'devansh', FOURTH_STUDENT_ID, 'student_fifth', 'student_sixth'],
+    ];
+
+    for (const studentIds of cases) {
+      const day = createDefaultMealDay(DATES.today, studentIds);
+      assert.equal(day.schemaVersion, 3);
+      assert.deepEqual(Object.keys(day.meals.morning), studentIds);
+      assert.deepEqual(Object.keys(day.meals.night), studentIds);
+      assert.ok(Object.values(day.meals.morning).every((status) => status === 'not_set'));
+    }
+  });
+
+  test('30. serializer flattens Map data and preserves every stored dynamic participant and share', async () => {
+    const document = new MealDay({
+      ...createDefaultMealDay(DATES.today, ['gaurav', FOURTH_STUDENT_ID]),
+      meals: {
+        morning: { gaurav: 'taking', [FOURTH_STUDENT_ID]: 'taking' },
+        night: { gaurav: 'skip', [FOURTH_STUDENT_ID]: 'taking' },
+      },
+      allocations: {
+        morning: {
+          mode: 'custom',
+          plates: [{ shares: { gaurav: 3, [FOURTH_STUDENT_ID]: 3 } }],
+        },
+        night: null,
+      },
+    });
+    await document.validate();
+
+    const serialized = serializeMealDay(document, DATES.today);
+
+    assert.equal(serialized.schemaVersion, 3);
+    assert.deepEqual(serialized.meals.morning, { gaurav: 'taking', [FOURTH_STUDENT_ID]: 'taking' });
+    assert.deepEqual(serialized.allocations.morning.plates[0].shares, {
+      gaurav: 3,
+      [FOURTH_STUDENT_ID]: 3,
+    });
+    assert.deepEqual(serialized.allocations.morning.shareUnits, {
+      gaurav: 3,
+      [FOURTH_STUDENT_ID]: 3,
+      totalUnits: 6,
+    });
+    assert.equal(serialized.meals.morning instanceof Map, false);
+  });
+
+  test('31. legacy hydration preserves archived participants, audits, overrides, revisions, and timestamps', () => {
+    const archivedStudentId = 'student_archived';
+    const createdAt = new Date('2026-09-10T03:00:00.000Z');
+    const updatedAt = new Date('2026-09-10T05:00:00.000Z');
+    const legacy = MealDay.hydrate({
+      date: DATES.today,
+      meals: {
+        morning: { gaurav: 'taking', [archivedStudentId]: 'taking' },
+        night: { gaurav: 'skip', [archivedStudentId]: 'skip' },
+      },
+      allocations: {
+        morning: {
+          mode: 'custom',
+          plates: [{ shares: { gaurav: 3, [archivedStudentId]: 3 } }],
+        },
+        night: null,
+      },
+      priceOverrides: {
+        morning: { pricePaise: 4321, reason: 'Historical receipt' },
+        night: null,
+      },
+      revision: 9,
+      changes: [{
+        changedAt: new Date('2026-09-10T04:00:00.000Z'),
+        actorRole: 'member',
+        actorMemberId: archivedStudentId,
+        mealType: 'morning',
+        memberId: archivedStudentId,
+        from: 'not_set',
+        to: 'taking',
+      }],
+      allocationChanges: [],
+      priceChanges: [],
+      createdAt,
+      updatedAt,
+    });
+
+    const serialized = serializeMealDay(legacy, DATES.today);
+    const history = serializeHistory(legacy, DATES.today, 10);
+
+    assert.equal(Object.hasOwn(serialized, 'schemaVersion'), false);
+    assert.equal(serialized.meals.morning[archivedStudentId], 'taking');
+    assert.equal(serialized.allocations.morning.plates[0].shares[archivedStudentId], 3);
+    assert.equal(serialized.pricing.morning.overridePricePaise, 4321);
+    assert.equal(serialized.revision, 9);
+    assert.equal(serialized.createdAt, createdAt.toISOString());
+    assert.equal(serialized.updatedAt, updatedAt.toISOString());
+    assert.equal(history.items[0].actorMemberId, archivedStudentId);
+    assert.equal(history.items[0].memberId, archivedStudentId);
+  });
+
+  test('32. unsafe dynamic student keys are rejected instead of becoming MongoDB paths', async () => {
+    const unsafeMeals = Object.fromEntries([['student.invalid', 'taking']]);
+    const document = new MealDay({
+      ...createDefaultMealDay(DATES.today, []),
+      meals: { morning: unsafeMeals, night: {} },
+    });
+
+    await assert.rejects(document.validate(), /safe|key|map|student/i);
+  });
+
+  test('33. dynamic allocations retain the six-unit, per-student, and plate-count invariants', async () => {
+    const invalidAllocations = [
+      [{ shares: { gaurav: 5 } }],
+      [
+        { shares: { gaurav: 6 } },
+        { shares: { gaurav: 6 } },
+      ],
+      [
+        { shares: { gaurav: 6 } },
+        { shares: { nikhil: 6 } },
+        { shares: { devansh: 6 } },
+        { shares: { [FOURTH_STUDENT_ID]: 6 } },
+        { shares: { gaurav: 6 } },
+      ],
+    ];
+
+    for (const plates of invalidAllocations) {
+      const document = new MealDay({
+        ...createDefaultMealDay(DATES.today, ['gaurav', 'nikhil', 'devansh', FOURTH_STUDENT_ID]),
+        allocations: { morning: { mode: 'custom', plates }, night: null },
+      });
+      await assert.rejects(document.validate(), /six|6|plate|share/i);
+    }
   });
 });
 

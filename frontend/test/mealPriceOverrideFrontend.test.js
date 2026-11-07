@@ -13,10 +13,11 @@ const adminPagePath = path.resolve(currentDir, '../src/pages/AdminPage.jsx');
 const householdTodayPath = path.resolve(currentDir, '../src/components/dashboard/HouseholdTodayCard.jsx');
 
 describe('Date-Specific Meal Price Override & Daily Cost Summary (Frontend)', () => {
-  test('DailyCostSummary component exists and displays 3 members + household total', async () => {
+  test('DailyCostSummary displays authoritative dynamic members and household total', async () => {
     const content = await fs.readFile(dailyCostSummaryPath, 'utf8');
     assert.ok(content.includes('Daily Cost Summary'));
-    assert.ok(content.includes('ROOMMATES'));
+    assert.ok(content.includes('Object.entries(summary?.members ?? {})'));
+    assert.ok(!content.includes('ROOMMATES'));
     assert.ok(content.includes('MemberAvatar'));
     assert.ok(content.includes('Household'));
     assert.ok(content.includes('grid-cols-2') || content.includes('grid-cols-1'));

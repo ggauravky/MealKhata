@@ -2,6 +2,19 @@ import fs from 'node:fs/promises';
 import { verifyAndDecryptBackup } from '../src/backup/backupEngine.js';
 
 async function run() {
+  if (process.argv.includes('--help')) {
+    console.info(`Verify an encrypted archive without connecting to a database.
+
+Usage: npm run db:backup:verify -- <path-to-backup-file>
+
+Required environment:
+  BACKUP_ENCRYPTION_KEY   Secret used to create the archive
+
+Verification checks authenticated encryption, the full payload checksum,
+per-collection counts/checksums, indexes in the manifest, and historical baselines.`);
+    return;
+  }
+
   const filePath = process.argv[2];
   const encryptionKey = process.env.BACKUP_ENCRYPTION_KEY?.trim();
 
@@ -19,7 +32,7 @@ async function run() {
   const backupPackageString = await fs.readFile(filePath, 'utf8');
 
   console.info('Decrypting and verifying archive integrity...');
-  const { manifest, rawData } = verifyAndDecryptBackup({
+  const { manifest, rawData, baselines } = verifyAndDecryptBackup({
     backupPackageString,
     encryptionKey,
   });
@@ -33,7 +46,14 @@ async function run() {
   console.info('\n  Verified Collections:');
   for (const [col, count] of Object.entries(manifest.collections)) {
     const inData = rawData[col]?.length ?? 0;
-    console.info(`    - ${col}: ${count} records (verified in data: ${inData})`);
+    const indexCount = manifest.collectionMetadata?.[col]?.indexes?.length ?? 0;
+    console.info(`    - ${col}: ${count} records, ${indexCount} secondary indexes (verified in data: ${inData})`);
+  }
+  if (baselines) {
+    console.info('\n  Verified Historical Baselines:');
+    console.info(`    - Calendar days: ${baselines.calendarDays.length}`);
+    console.info(`    - Monthly cost reports: ${baselines.monthlyCostReports.length}`);
+    console.info(`    - SHA-256: ${baselines.sha256Checksum}`);
   }
   console.info('');
 }

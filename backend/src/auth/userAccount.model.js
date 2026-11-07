@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
-import { MEMBER_IDS } from '../config/members.js';
+import { assertSafeStudentId } from '../students/studentId.js';
 import { ROLES } from './permissions.js';
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -33,9 +33,14 @@ const userAccountSchema = new mongoose.Schema(
       validate: {
         validator(val) {
           if (val === null || val === undefined) return true;
-          return MEMBER_IDS.includes(val);
+          try {
+            assertSafeStudentId(val);
+            return true;
+          } catch {
+            return false;
+          }
         },
-        message: 'memberId must be one of the configured member IDs or null',
+        message: 'memberId must be a safe student ID or null',
       },
     },
     displayName: {

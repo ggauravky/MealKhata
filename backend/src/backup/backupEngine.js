@@ -1,12 +1,24 @@
 import { createCipheriv, createDecipheriv, createHash, pbkdf2Sync, randomBytes } from 'node:crypto';
 import zlib from 'node:zlib';
 import mongoose from 'mongoose';
+import {
+  assertDistinctDatabaseConnections,
+  captureHistoricalBaselines,
+  checksumValue,
+  discoverSourceInventory,
+  verifyRestoredInventory,
+} from '../migrations/sourceInventory.service.js';
 
 export const BACKUP_FORMAT_VERSION = 1;
 export const BACKUP_COLLECTIONS = Object.freeze([
   'user_accounts',
   'member_accounts',
+  'member_account_audits',
   'meal_days',
+  'meal_history_snapshots',
+  'meal_history_corrections',
+  'students',
+  'student_audit_events',
   'monthly_meal_rates',
   'payments',
   'payment_settings',
@@ -14,6 +26,23 @@ export const BACKUP_COLLECTIONS = Object.freeze([
   'monthly_settlements',
   'push_subscriptions',
   'push_deliveries',
+  'rooms',
+  'room_assignments',
+  'room_fee_plans',
+  'room_charges',
+  'room_payments',
+  'room_payment_settings',
+  'expenses',
+  'expense_reimbursements',
+  'hostel_stays',
+  'hostel_deposit_accounts',
+  'hostel_deposit_transactions',
+  'hostel_clearances',
+  'payment_reclassifications',
+  'unallocated_credits',
+  'credit_allocations',
+  'credit_obligation_states',
+  'payment_reference_claims',
 ]);
 
 /**
@@ -83,29 +112,41 @@ export function fromExtendedJson(value) {
 /**
  * Exports all database collections into an encrypted backup envelope
  */
-export async function createEncryptedBackup({ dbConnection, encryptionKey, appVersion = '0.1.0' }) {
+/** @param {any} options @returns {Promise<any>} */
+export async function createEncryptedBackup(options) {
+  const {
+    dbConnection,
+    encryptionKey,
+    appVersion = '0.1.0',
+    baselineReaders = null,
+  } = options;
   if (!encryptionKey || typeof encryptionKey !== 'string' || encryptionKey.length < 16) {
     throw new Error('Encryption key must be a string containing at least 16 characters');
   }
 
-  const db = dbConnection.db;
-  const data = {};
-  const collectionCounts = {};
+  const inventory = await discoverSourceInventory({
+    dbConnection,
+    fallbackCollectionNames: BACKUP_COLLECTIONS,
+    serializeDocument: toExtendedJson,
+  });
+  const data = /** @type {Record<string, any[]>} */ ({});
+  const collectionCounts = /** @type {Record<string, number>} */ ({});
   let totalRecords = 0;
 
-  for (const collectionName of BACKUP_COLLECTIONS) {
-    let docs;
-    try {
-      docs = await db.collection(collectionName).find({}).toArray();
-    } catch {
-      docs = [];
-    }
+  for (const collectionName of inventory.collectionOrder) {
+    const docs = inventory.documents[collectionName];
     data[collectionName] = docs.map(toExtendedJson);
     collectionCounts[collectionName] = docs.length;
     totalRecords += docs.length;
   }
 
-  const rawJson = JSON.stringify(data);
+  const baselines = await captureHistoricalBaselines({ inventory, baselineReaders });
+  const payload = {
+    payloadFormat: 'mealkhata-backup-payload-v2',
+    collections: data,
+    baselines,
+  };
+  const rawJson = JSON.stringify(payload);
   const sha256Checksum = createHash('sha256').update(rawJson).digest('hex');
   const compressed = zlib.gzipSync(Buffer.from(rawJson, 'utf8'));
 
@@ -122,9 +163,17 @@ export async function createEncryptedBackup({ dbConnection, encryptionKey, appVe
     formatVersion: BACKUP_FORMAT_VERSION,
     createdAt: new Date().toISOString(),
     appVersion,
+    sourceDatabase: inventory.databaseName,
+    collectionOrder: inventory.collectionOrder,
     collections: collectionCounts,
+    collectionMetadata: inventory.collections,
     totalRecords,
     sha256Checksum,
+    baselines: baselines ? {
+      sha256Checksum: baselines.sha256Checksum,
+      calendarDayCount: baselines.calendarDays.length,
+      monthlyCostReportCount: baselines.monthlyCostReports.length,
+    } : null,
     algorithm: 'aes-256-gcm',
   };
 
@@ -148,7 +197,9 @@ export async function createEncryptedBackup({ dbConnection, encryptionKey, appVe
 /**
  * Decrypts and verifies a backup envelope without restoring it
  */
-export function verifyAndDecryptBackup({ backupPackageString, encryptionKey }) {
+/** @param {any} options @returns {any} */
+export function verifyAndDecryptBackup(options) {
+  const { backupPackageString, encryptionKey } = options;
   if (!encryptionKey) {
     throw new Error('Encryption key is required to decrypt and verify the backup');
   }
@@ -183,7 +234,11 @@ export function verifyAndDecryptBackup({ backupPackageString, encryptionKey }) {
   try {
     compressed = Buffer.concat([decipher.update(encrypted), decipher.final()]);
   } catch (err) {
-    throw new Error(`Backup decryption failed: invalid encryption key or tampered data (${err.message})`, { cause: err });
+    const detail = err instanceof Error ? err.message : String(err);
+    throw Object.assign(
+      new Error(`Backup decryption failed: invalid encryption key or tampered data (${detail})`),
+      { cause: err },
+    );
   }
 
   const decompressed = zlib.gunzipSync(compressed).toString('utf8');
@@ -193,40 +248,111 @@ export function verifyAndDecryptBackup({ backupPackageString, encryptionKey }) {
     throw new Error('Backup integrity checksum mismatch: archive may be corrupted or tampered');
   }
 
-  const rawData = JSON.parse(decompressed);
-  return { manifest, rawData };
+  const payload = JSON.parse(decompressed);
+  const isWrappedPayload = payload?.payloadFormat === 'mealkhata-backup-payload-v2';
+  const rawData = isWrappedPayload ? payload.collections : payload;
+  const baselines = isWrappedPayload ? payload.baselines : null;
+
+  for (const [collectionName, expectedCount] of Object.entries(manifest.collections || {})) {
+    const documents = rawData?.[collectionName];
+    if (!Array.isArray(documents) || documents.length !== expectedCount) {
+      throw new Error(`Backup collection manifest mismatch for ${collectionName}`);
+    }
+    const expectedChecksum = manifest.collectionMetadata?.[collectionName]?.sha256Checksum;
+    if (expectedChecksum && checksumValue(documents) !== expectedChecksum) {
+      throw new Error(`Backup collection checksum mismatch for ${collectionName}`);
+    }
+  }
+
+  if (manifest.baselines) {
+    if (!baselines || checksumValue({
+      calendarDays: baselines.calendarDays,
+      monthlyCostReports: baselines.monthlyCostReports,
+    }) !== manifest.baselines.sha256Checksum) {
+      throw new Error('Backup historical baseline checksum mismatch');
+    }
+  }
+
+  return { manifest, rawData, baselines };
 }
 
 /**
  * Restores a verified backup into a target database connection
  */
-export async function restoreDatabase({ backupPackageString, encryptionKey, targetDbConnection, dropExisting = false }) {
-  const { manifest, rawData } = verifyAndDecryptBackup({ backupPackageString, encryptionKey });
+/** @param {any} options @returns {Promise<any>} */
+export async function restoreDatabase(options) {
+  const {
+    backupPackageString,
+    encryptionKey,
+    sourceDbConnection = null,
+    targetDbConnection,
+    dropExisting = false,
+  } = options;
+  assertDistinctDatabaseConnections({ sourceDbConnection, targetDbConnection });
+  const { manifest, rawData, baselines } = verifyAndDecryptBackup({ backupPackageString, encryptionKey });
   const db = targetDbConnection.db;
-  const restoredCounts = {};
+  const restoredCounts = /** @type {Record<string, number>} */ ({});
+  const collectionOrder = manifest.collectionOrder || Object.keys(rawData).sort();
+  const targetBeforeRestore = await discoverSourceInventory({
+    dbConnection: targetDbConnection,
+    serializeDocument: toExtendedJson,
+  });
 
-  for (const collectionName of BACKUP_COLLECTIONS) {
+  if (!dropExisting && targetBeforeRestore.collectionOrder.length > 0) {
+    throw new Error('Restore target database is not empty; use an explicit disposable target or --drop');
+  }
+
+  if (dropExisting) {
+    if (targetBeforeRestore.collectionOrder.length > 0) {
+      const previous = await verifyRestoredInventory({ sourceManifest: manifest,
+        targetDbConnection, serializeDocument: toExtendedJson });
+      if (!previous.passed) throw new Error('Refusing to drop an unverified restore target');
+    }
+    for (const collectionName of targetBeforeRestore.collectionOrder) {
+      try {
+        await db.collection(collectionName).drop();
+      } catch (error) {
+        if (error?.codeName !== 'NamespaceNotFound' && error?.code !== 26) throw error;
+      }
+    }
+  }
+
+  for (const collectionName of collectionOrder) {
     const rawDocs = rawData[collectionName] || [];
     const restoredDocs = rawDocs.map(fromExtendedJson);
 
     const collection = db.collection(collectionName);
-    if (dropExisting) {
+    if (restoredDocs.length > 0) {
+      await collection.insertMany(restoredDocs);
+    } else if (typeof db.createCollection === 'function') {
       try {
-        await collection.drop();
-      } catch {
-        // ignore if collection didn't exist
+        await db.createCollection(collectionName);
+      } catch (error) {
+        if (error?.codeName !== 'NamespaceExists' && error?.code !== 48) throw error;
       }
     }
 
-    if (restoredDocs.length > 0) {
-      await collection.insertMany(restoredDocs);
+    const indexes = manifest.collectionMetadata?.[collectionName]?.indexes || [];
+    if (indexes.length > 0 && typeof collection.createIndexes === 'function') {
+      await collection.createIndexes(indexes.map(({ key, ...options }) => ({ key, ...options })));
     }
     restoredCounts[collectionName] = restoredDocs.length;
+  }
+
+  const verification = await verifyRestoredInventory({
+    sourceManifest: manifest,
+    targetDbConnection,
+    serializeDocument: toExtendedJson,
+  });
+  if (!verification.passed) {
+    throw new Error(`Post-restore archive verification failed: ${verification.issues.join('; ')}`);
   }
 
   return {
     success: true,
     manifest,
     restoredCounts,
+    baselines,
+    verification,
   };
 }

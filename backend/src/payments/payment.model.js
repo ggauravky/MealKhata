@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 import { ROLES } from '../auth/permissions.js';
-import { MEMBER_IDS } from '../config/members.js';
+import { isSafeStudentId } from '../students/studentId.js';
 import { isValidLogicalMonth } from '../utils/month.js';
 import {
   isValidPaymentAmount,
@@ -28,7 +28,7 @@ const paymentSchema = new mongoose.Schema(
   {
     paymentId: { type: String, required: true, immutable, unique: true, validate: isValidUuid },
     month: { type: String, required: true, immutable, validate: isValidLogicalMonth },
-    memberId: { type: String, required: true, immutable, enum: MEMBER_IDS },
+    memberId: { type: String, required: true, immutable, validate: isSafeStudentId },
     amountPaise: { type: Number, required: true, immutable, validate: isValidPaymentAmount },
     method: { type: String, required: true, immutable, enum: PAYMENT_METHODS },
     upiReference: { type: String, required: false, default: null, immutable, maxlength: MAX_UPI_REFERENCE_LENGTH },
@@ -37,8 +37,22 @@ const paymentSchema = new mongoose.Schema(
     payeeSnapshot: { type: payeeSnapshotSchema, required: true, immutable },
     recordedAt: { type: Date, required: true, immutable },
     recordedByRole: { type: String, required: true, immutable, enum: [ROLES.MEMBER, ROLES.ADMIN, ROLES.SUPERADMIN] },
-    recordedByMemberId: { type: String, required: false, default: null, immutable, enum: [...MEMBER_IDS, null] },
+    recordedByMemberId: { type: String, required: false, default: null, immutable, validate: (value) => value === null || isSafeStudentId(value) },
     idempotencyKey: { type: String, required: true, immutable, unique: true, validate: isValidUuid },
+    fundingSource: {
+      type: String,
+      required: true,
+      immutable,
+      enum: ['CASH_RECEIPT', 'UNALLOCATED_CREDIT'],
+      default() { return this.isNew ? 'CASH_RECEIPT' : undefined; },
+    },
+    sourceCreditAllocationId: {
+      type: String,
+      required: false,
+      immutable,
+      sparse: true,
+      unique: true,
+    },
     status: { type: String, required: true, enum: PAYMENT_ENTRY_STATUSES, default: 'recorded' },
     voidedAt: { type: Date, required: false, default: null },
     voidedByRole: { type: String, required: false, default: null, enum: [ROLES.SUPERADMIN, null] },
