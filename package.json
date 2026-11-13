@@ -17,7 +17,7 @@
     "hash-password": "npm run hash-password --workspace backend",
     "migrate:user-accounts": "npm run migrate:user-accounts --workspace backend",
     "migrate:v3": "npm run migrate:v3 --workspace backend",
-    "initialize:fresh:v3": "npm run initialize:fresh:v3 --workspace backend",
+    "initialize:fresh:v3": "npm --workspace backend run initialize:fresh:v3 --",
     "seed-members": "npm run seed-members --workspace backend",
     "generate-vapid-keys": "npm run generate-vapid-keys --workspace backend",
     "send-push-reminders": "npm run send-push-reminders --workspace backend",

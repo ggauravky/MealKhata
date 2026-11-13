@@ -5,7 +5,7 @@ import mongoose from 'mongoose';
 import { checksumValue } from '../src/migrations/sourceInventory.service.js';
 import { isValidLogicalDate } from '../src/utils/date.js';
 import { createFreshRuntimeAttestationBody, initializeFreshV3,
-  validateFreshTargetUris } from '../src/config/v3FreshInitialization.js';
+  validateEmptyFreshTargetUri, validateFreshTargetUris } from '../src/config/v3FreshInitialization.js';
 import { inspectV3RequiredIndexes } from '../src/config/v3ReleaseReadiness.js';
 
 const action = process.argv[2];
@@ -17,8 +17,12 @@ if (!['--prepare', '--execute', '--prepare-runtime'].includes(action) || process
     const sourceDatabase = process.env.FRESH_SOURCE_DATABASE;
     const targetDatabase = process.env.FRESH_TARGET_DATABASE;
     const sourceUri = process.env.MONGODB_URI;
-    const targetUri = process.env.FRESH_TARGET_MONGODB_URI;
-    validateFreshTargetUris({ sourceUri, targetUri, sourceDatabase, targetDatabase });
+    const targetUri = process.env.FRESH_TARGET_MONGODB_URI || process.env.MONGODB_URI;
+    if (sourceDatabase) {
+      validateFreshTargetUris({ sourceUri, targetUri, sourceDatabase, targetDatabase });
+    } else {
+      validateEmptyFreshTargetUri({ targetUri, targetDatabase });
+    }
     mongoose.set('autoIndex', false);
     await mongoose.connect(targetUri, { autoIndex: false, serverSelectionTimeoutMS: 10_000 });
     const db = mongoose.connection.db;
@@ -40,7 +44,9 @@ if (!['--prepare', '--execute', '--prepare-runtime'].includes(action) || process
       const hello = await db.admin().command({ hello: 1, maxTimeMS: 2_000 });
       const now = new Date();
       const body = {
-        format: 'mealkhata-v3-fresh-init-approval-v1', sourceDatabase,
+        ...(sourceDatabase
+          ? { format: 'mealkhata-v3-fresh-init-approval-v1', sourceDatabase }
+          : { format: 'mealkhata-v3-fresh-init-approval-v2', initializationMode: 'empty-database' }),
         targetDatabase, targetClusterIdentity: checksumValue({ setName: hello.setName,
           hosts: [...hello.hosts].sort() }), superAdminEmail, financialStartDate,
         nonce: randomUUID(), issuedAt: now.toISOString(),
@@ -55,7 +61,9 @@ if (!['--prepare', '--execute', '--prepare-runtime'].includes(action) || process
         email: manifest.superAdminEmail, role: 'superadmin', active: true,
       }, { projection: { userId: 1 } });
       if (!manifest || manifest.targetDatabase !== targetDatabase
-        || manifest.sourceDatabase !== sourceDatabase
+        || (sourceDatabase
+          ? manifest.sourceDatabase !== sourceDatabase
+          : manifest.initializationMode !== 'empty-database')
         || !admin
         || !await inspectV3RequiredIndexes(db, { mode: 'fresh' })) {
         throw new Error('Fresh target manifest or indexes are incomplete');

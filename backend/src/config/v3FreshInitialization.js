@@ -9,11 +9,17 @@ import { createV3RequiredIndexes } from './v3ReleaseReadiness.js';
 
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
 const SHA = /^[a-f0-9]{64}$/;
-const APPROVAL_FIELDS = ['format', 'sourceDatabase', 'targetDatabase',
+const APPROVAL_FIELDS_V1 = ['format', 'sourceDatabase', 'targetDatabase',
   'targetClusterIdentity', 'superAdminEmail', 'financialStartDate',
   'nonce', 'issuedAt', 'expiresAt'];
-const MANIFEST_FIELDS = ['initializationId', 'status', 'targetDatabase',
+const APPROVAL_FIELDS_V2 = ['format', 'initializationMode', 'targetDatabase',
+  'targetClusterIdentity', 'superAdminEmail', 'financialStartDate',
+  'nonce', 'issuedAt', 'expiresAt'];
+const MANIFEST_FIELDS_V1 = ['initializationId', 'status', 'targetDatabase',
   'targetClusterIdentity', 'sourceDatabase', 'superAdminUserId',
+  'superAdminEmail', 'financialStartDate', 'createdAt'];
+const MANIFEST_FIELDS_V2 = ['initializationId', 'status', 'targetDatabase',
+  'targetClusterIdentity', 'initializationMode', 'superAdminUserId',
   'superAdminEmail', 'financialStartDate', 'createdAt'];
 
 export function validateFreshTargetUris({ sourceUri, targetUri, sourceDatabase, targetDatabase }) {
@@ -40,15 +46,42 @@ export function validateFreshTargetUris({ sourceUri, targetUri, sourceDatabase, 
   return { sourceDatabase, targetDatabase };
 }
 
+export function validateEmptyFreshTargetUri({ targetUri, targetDatabase }) {
+  let target;
+  try {
+    target = new URL(targetUri);
+  } catch {
+    throw new Error('Exact fresh target MongoDB URI is required');
+  }
+  if (target.protocol !== 'mongodb+srv:' || !target.username
+    || target.searchParams.get('tls') === 'false' || target.searchParams.get('ssl') === 'false') {
+    throw new Error('Fresh target must use a TLS-enabled Atlas SRV URI');
+  }
+  if (!SAFE_NAME.test(targetDatabase ?? '')
+    || ['admin', 'local', 'config'].includes(targetDatabase)
+    || decodeURIComponent(target.pathname.slice(1)) !== targetDatabase) {
+    throw new Error('Fresh target URI must identify the exact application database');
+  }
+  return { targetDatabase };
+}
+
 export function createFreshRuntimeAttestationBody({ manifest, buildSha, releaseId,
   launchStage, now = new Date() }) {
-  if (!manifest || MANIFEST_FIELDS.some(field => !Object.hasOwn(manifest, field))) {
+  const emptyDatabaseMode = manifest?.initializationMode === 'empty-database';
+  const fields = emptyDatabaseMode
+    ? MANIFEST_FIELDS_V2 : MANIFEST_FIELDS_V1;
+  if (!manifest || fields.some(field => !Object.hasOwn(manifest, field))
+    || (emptyDatabaseMode
+      ? Object.hasOwn(manifest, 'sourceDatabase')
+      : Object.hasOwn(manifest, 'initializationMode'))) {
     throw new Error('Complete fresh initialization manifest is required');
   }
-  const recorded = Object.fromEntries(MANIFEST_FIELDS.map(field => [field, manifest[field]]));
+  const recorded = Object.fromEntries(fields.map(field => [field, manifest[field]]));
   if (recorded.initializationId !== 'mealkhata-v3-fresh' || recorded.status !== 'complete'
-    || recorded.targetDatabase === recorded.sourceDatabase
-    || !SAFE_NAME.test(recorded.targetDatabase) || !SAFE_NAME.test(recorded.sourceDatabase)
+    || !SAFE_NAME.test(recorded.targetDatabase)
+    || (recorded.initializationMode === 'empty-database'
+      ? Object.hasOwn(recorded, 'sourceDatabase')
+      : !SAFE_NAME.test(recorded.sourceDatabase) || recorded.targetDatabase === recorded.sourceDatabase)
     || !SHA.test(recorded.targetClusterIdentity)
     || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(buildSha ?? '')
     || !SAFE_NAME.test(releaseId ?? '')
@@ -72,12 +105,18 @@ function exact(value, keys) {
 
 function verifyApproval(approval, { sourceDatabase, targetDatabase, ownerPublicKey,
   operatorPublicKey, now, clusterIdentity }) {
+  const emptyDatabaseMode = approval?.body?.format === 'mealkhata-v3-fresh-init-approval-v2';
+  const approvalFields = emptyDatabaseMode ? APPROVAL_FIELDS_V2 : APPROVAL_FIELDS_V1;
   if (!exact(approval, ['body', 'signatures'])
     || !exact(approval.signatures, ['owner', 'operator'])
-    || !exact(approval.body, APPROVAL_FIELDS)) throw new Error('Fresh initialization approval is invalid');
+    || !exact(approval.body, approvalFields)) throw new Error('Fresh initialization approval is invalid');
   const { body, signatures } = approval;
-  if (body.format !== 'mealkhata-v3-fresh-init-approval-v1'
-    || body.sourceDatabase !== sourceDatabase || body.targetDatabase !== targetDatabase
+  if (!['mealkhata-v3-fresh-init-approval-v1', 'mealkhata-v3-fresh-init-approval-v2'].includes(body.format)
+    || (emptyDatabaseMode
+      ? body.initializationMode !== 'empty-database' || sourceDatabase !== undefined
+      : body.sourceDatabase !== sourceDatabase || !SAFE_NAME.test(sourceDatabase ?? '')
+        || sourceDatabase === targetDatabase)
+    || body.targetDatabase !== targetDatabase
     || body.targetClusterIdentity !== clusterIdentity
     || !SAFE_NAME.test(body.nonce ?? '')
     || typeof body.superAdminEmail !== 'string'
@@ -132,11 +171,11 @@ export async function initializeFreshV3({
   execute = false,
   now = new Date(),
 } = {}) {
-  if (!db || !SAFE_NAME.test(sourceDatabase ?? '') || !SAFE_NAME.test(targetDatabase ?? '')
+  if (!db || !SAFE_NAME.test(targetDatabase ?? '')
     || ['admin', 'local', 'config'].includes(targetDatabase)
-    || sourceDatabase === targetDatabase || db.databaseName !== targetDatabase
+    || db.databaseName !== targetDatabase
     || mongoose.connection.db?.databaseName !== targetDatabase) {
-    throw new Error('Fresh source and target database identities must be distinct and exact');
+    throw new Error('Fresh target database identity must be exact and allowed');
   }
   const hello = await db.admin().command({ hello: 1, maxTimeMS: 2_000 });
   if (!SAFE_NAME.test(hello.setName ?? '') || !Array.isArray(hello.hosts)
@@ -166,7 +205,10 @@ export async function initializeFreshV3({
       const createdAt = now.toISOString();
       manifest = {
         initializationId: 'mealkhata-v3-fresh', status: 'complete',
-        targetDatabase, targetClusterIdentity: clusterIdentity, sourceDatabase,
+        targetDatabase, targetClusterIdentity: clusterIdentity,
+        ...(body.initializationMode === 'empty-database'
+          ? { initializationMode: 'empty-database' }
+          : { sourceDatabase }),
         superAdminUserId, superAdminEmail: body.superAdminEmail,
         financialStartDate: body.financialStartDate, createdAt,
       };

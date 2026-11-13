@@ -23,8 +23,11 @@ const FIELDS = ['format', 'releaseId', 'buildSha', 'targetDatabase',
   'launchStage', 'issuedAt', 'expiresAt'];
 const FRESH_FIELDS = ['format', 'releaseId', 'buildSha', 'targetDatabase',
   'targetClusterIdentity', 'initializationChecksum', 'launchStage', 'issuedAt', 'expiresAt'];
-const FRESH_MANIFEST_FIELDS = ['initializationId', 'status', 'targetDatabase',
+const FRESH_MANIFEST_FIELDS_V1 = ['initializationId', 'status', 'targetDatabase',
   'targetClusterIdentity', 'sourceDatabase', 'superAdminUserId', 'superAdminEmail',
+  'financialStartDate', 'createdAt'];
+const FRESH_MANIFEST_FIELDS_V2 = ['initializationId', 'status', 'targetDatabase',
+  'targetClusterIdentity', 'initializationMode', 'superAdminUserId', 'superAdminEmail',
   'financialStartDate', 'createdAt'];
 const INDEX_MODELS = [Student, StudentAuditEvent, MealDay, MealHistorySnapshot,
   MealHistoricalCorrection, MonthlyMealRate, UserAccount, SystemSettings];
@@ -88,11 +91,20 @@ export function verifyV3FreshRuntimeAttestation(document, config, now = new Date
 }
 
 function freshManifestBody(manifest) {
-  if (!manifest || FRESH_MANIFEST_FIELDS.some(field => !Object.hasOwn(manifest, field))) return null;
-  const body = Object.fromEntries(FRESH_MANIFEST_FIELDS.map(field => [field, manifest[field]]));
+  const emptyDatabaseMode = manifest?.initializationMode === 'empty-database';
+  const fields = emptyDatabaseMode
+    ? FRESH_MANIFEST_FIELDS_V2 : FRESH_MANIFEST_FIELDS_V1;
+  if (!manifest || fields.some(field => !Object.hasOwn(manifest, field))
+    || (emptyDatabaseMode
+      ? Object.hasOwn(manifest, 'sourceDatabase')
+      : Object.hasOwn(manifest, 'initializationMode'))) return null;
+  const body = Object.fromEntries(fields.map(field => [field, manifest[field]]));
   if (body.initializationId !== 'mealkhata-v3-fresh' || body.status !== 'complete'
-    || !SAFE_ID.test(body.targetDatabase) || !SAFE_ID.test(body.sourceDatabase)
-    || body.targetDatabase === body.sourceDatabase || !SHA.test(body.targetClusterIdentity)
+    || !SAFE_ID.test(body.targetDatabase)
+    || (body.initializationMode === 'empty-database'
+      ? Object.hasOwn(body, 'sourceDatabase')
+      : !SAFE_ID.test(body.sourceDatabase) || body.targetDatabase === body.sourceDatabase)
+    || !SHA.test(body.targetClusterIdentity)
     || !SAFE_ID.test(body.superAdminUserId)
     || typeof body.superAdminEmail !== 'string' || !body.superAdminEmail.includes('@')
     || typeof body.financialStartDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(body.financialStartDate)

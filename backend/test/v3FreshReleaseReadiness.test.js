@@ -13,7 +13,7 @@ test('fresh v3 release requires two signatures, exact empty-target initializatio
   const manifest = {
     initializationId: 'mealkhata-v3-fresh', status: 'complete',
     targetDatabase: 'mealkhata_v3_fresh', targetClusterIdentity: clusterIdentity,
-    sourceDatabase: 'mealkhata', superAdminUserId: 'admin-1',
+    initializationMode: 'empty-database', superAdminUserId: 'admin-1',
     superAdminEmail: 'owner@example.test', financialStartDate: '2026-11-07',
     createdAt: '2026-11-07T00:00:00.000Z',
   };
@@ -47,6 +47,9 @@ test('fresh v3 release requires two signatures, exact empty-target initializatio
     observeHandshake: async () => ({ setName: 'rs-fresh', hosts: ['127.0.0.1:27017'] }),
     inspectIndexes: async () => true, readAttestation: async () => JSON.stringify(signed()) };
   assert.equal(await checkV3ReleaseReadiness(options), true);
+  manifest.sourceDatabase = 'ambiguous-old-source';
+  assert.equal(await checkV3ReleaseReadiness(options), false);
+  delete manifest.sourceDatabase;
   assert.equal(await checkV3ReleaseReadiness({ ...options, requiredLaunchStage: 'serving' }), true);
   body.launchStage = 'read-only';
   assert.equal(await checkV3ReleaseReadiness({ ...options, requiredLaunchStage: 'serving' }), false);
