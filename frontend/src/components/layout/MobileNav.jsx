@@ -10,6 +10,7 @@ import {
   Moon,
   MoreHorizontal,
   Receipt,
+  Settings,
   ShieldCheck,
   Sun,
   Users,
@@ -179,6 +180,15 @@ export function MobileNav() {
                   <ShieldCheck className="h-4 w-4 text-teal-600 dark:text-teal-400" />
                   <span>Mess Admin Panel</span>
                 </DropdownMenuItem>
+                {auth.role === 'superadmin' && (
+                  <DropdownMenuItem
+                    onClick={() => navigate('/admin/settings')}
+                    className="flex items-center gap-2.5 cursor-pointer text-xs font-medium"
+                  >
+                    <Settings className="h-4 w-4 text-teal-600 dark:text-teal-400" />
+                    <span>Settings &amp; Access</span>
+                  </DropdownMenuItem>
+                )}
               </>
             )}
 

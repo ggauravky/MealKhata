@@ -81,7 +81,7 @@ export function ReportsPage() {
     const snapshot = activeSettlement.snapshot;
     return {
       members: Object.fromEntries(
-        Object.entries(snapshot.members).map(([id, m]) => [
+        Object.entries(snapshot?.members ?? {}).map(([id, m]) => [
           id,
           {
             ...m,

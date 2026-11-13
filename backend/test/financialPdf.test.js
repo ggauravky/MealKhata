@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, test } from 'node:test';
 import request from 'supertest';
-import { createApp } from '../src/app.js';
 import { ROLES } from '../src/auth/permissions.js';
-import { createSessionToken, SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
+import { SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
 import { createFinancialOverviewService } from '../src/finance/financialOverview.service.js';
 import { createMonthlyFinancialReportService } from '../src/finance/monthlyFinancialReport.service.js';
 import { createMonthlyFinancialPdfService } from '../src/finance/monthlyFinancialPdf.service.js';
 import { createFinanceRouter } from '../src/routes/finance.routes.js';
+import { testSessionToken, createTestApp } from './helpers/testAuth.js';
 
 const CURRENT_MONTH = '2026-10';
 const NOW = new Date('2026-10-20T12:00:00.000Z');
@@ -145,7 +145,7 @@ function createMockReportDataService() {
 }
 
 async function cookieFor(role, memberId = null) {
-  return `${SESSION_COOKIE_NAME}=${await createSessionToken(role, { memberId })}`;
+  return `${SESSION_COOKIE_NAME}=${await testSessionToken(role, { memberId })}`;
 }
 
 describe('MealKhata 2.0: Professional Monthly Financial PDF Generation', () => {
@@ -157,7 +157,7 @@ describe('MealKhata 2.0: Professional Monthly Financial PDF Generation', () => {
     const reportDataService = createMockReportDataService();
     pdfService = createMonthlyFinancialPdfService({ reportDataService });
     financeRouter = createFinanceRouter({ pdfService });
-    testApp = createApp({ finance: financeRouter });
+    testApp = createTestApp({ finance: financeRouter });
   });
 
   test('generateMemberStatementPdf produces a valid vector PDF starting with %PDF-', async () => {

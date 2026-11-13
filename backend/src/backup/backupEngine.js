@@ -7,16 +7,16 @@ import {
   checksumValue,
   discoverSourceInventory,
   verifyRestoredInventory,
-} from '../migrations/sourceInventory.service.js';
+} from './inventory.js';
 
 export const BACKUP_FORMAT_VERSION = 1;
 export const BACKUP_COLLECTIONS = Object.freeze([
+  'app_initialization',
+  'system_settings',
   'user_accounts',
-  'member_accounts',
+  'account_audit_events',
   'member_account_audits',
   'meal_days',
-  'meal_history_snapshots',
-  'meal_history_corrections',
   'students',
   'student_audit_events',
   'monthly_meal_rates',
@@ -29,6 +29,7 @@ export const BACKUP_COLLECTIONS = Object.freeze([
   'rooms',
   'room_assignments',
   'room_fee_plans',
+  'room_fee_schedule_states',
   'room_charges',
   'room_payments',
   'room_payment_settings',

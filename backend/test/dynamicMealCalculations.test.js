@@ -13,16 +13,16 @@ import { MealDay } from '../src/meals/meal.model.js';
 import { getMealPath } from '../src/meals/meal.constants.js';
 import { createMealService } from '../src/meals/meal.service.js';
 import { InMemoryMealRepository } from './helpers/inMemoryMealRepository.js';
+import { createFixedStudentDirectory } from './helpers/fixtures.js';
 import { createMonthMealService } from '../src/calendar/monthMeal.service.js';
-import { buildLegacyMealSnapshot } from '../src/migrations/legacyMealSnapshot.service.js';
 import { resolvePhysicalPlateLimit } from '../src/meals/plateAllocation.constants.js';
 
 test('v3 meal helpers require an explicit participant roster, including an explicit empty roster', () => {
-  assert.throws(() => createDefaultMealDay('2026-11-03', undefined, { runtimeProfile: 'v3' }), /participants.*required/i);
-  assert.throws(() => getEffectiveMealAllocation({ runtimeProfile: 'v3' }), /participants.*required/i);
-  assert.throws(() => splitMealCost({ allocation: { plates: [] }, runtimeProfile: 'v3' }), /participants.*required/i);
-  assert.throws(() => createPresetAllocation('individual', { runtimeProfile: 'v3' }), /participants.*required/i);
-  assert.deepEqual(createDefaultMealDay('2026-11-03', [], { runtimeProfile: 'v3' }).participantOrder, []);
+  assert.throws(() => createDefaultMealDay('2026-11-03', undefined), /participants.*required/i);
+  assert.throws(() => getEffectiveMealAllocation(), /participants.*required/i);
+  assert.throws(() => splitMealCost({ allocation: { plates: [] } }), /participants.*required/i);
+  assert.throws(() => createPresetAllocation('individual'), /participants.*required/i);
+  assert.deepEqual(createDefaultMealDay('2026-11-03', []).participantOrder, []);
 });
 
 const ids = ['gaurav', 'nikhil', 'devansh', 'student_0123456789abcdef0123456789abcdef'];
@@ -86,14 +86,11 @@ test('a fourth student can take a meal and receive exact cost through the servic
   assert.deepEqual(result.data.participantOrder, ids);
 });
 
-test('v3 day and calendar reads fail closed when the student resolver is absent', async () => {
-  const dayService = createMealService({ repository: new InMemoryMealRepository(),
-    students: null, runtimeProfile: 'v3' });
-  await assert.rejects(dayService.getDay('2026-11-03'), error => error.statusCode === 503);
-  const calendar = createMonthMealService({
-    repository: { findInDateRange: async () => [] }, students: null, runtimeProfile: 'v3',
-  });
-  await assert.rejects(calendar.getMonth('2026-11'), error => error.statusCode === 503);
+test('day and calendar services refuse to start without a student directory', () => {
+  assert.throws(() => createMealService({ repository: new InMemoryMealRepository(), students: null }),
+    /student directory/);
+  assert.throws(() => createMonthMealService({ repository: { findInDateRange: async () => [] }, students: null }),
+    /student directory/);
 });
 
 test('four-student allocation updates statuses and exact amounts atomically', async () => {
@@ -113,7 +110,7 @@ test('calendar counts a fourth student from a saved day', async () => {
   const day = createDefaultMealDay('2026-11-03', ids);
   day.meals.morning[ids[3]] = 'taking';
   const repository = { findInDateRange: async () => [day] };
-  const month = await createMonthMealService({ repository }).getMonth('2026-11');
+  const month = await createMonthMealService({ repository, students: createFixedStudentDirectory(ids) }).getMonth('2026-11');
   const third = month.days.find((item) => item.date === day.date);
   assert.equal(third.counts.morningTaking, 1);
   assert.equal(third.counts.morningNotSet, 3);
@@ -231,48 +228,4 @@ test('saved meal rejects an identity absent from its persisted participant order
   await assert.rejects(service.changeStatus({ date: '2026-11-03', mealType: 'morning', memberId: 'student_new', status: 'taking', actorRole: 'admin' }), /participant|saved meal/i);
   const day = await repository.findByDate('2026-11-03');
   assert.equal(Object.hasOwn(day.meals.morning, 'student_new'), false);
-});
-
-test('historical reads use verified legacy-v2 costs and reject a one-paisa snapshot mismatch', async () => {
-  const day = createDefaultMealDay('2026-09-09', ids.slice(0, 3));
-  delete day.schemaVersion;
-  delete day.participantOrder;
-  day.meals.morning.gaurav = 'taking';
-  day.revision = 1;
-  const repository = new InMemoryMealRepository();
-  await repository.create(day);
-  const snapshot = buildLegacyMealSnapshot(await repository.findByDate(day.date));
-  const snapshots = { findByDateAndVersion: async () => snapshot };
-  const service = createMealService({ repository, snapshots, students: { listEligibleOn: async () => [] }, runtimeProfile: 'v3' });
-  const read = await service.getDay(day.date);
-  assert.equal(read.dailyCostSummary.members.gaurav.morningAmountPaise, snapshot.costs.morning.memberAmountsPaise.gaurav);
-  assert.equal(read.calculationVersion, 'legacy-v2');
-  snapshot.costs.morning.memberAmountsPaise.gaurav += 1;
-  await assert.rejects(service.getDay(day.date), /snapshot.*mismatch/i);
-});
-
-test('historical read fails closed when the frozen snapshot is missing', async () => {
-  const day = createDefaultMealDay('2026-09-09', ids.slice(0, 3));
-  delete day.schemaVersion;
-  delete day.participantOrder;
-  const repository = new InMemoryMealRepository();
-  await repository.create(day);
-  const service = createMealService({ repository, snapshots: { findByDateAndVersion: async () => null }, runtimeProfile: 'v3' });
-  await assert.rejects(service.getDay(day.date), /snapshot.*missing/i);
-});
-
-test('calendar uses verified frozen historical amount and reports missing snapshots', async () => {
-  const source = createDefaultMealDay('2026-09-09', ids.slice(0, 3));
-  delete source.schemaVersion;
-  delete source.participantOrder;
-  source.meals.morning.gaurav = 'taking';
-  const snapshot = buildLegacyMealSnapshot(source);
-  const repository = { findInDateRange: async () => [source] };
-  const snapshots = { findByDateAndVersion: async () => snapshot };
-  const students = { listEligibleOn: async () => [] };
-  const month = await createMonthMealService({ repository, snapshots, students, runtimeProfile: 'v3' }).getMonth('2026-09');
-  assert.equal(month.days[8].dailyCostSummary.members.gaurav.morningAmountPaise, 5000);
-  assert.equal(month.days[9].counts.morningNotSet, 0);
-  snapshots.findByDateAndVersion = async () => null;
-  await assert.rejects(createMonthMealService({ repository, snapshots, students, runtimeProfile: 'v3' }).getMonth('2026-09'), /snapshot.*missing/i);
 });

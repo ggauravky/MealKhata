@@ -3,10 +3,9 @@ import { createServer } from 'node:http';
 import { after, beforeEach, describe, test } from 'node:test';
 import { io as createSocketClient } from 'socket.io-client';
 import request from 'supertest';
-import { createApp } from '../src/app.js';
 import { ROLES } from '../src/auth/permissions.js';
-import { createSessionToken, SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
-import { MEMBERS } from '../src/config/members.js';
+import { SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
+import { MEMBERS, MEMBER_IDS, createFixedStudentDirectory } from './helpers/fixtures.js';
 import { createDefaultMealDay } from '../src/meals/meal.defaults.js';
 import { MealDay } from '../src/meals/meal.model.js';
 import { serializeHistory, serializeMealDay } from '../src/meals/meal.serializer.js';
@@ -14,6 +13,7 @@ import { createMealService } from '../src/meals/meal.service.js';
 import { createMealRouter } from '../src/routes/meal.routes.js';
 import { createSocketServer } from '../src/socket.js';
 import { InMemoryMealRepository } from './helpers/inMemoryMealRepository.js';
+import { testSessionToken, createTestApp } from './helpers/testAuth.js';
 
 const ORIGIN = 'http://localhost:5173';
 const NOW = new Date('2026-09-09T20:00:00.000Z');
@@ -26,17 +26,17 @@ const FOURTH_STUDENT_ID = 'student_0123456789abcdef0123456789abcdef';
 
 const repository = new InMemoryMealRepository();
 const broadcasts = [];
-const service = createMealService({ repository, timezone: 'Asia/Kolkata' });
+const service = createMealService({ students: createFixedStudentDirectory(), repository, timezone: 'Asia/Kolkata' });
 const meals = createMealRouter({
   service,
   broadcast: (payload) => broadcasts.push(payload),
   now: () => NOW,
   timezone: 'Asia/Kolkata',
 });
-const testApp = createApp({ meals });
+const testApp = createTestApp({ meals });
 
 async function cookieFor(role) {
-  return `${SESSION_COOKIE_NAME}=${await createSessionToken(role)}`;
+  return `${SESSION_COOKIE_NAME}=${await testSessionToken(role)}`;
 }
 
 async function patchMeal(role, date, body, app = testApp) {
@@ -176,7 +176,7 @@ describe('meal mutation authorization and validation', () => {
       ] },
       timezone: 'Asia/Kolkata',
     });
-    const dynamicApp = createApp({ meals: createMealRouter({
+    const dynamicApp = createTestApp({ meals: createMealRouter({
       service: dynamicService,
       now: () => NOW,
       timezone: 'Asia/Kolkata',
@@ -199,7 +199,7 @@ describe('meal mutation authorization and validation', () => {
         { studentId: 'gaurav' }, { studentId: FOURTH_STUDENT_ID },
       ] },
     });
-    const app = createApp({ meals: createMealRouter({
+    const app = createTestApp({ meals: createMealRouter({
       service: dynamicService, settlements: null, broadcast: () => {},
       now: () => NOW, timezone: 'Asia/Kolkata',
     }) });
@@ -250,10 +250,12 @@ describe('meal mutation authorization and validation', () => {
     assert.equal(response.body.message, 'Invalid meal type.');
   });
 
-  test('15. invalid memberId returns 400', async () => {
-    const response = await patchMeal(ROLES.ADMIN, DATES.today, { ...validChange, memberId: 'intruder' });
-    assert.equal(response.status, 400);
-    assert.equal(response.body.message, 'Invalid member.');
+  test('15. unsafe memberId returns 400 and an unknown student is rejected', async () => {
+    const malformed = await patchMeal(ROLES.ADMIN, DATES.today, { ...validChange, memberId: '../intruder' });
+    assert.equal(malformed.status, 400);
+    assert.equal(malformed.body.message, 'Invalid member.');
+    const unknown = await patchMeal(ROLES.ADMIN, DATES.today, { ...validChange, memberId: 'intruder' });
+    assert.equal(unknown.status, 404);
   });
 
   test('16. invalid status returns 400', async () => {
@@ -407,7 +409,7 @@ describe('broadcast and model safety', () => {
     assert.equal(document.allocations.morning.plates[0].shares instanceof Map, true);
     assert.equal(document.allocations.morning.plates[0].shares.get(FOURTH_STUDENT_ID), 3);
     assert.ok(indexes.some(([fields, options]) => fields.date === 1 && options.unique === true));
-    assert.throws(() => new MealDay({ ...createDefaultMealDay(DATES.today), unexpected: true }), /strict/i);
+    assert.throws(() => new MealDay({ ...createDefaultMealDay(DATES.today, MEMBER_IDS), unexpected: true }), /strict/i);
   });
 
   test('29. defaults support zero, one, four, and many eligible students without a static roster', () => {
@@ -568,7 +570,7 @@ describe('Socket.IO end-to-end delivery', () => {
 
   test('29. Client B receives Client A REST mutation and reconnect refresh is authoritative', async () => {
     const socketRepository = new InMemoryMealRepository();
-    const socketService = createMealService({ repository: socketRepository, timezone: 'Asia/Kolkata' });
+    const socketService = createMealService({ students: createFixedStudentDirectory(), repository: socketRepository, timezone: 'Asia/Kolkata' });
     let broadcaster = () => {};
     const socketRouter = createMealRouter({
       service: socketService,
@@ -576,14 +578,23 @@ describe('Socket.IO end-to-end delivery', () => {
       now: () => NOW,
       timezone: 'Asia/Kolkata',
     });
-    httpServer = createServer(createApp({ meals: socketRouter }));
-    io = createSocketServer(httpServer);
+    httpServer = createServer(createTestApp({ meals: socketRouter }));
+    // Sockets require the app origin and a ticket; ticket minting is covered by v3SocketSecurity.
+    io = createSocketServer(httpServer, {
+      config: { appOrigin: ORIGIN },
+      verifyTicket: async (ticket) => {
+        if (ticket !== 'test-ticket') throw new Error('bad ticket');
+        return { userId: 'test-admin-staff', role: ROLES.ADMIN };
+      },
+      verifyActive: async () => true,
+    });
     broadcaster = (payload) => io.emit('meal:updated', payload);
 
     await new Promise((resolve) => httpServer.listen(0, '127.0.0.1', resolve));
     const address = httpServer.address();
     const url = `http://127.0.0.1:${address.port}`;
-    const createClient = () => createSocketClient(url, { path: '/socket.io', forceNew: true });
+    const createClient = () => createSocketClient(url, { path: '/socket.io', forceNew: true,
+      transports: ['websocket'], extraHeaders: { origin: ORIGIN }, auth: { ticket: 'test-ticket' } });
     const clientA = createClient();
     const clientB = createClient();
     clients.push(clientA, clientB);

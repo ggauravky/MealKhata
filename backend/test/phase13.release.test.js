@@ -4,7 +4,6 @@ import path from 'node:path';
 import test, { describe } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import request from 'supertest';
-import { createApp } from '../src/app.js';
 import { createAuthService } from '../src/auth/auth.service.js';
 import { createMonthlyRateService } from '../src/billing/monthlyRate.service.js';
 import { createMonthMealService } from '../src/calendar/monthMeal.service.js';
@@ -32,19 +31,20 @@ import { createSettlementService } from '../src/settlement/settlement.service.js
 import { getIndiaGreeting } from '../src/utils/date.js';
 import { getNextLogicalMonth, getPreviousLogicalMonth, listDatesInMonth } from '../src/utils/month.js';
 import { InMemoryMealRepository } from './helpers/inMemoryMealRepository.js';
-import { InMemoryMemberAccountRepository } from './helpers/inMemoryMemberAccountRepository.js';
+import { testAccounts } from './helpers/testAuth.js';
 import { InMemoryMonthlyRateRepository } from './helpers/inMemoryMonthlyRateRepository.js';
 import { InMemoryMonthlySettlementRepository } from './helpers/inMemoryMonthlySettlementRepository.js';
 import { InMemoryPaymentRepository } from './helpers/inMemoryPaymentRepository.js';
 import { InMemoryPaymentSettingsRepository } from './helpers/inMemoryPaymentSettingsRepository.js';
 import { InMemoryReminderSettingsRepository } from './helpers/inMemoryReminderSettingsRepository.js';
+import { createTestApp } from './helpers/testAuth.js';
+import { createFixedStudentDirectory } from './helpers/fixtures.js';
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(currentDir, '../..');
 
 function buildTestFixtureApp() {
   const mealRepo = new InMemoryMealRepository();
-  const memberRepo = new InMemoryMemberAccountRepository();
   const rateRepo = new InMemoryMonthlyRateRepository();
   const paymentRepo = new InMemoryPaymentRepository();
   const paymentSettingsRepo = new InMemoryPaymentSettingsRepository();
@@ -54,8 +54,8 @@ function buildTestFixtureApp() {
   const now = () => new Date('2026-10-15T12:00:00+05:30');
   const timezone = 'Asia/Kolkata';
 
-  const mealService = createMealService({ repository: mealRepo, timezone });
-  const monthMealService = createMonthMealService({ repository: mealRepo, timezone });
+  const mealService = createMealService({ students: createFixedStudentDirectory(), repository: mealRepo, timezone });
+  const monthMealService = createMonthMealService({ students: createFixedStudentDirectory(), repository: mealRepo, timezone });
   const rateService = createMonthlyRateService({ repository: rateRepo });
   const reportService = createReportService({ meals: monthMealService, rates: rateService, now, timezone });
   const paymentSummaryService = createPaymentSummaryService({ reports: reportService, repository: paymentRepo });
@@ -73,9 +73,9 @@ function buildTestFixtureApp() {
     now,
     timezone,
   });
-  const authService = createAuthService({ memberAccounts: memberRepo });
+  const authService = createAuthService({ userAccounts: testAccounts });
 
-  const app = createApp({
+  const app = createTestApp({
     auth: createAuthRouter({ service: authService }),
     meals: createMealRouter({ service: mealService }),
     billing: createBillingRouter({ service: rateService }),
@@ -86,7 +86,7 @@ function buildTestFixtureApp() {
     reminderSettings: createReminderSettingsRouter({ service: reminderService }),
     settlements: createSettlementRouter({ service: settlementService }),
     dashboard: createDashboardRouter({ service: dashboardService }),
-    health: createHealthRouter({ readiness: async () => true, drainingCheck: () => false }),
+    health: createHealthRouter({ readiness: async () => ({ ready: true, checks: { database: true } }), drainingCheck: () => false }),
   });
 
   return { app, mealRepo, rateRepo, paymentRepo, settlementRepo };

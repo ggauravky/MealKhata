@@ -852,14 +852,15 @@ describe('Phase 12: Security & Reliability', () => {
     test('end-to-end backup, verification, restore, and post-restore integrity', async () => {
       const targetStore = {};
       const sourceData = {
-        member_accounts: [
-          { memberId: 'gaurav', email: 'gaurav@mealkhata.local', passwordHash: '$2a$12$e80yqV1sK/mK2g05a6N4..X4Zg9YJ7nLq3D', active: true },
-          { memberId: 'nikhil', email: 'nikhil@mealkhata.local', passwordHash: '$2a$12$e80yqV1sK/mK2g05a6N4..X4Zg9YJ7nLq3D', active: true },
-          { memberId: 'devansh', email: 'devansh@mealkhata.local', passwordHash: '$2a$12$e80yqV1sK/mK2g05a6N4..X4Zg9YJ7nLq3D', active: true },
-        ],
+        students: ['gaurav', 'nikhil', 'devansh'].map((studentId, index) => ({
+          studentId, displayName: studentId, status: 'ACTIVE', rosterOrder: (index + 1) * 10,
+          mealEligibilityFrom: null, mealEligibilityUntil: null, archivedAt: null, archivedReason: null,
+        })),
         meal_days: [
           {
             date: '2026-10-01',
+            schemaVersion: 3,
+            participantOrder: ['gaurav', 'nikhil', 'devansh'],
             meals: {
               morning: { gaurav: 'taking', nikhil: 'skip', devansh: 'taking' },
               night: { gaurav: 'taking', nikhil: 'taking', devansh: 'taking' },
@@ -921,7 +922,7 @@ describe('Phase 12: Security & Reliability', () => {
         encryptionKey: TEST_KEY,
       });
 
-      assert.equal(manifest.collections.member_accounts, 3);
+      assert.equal(manifest.collections.students, 3);
       assert.equal(manifest.collections.meal_days, 1);
       assert.ok(manifest.sha256Checksum);
 
@@ -940,7 +941,7 @@ describe('Phase 12: Security & Reliability', () => {
         dropExisting: true,
       });
       assert.equal(restored.success, true);
-      assert.equal(restored.restoredCounts.member_accounts, 3);
+      assert.equal(restored.restoredCounts.students, 3);
       assert.equal(restored.restoredCounts.meal_days, 1);
 
       // Step D: Post-restore data integrity check

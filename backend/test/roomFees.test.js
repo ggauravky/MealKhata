@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, test } from 'node:test';
 import request from 'supertest';
-import { createApp } from '../src/app.js';
 import { ROLES } from '../src/auth/permissions.js';
-import { createSessionToken, SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
-import { MEMBER_IDS } from '../src/config/members.js';
+import { SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
+import { MEMBER_IDS, createAssignmentStudentDirectory } from './helpers/fixtures.js';
 import { createRoomFeeService } from '../src/roomFees/roomFee.service.js';
 import { createRoomFeeRouter, createRoomRouter } from '../src/routes/roomFee.routes.js';
 import { InMemoryRoomFeeRepository } from './helpers/inMemoryRoomFeeRepository.js';
+import { testSessionToken, createTestApp } from './helpers/testAuth.js';
 
 const ORIGIN = 'http://localhost:5173';
 const NOW = new Date('2026-10-20T12:00:00.000Z');
@@ -20,6 +20,7 @@ const broadcasts = [];
 
 const service = createRoomFeeService({
   repository,
+  students: createAssignmentStudentDirectory(repository),
   timezone: 'Asia/Kolkata',
   now: () => NOW,
 });
@@ -34,13 +35,13 @@ const rooms = createRoomRouter({
   broadcast: (payload) => broadcasts.push(payload),
 });
 
-const testApp = createApp({
+const testApp = createTestApp({
   roomFees,
   rooms,
 });
 
 async function cookieFor(role, memberId = null) {
-  return `${SESSION_COOKIE_NAME}=${await createSessionToken(role, { memberId })}`;
+  return `${SESSION_COOKIE_NAME}=${await testSessionToken(role, { memberId })}`;
 }
 
 beforeEach(() => {

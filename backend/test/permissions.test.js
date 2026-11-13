@@ -93,14 +93,14 @@ describe('environment validation', () => {
     );
   });
 
-  test('requires a sufficiently long JWT secret and distinct configured principals', () => {
+  test('requires a sufficiently long JWT secret and an explicit database name', () => {
     assert.throws(
       () => validateEnvironment({ ...env, authJwtSecret: 'too-short' }),
       /at least 32 bytes/,
     );
     assert.throws(
-      () => validateEnvironment({ ...env, superAdminEmail: env.adminEmail }),
-      /must be different/,
+      () => validateEnvironment({ ...env, mongoUri: 'mongodb://127.0.0.1:27017' }),
+      /name the application database/,
     );
     assert.doesNotThrow(() => validateEnvironment(env));
   });
@@ -110,6 +110,7 @@ describe('environment validation', () => {
       ...env,
       nodeEnv: 'production',
       appOrigin: 'https://meal-khata.example',
+      mongoUri: 'mongodb+srv://user:secret@cluster.example.test/mealkhata',
     };
 
     assert.doesNotThrow(() => validateEnvironment(production));
@@ -126,8 +127,8 @@ describe('environment validation', () => {
       /must remain Asia\/Kolkata/,
     );
     assert.throws(
-      () => validateEnvironment({ ...production, adminEmail: 'not-an-email' }),
-      /valid email addresses/,
+      () => validateEnvironment({ ...production, mongoUri: 'mongodb://db.example.test/mealkhata' }),
+      /must use TLS/,
     );
     assert.throws(
       () => validateEnvironment({ ...production, port: 0 }),

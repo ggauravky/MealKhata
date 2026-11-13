@@ -20,6 +20,7 @@ import { env } from '../src/config/env.js';
 import { createAuthenticateSession } from '../src/middleware/authenticate.js';
 import { createAuthRouter } from '../src/routes/auth.routes.js';
 import { InMemoryUserAccountRepository } from './helpers/inMemoryUserAccountRepository.js';
+import { testSessionToken } from './helpers/testAuth.js';
 
 const ORIGIN = 'http://localhost:5173';
 const ALGORITHM = 'HS256';
@@ -104,7 +105,7 @@ describe('7-Day Persistent Session Policy & Cookie Hardening', () => {
         `Cookie maxAge must match session duration for ${role}`,
       );
 
-      const token = await createSessionToken(role, {
+      const token = await testSessionToken(role, {
         memberId: role === ROLES.MEMBER ? 'gaurav' : null,
       });
 

@@ -1,9 +1,10 @@
-import { BedDouble, ChevronDown, Download, House, LogIn, LogOut, Receipt, ShieldCheck, Users } from 'lucide-react';
+import { BedDouble, ChevronDown, Download, House, KeyRound, LogIn, LogOut, Receipt, Settings, ShieldCheck, Users } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth.js';
 import { usePwa } from '../../hooks/usePwa.js';
 import { getRoleLabel } from '../../lib/constants.js';
+import { ChangePasswordDialog } from '../settings/ChangePasswordDialog.jsx';
 import { MemberAvatar } from '../ui/avatar.jsx';
 import { Button } from '../ui/button.jsx';
 import {
@@ -20,6 +21,7 @@ export function AccountMenu({ mobile = false }) {
   const { canInstall, installApp } = usePwa();
   const navigate = useNavigate();
   const [submitting, setSubmitting] = useState(false);
+  const [passwordOpen, setPasswordOpen] = useState(false);
 
   const handleLogout = async () => {
     setSubmitting(true);
@@ -60,6 +62,7 @@ export function AccountMenu({ mobile = false }) {
   const canAccessAdmin = auth.role === 'admin' || auth.role === 'superadmin';
 
   return (
+    <>
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
@@ -130,8 +133,21 @@ export function AccountMenu({ mobile = false }) {
                 <span>Admin panel</span>
               </Link>
             </DropdownMenuItem>
+            {auth.role === 'superadmin' && (
+              <DropdownMenuItem asChild>
+                <Link to="/admin/settings" className="flex items-center gap-2 cursor-pointer">
+                  <Settings className="h-4 w-4 text-teal-600 dark:text-teal-400" />
+                  <span>Settings &amp; access</span>
+                </Link>
+              </DropdownMenuItem>
+            )}
           </>
         )}
+
+        <DropdownMenuItem onClick={() => setPasswordOpen(true)} className="flex items-center gap-2 cursor-pointer">
+          <KeyRound className="h-4 w-4 text-slate-500" />
+          <span>Change password</span>
+        </DropdownMenuItem>
 
         {canInstall && (
           <DropdownMenuItem
@@ -155,5 +171,7 @@ export function AccountMenu({ mobile = false }) {
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+    <ChangePasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} />
+    </>
   );
 }

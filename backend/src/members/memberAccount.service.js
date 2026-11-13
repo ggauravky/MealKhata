@@ -1,103 +1,24 @@
 import { randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
-import mongoose from 'mongoose';
 
+import {
+  normalizeEmail,
+  runAtomically,
+  serializeAccount,
+  translatePersistenceError,
+  validateNewPassword,
+  verifySuperAdminPassword,
+} from '../auth/accountSecurity.js';
 import { ROLES } from '../auth/permissions.js';
 import { userAccountRepository } from '../auth/userAccount.repository.js';
-import { env } from '../config/env.js';
 import { HttpError } from '../utils/HttpError.js';
-import { memberAccountRepository } from '../auth/memberAccount.repository.js';
 import { studentResolver } from '../students/studentResolver.service.js';
 import { memberAccountAuditRepository } from './memberAccount.repository.js';
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const STRONG_PASSWORD_PATTERN = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{12,256}$/;
-const DUMMY_PASSWORD_HASH = '$2b$12$l0S7RDy0wYtH6EosWHIG/OuYdTzp5PToO/zJ8awk/kPeA9UmsI9AS';
-
-function normalizeEmail(email) {
-  const normalized = typeof email === 'string' ? email.trim().toLowerCase() : '';
-  if (!normalized || normalized.length > 254 || !EMAIL_PATTERN.test(normalized)) {
-    throw new HttpError(400, 'A valid email address is required.');
-  }
-  return normalized;
-}
-
-function validateNewPassword(password) {
-  if (typeof password !== 'string' || !STRONG_PASSWORD_PATTERN.test(password)) {
-    throw new HttpError(
-      400,
-      'Password must be 12-256 characters and include uppercase, lowercase, number, and symbol.',
-    );
-  }
-  return password;
-}
-
-function serializeAccount(account) {
-  if (!account) return null;
-  return {
-    userId: account.userId,
-    memberId: account.memberId,
-    displayName: account.displayName,
-    email: account.email,
-    role: account.role,
-    active: account.active !== false,
-    sessionVersion: account.sessionVersion ?? 0,
-    passwordChangedAt: account.passwordChangedAt ?? null,
-    lastLoginAt: account.lastLoginAt ?? null,
-    createdAt: account.createdAt ?? null,
-    updatedAt: account.updatedAt ?? null,
-  };
-}
-
-function translatePersistenceError(error) {
-  if (error?.code === 11000) {
-    throw new HttpError(409, 'That email address is already assigned to another account.');
-  }
-  throw error;
-}
-
-async function runAtomically(operation) {
-  if (mongoose.connection?.readyState !== 1) {
-    return operation(null);
-  }
-  const session = await mongoose.startSession();
-  try {
-    let result;
-    await session.withTransaction(async () => {
-      result = await operation(session);
-    });
-    return result;
-  } finally {
-    await session.endSession();
-  }
-}
-
-async function defaultVerifyActorPassword({ actor, password, accounts, config }) {
-  if (typeof password !== 'string' || password.length === 0 || password.length > 256) {
-    throw new HttpError(401, 'Recent Super Admin authentication is required.');
-  }
-
-  let passwordHash = config.superAdminPasswordHash || DUMMY_PASSWORD_HASH;
-  if (actor.userId) {
-    const account = await accounts.findByUserId(actor.userId, { includePasswordHash: true });
-    if (!account || account.role !== ROLES.SUPERADMIN || account.active === false) {
-      await bcrypt.compare(password, DUMMY_PASSWORD_HASH);
-      throw new HttpError(401, 'Recent Super Admin authentication is required.');
-    }
-    passwordHash = account.passwordHash || DUMMY_PASSWORD_HASH;
-  }
-
-  if (!await bcrypt.compare(password, passwordHash)) {
-    throw new HttpError(401, 'Recent Super Admin authentication is required.');
-  }
-}
-
 export function createMemberAccountService({
   accounts = userAccountRepository,
-  legacyAccounts = memberAccountRepository,
   audits = memberAccountAuditRepository,
   resolver = studentResolver,
-  config = env,
   now = () => new Date(),
   verifyActorPassword = null,
 } = {}) {
@@ -109,15 +30,12 @@ export function createMemberAccountService({
       await verifyActorPassword({ actor, password: currentPassword });
       return;
     }
-    await defaultVerifyActorPassword({ actor, password: currentPassword, accounts, config });
+    await verifySuperAdminPassword({ actor, password: currentPassword, accounts });
   };
 
   const assertEmailAvailable = async (email, memberId, session = null) => {
-    const [canonical, legacy] = await Promise.all([
-      accounts.findByEmail(email, { session }),
-      legacyAccounts.findByEmail(email),
-    ]);
-    if ((canonical && canonical.memberId !== memberId) || (legacy && legacy.memberId !== memberId)) {
+    const canonical = await accounts.findByEmail(email, { session });
+    if (canonical && canonical.memberId !== memberId) {
       throw new HttpError(409, 'That email address is already assigned to another account.');
     }
   };
@@ -235,25 +153,6 @@ export function createMemberAccountService({
         );
         return serializeAccount(updated);
       });
-    },
-
-    async auditLegacyConflicts() {
-      const [canonicalRows, legacyRows] = await Promise.all([
-        accounts.listAll(),
-        legacyAccounts.findAll(),
-      ]);
-      return legacyRows.map((legacy) => {
-        const memberConflict = canonicalRows.find((account) => account.memberId === legacy.memberId);
-        const emailConflict = canonicalRows.find((account) => account.email === legacy.email);
-        return {
-          memberId: legacy.memberId,
-          legacyEmail: legacy.email,
-          canonicalUserId: memberConflict?.userId ?? null,
-          canonicalEmail: memberConflict?.email ?? null,
-          emailOwnedByMemberId: emailConflict?.memberId ?? null,
-          conflict: Boolean(memberConflict || emailConflict),
-        };
-      }).sort((a, b) => a.memberId.localeCompare(b.memberId));
     },
   });
 }

@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, test } from 'node:test';
 import request from 'supertest';
-import { createApp } from '../src/app.js';
 import { ROLES } from '../src/auth/permissions.js';
-import { createSessionToken, SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
+import { SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
 import { createMonthlyRateService } from '../src/billing/monthlyRate.service.js';
 import { createMonthMealService } from '../src/calendar/monthMeal.service.js';
 import { validateVapidConfiguration } from '../src/config/env.js';
-import { MEMBERS, MEMBER_IDS } from '../src/config/members.js';
+import { MEMBERS, MEMBER_IDS, createFixedStudentDirectory } from './helpers/fixtures.js';
 import { createMealService } from '../src/meals/meal.service.js';
 import { createPaymentService } from '../src/payments/payment.service.js';
 import { createPaymentSettingsService } from '../src/payments/paymentSettings.service.js';
@@ -24,6 +23,7 @@ import { InMemoryMonthlyRateRepository } from './helpers/inMemoryMonthlyRateRepo
 import { InMemoryMonthlySettlementRepository } from './helpers/inMemoryMonthlySettlementRepository.js';
 import { InMemoryPaymentRepository } from './helpers/inMemoryPaymentRepository.js';
 import { InMemoryPaymentSettingsRepository } from './helpers/inMemoryPaymentSettingsRepository.js';
+import { testSessionToken, createTestApp } from './helpers/testAuth.js';
 
 const ORIGIN = 'http://localhost:5173';
 const NOW = new Date('2026-10-15T12:00:00.000Z');
@@ -39,8 +39,8 @@ const paymentSettingsRepository = new InMemoryPaymentSettingsRepository();
 const settlementRepository = new InMemoryMonthlySettlementRepository();
 
 // Services
-const mealService = createMealService({ repository: mealRepository, timezone: 'Asia/Kolkata' });
-const monthMealService = createMonthMealService({ repository: mealRepository, timezone: 'Asia/Kolkata' });
+const mealService = createMealService({ students: createFixedStudentDirectory(), repository: mealRepository, timezone: 'Asia/Kolkata' });
+const monthMealService = createMonthMealService({ students: createFixedStudentDirectory(), repository: mealRepository, timezone: 'Asia/Kolkata' });
 const rateService = createMonthlyRateService({ repository: rateRepository });
 const reportService = createReportService({
   meals: monthMealService,
@@ -58,6 +58,7 @@ const paymentSettingsService = createPaymentSettingsService({
 
 let settlementBroadcasts = [];
 const settlementService = createSettlementService({
+  students: createFixedStudentDirectory(),
   reports: reportService,
   summaries: paymentSummaryService,
   repository: settlementRepository,
@@ -93,7 +94,7 @@ const settlementRouter = createSettlementRouter({
   broadcast: (payload) => settlementBroadcasts.push(payload),
 });
 
-const app = createApp({
+const app = createTestApp({
   billing: billingRouter,
   meals: mealRouter,
   payments: paymentRouter,
@@ -101,7 +102,7 @@ const app = createApp({
 });
 
 async function cookieFor(role, memberId = null) {
-  return `${SESSION_COOKIE_NAME}=${await createSessionToken(role, { memberId })}`;
+  return `${SESSION_COOKIE_NAME}=${await testSessionToken(role, { memberId })}`;
 }
 
 async function seedFullPastMonthMeals() {
@@ -187,7 +188,7 @@ describe('Phase 10: Optional Push Configuration & Hardening', () => {
       isConfigured: false,
       publicKey: null,
     });
-    const pushApp = createApp({ push: unconfiguredPushRouter });
+    const pushApp = createTestApp({ push: unconfiguredPushRouter });
     const res = await request(pushApp).get('/api/push/public-key').expect(200);
 
     assert.equal(res.body.success, true);

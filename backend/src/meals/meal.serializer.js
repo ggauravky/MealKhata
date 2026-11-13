@@ -154,57 +154,6 @@ export function serializeMealDay(
   };
 }
 
-export function serializeLegacyMealSnapshot(snapshot, { timezone = env.appTimezone } = {}) {
-  const participants = normalizeParticipantIds(snapshot.participantOrder);
-  const costFor = (mealType) => {
-    const cost = snapshot.costs[mealType];
-    return {
-      ...structuredClone(cost),
-      physicalPlateCount: cost.physicalPlates,
-      members: Object.fromEntries(participants.map((studentId) => [studentId, {
-        shareUnits: snapshot.allocations[mealType].shareUnits[studentId],
-        amountPaise: cost.memberAmountsPaise[studentId],
-        plateEquivalent: snapshot.allocations[mealType].shareUnits[studentId] / 6,
-      }])),
-    };
-  };
-  const morningCost = costFor('morning');
-  const nightCost = costFor('night');
-  return {
-    date: snapshot.date,
-    calculationVersion: snapshot.calculationVersion,
-    participantOrder: participants,
-    timezone,
-    saved: true,
-    revision: snapshot.sourceRevision,
-    meals: structuredClone(snapshot.statuses),
-    allocations: {
-      morning: { ...structuredClone(snapshot.allocations.morning), cost: morningCost },
-      night: { ...structuredClone(snapshot.allocations.night), cost: nightCost },
-    },
-    pricing: structuredClone(snapshot.pricing),
-    dailyCostSummary: {
-      members: Object.fromEntries(participants.map((studentId) => [studentId, {
-        morningAmountPaise: morningCost.memberAmountsPaise[studentId],
-        nightAmountPaise: nightCost.memberAmountsPaise[studentId],
-        totalAmountPaise: morningCost.memberAmountsPaise[studentId] + nightCost.memberAmountsPaise[studentId],
-      }])),
-      room: {
-        morningAmountPaise: morningCost.roomAmountPaise,
-        nightAmountPaise: nightCost.roomAmountPaise,
-        totalAmountPaise: morningCost.roomAmountPaise + nightCost.roomAmountPaise,
-      },
-    },
-    plateCounts: {
-      morning: morningCost.physicalPlates,
-      night: nightCost.physicalPlates,
-      total: morningCost.physicalPlates + nightCost.physicalPlates,
-    },
-    createdAt: snapshot.sourceCreatedAt,
-    updatedAt: snapshot.sourceUpdatedAt,
-  };
-}
-
 export function serializeHistory(document, date, limit) {
   const source = toPlainMealValue(document) ?? {};
   const changes = source.changes ?? [];

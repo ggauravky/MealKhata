@@ -8,8 +8,8 @@ import {
   SHARE_UNITS_PER_PLATE,
 } from './plateAllocation.constants.js';
 
-export function validatePlateAllocation(allocation, { participants, runtimeProfile, maxPhysicalPlates = MAX_PHYSICAL_PLATES } = {}) {
-  const participantIds = resolveMealParticipants(participants, { runtimeProfile });
+export function validatePlateAllocation(allocation, { participants, maxPhysicalPlates = MAX_PHYSICAL_PLATES } = {}) {
+  const participantIds = resolveMealParticipants(participants);
   if (!allocation || typeof allocation !== 'object') {
     throw new Error('Allocation must be an object or array of plates');
   }
@@ -87,8 +87,8 @@ export function validatePlateAllocation(allocation, { participants, runtimeProfi
   };
 }
 
-export function getEffectiveMealAllocation({ statuses = {}, customAllocation = null, participants, runtimeProfile } = {}) {
-  const participantIds = resolveMealParticipants(participants, { runtimeProfile });
+export function getEffectiveMealAllocation({ statuses = {}, customAllocation = null, participants } = {}) {
+  const participantIds = resolveMealParticipants(participants);
   let result;
   if (customAllocation && customAllocation.mode === ALLOCATION_MODES.CUSTOM && Array.isArray(customAllocation.plates)) {
     for (const plate of customAllocation.plates) {
@@ -128,8 +128,8 @@ export function getEffectiveMealAllocation({ statuses = {}, customAllocation = n
   return result;
 }
 
-export function calculateMemberShareUnits(effectiveAllocation, { participants, runtimeProfile } = {}) {
-  const participantIds = resolveMealParticipants(participants, { runtimeProfile });
+export function calculateMemberShareUnits(effectiveAllocation, { participants } = {}) {
+  const participantIds = resolveMealParticipants(participants);
   const units = Object.fromEntries(participantIds.map((id) => [id, 0]));
   const plates = effectiveAllocation?.plates ?? [];
 
@@ -143,8 +143,8 @@ export function calculateMemberShareUnits(effectiveAllocation, { participants, r
   return { ...units, totalUnits };
 }
 
-export function deriveParticipationStatuses(effectiveAllocation, { participants, runtimeProfile } = {}) {
-  const participantIds = resolveMealParticipants(participants, { runtimeProfile });
+export function deriveParticipationStatuses(effectiveAllocation, { participants } = {}) {
+  const participantIds = resolveMealParticipants(participants);
   const units = calculateMemberShareUnits(effectiveAllocation, { participants: participantIds });
   return Object.fromEntries(
     participantIds.map((id) => [id, units[id] > 0 ? 'taking' : 'skip']),
@@ -186,9 +186,8 @@ export function splitMealCost({
   allocation,
   pricePaise = MEAL_PRICES[mealType] ?? 0,
   participants,
-  runtimeProfile,
 }) {
-  const participantIds = resolveMealParticipants(participants, { runtimeProfile });
+  const participantIds = resolveMealParticipants(participants);
   const targetAllocation = effectiveAllocation || allocation;
   const plates = targetAllocation?.plates ?? [];
   const physicalPlates = plates.length;
@@ -327,8 +326,8 @@ export function formatPlateFraction(shareUnits) {
   return `${whole}${frac}`;
 }
 
-export function createPresetAllocation(presetName, { participants, members, fullMemberId = null, runtimeProfile } = {}) {
-  const participantIds = resolveMealParticipants(participants, { runtimeProfile });
+export function createPresetAllocation(presetName, { participants, members, fullMemberId = null } = {}) {
+  const participantIds = resolveMealParticipants(participants);
   const selected = normalizeParticipantIds(members === undefined ? participantIds : members);
   if (selected.some((id) => !participantIds.includes(id))) throw new Error('Preset contains an ineligible student');
   switch (presetName) {

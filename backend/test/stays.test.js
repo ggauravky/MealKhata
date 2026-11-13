@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, test } from 'node:test';
 import request from 'supertest';
-import { createApp } from '../src/app.js';
 import { ROLES } from '../src/auth/permissions.js';
-import { createSessionToken, SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
-import { MEMBER_IDS } from '../src/config/members.js';
+import { SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
+import { MEMBER_IDS, createAssignmentStudentDirectory, createFixedStudentDirectory } from './helpers/fixtures.js';
 import { createRoomFeeService } from '../src/roomFees/roomFee.service.js';
 import { createRoomFeeRouter, createRoomRouter } from '../src/routes/roomFee.routes.js';
 import { createStayService } from '../src/stays/stay.service.js';
@@ -18,6 +17,7 @@ import { InMemoryRoomFeeRepository } from './helpers/inMemoryRoomFeeRepository.j
 import { InMemoryStayRepository } from './helpers/inMemoryStayRepository.js';
 import { InMemoryMealRepository } from './helpers/inMemoryMealRepository.js';
 import { CLEARANCE_STATUSES, DEPOSIT_TRANSACTION_TYPES, STAY_STATUSES } from '../src/stays/stay.constants.js';
+import { testSessionToken, createTestApp } from './helpers/testAuth.js';
 
 const ORIGIN = 'http://localhost:5173';
 const NOW = new Date('2026-10-20T12:00:00.000Z');
@@ -30,6 +30,7 @@ const mealRepository = new InMemoryMealRepository();
 // Room Service
 const roomFeesService = createRoomFeeService({
   repository: roomRepository,
+  students: createAssignmentStudentDirectory(roomRepository),
   timezone: 'Asia/Kolkata',
   now: () => NOW,
 });
@@ -90,7 +91,7 @@ const pdfsService = createLifetimePdfService({
   lifetimeReports: lifetimeReportsService,
 });
 
-const mealServiceInstance = createMealService({
+const mealServiceInstance = createMealService({ students: createFixedStudentDirectory(),
   repository: mealRepository,
   timezone: 'Asia/Kolkata',
   now: () => NOW,
@@ -128,7 +129,7 @@ const mealsRouter = createMealRouter({
   timezone: 'Asia/Kolkata',
 });
 
-const testApp = createApp({
+const testApp = createTestApp({
   stays: stayRouter,
   roomFees: roomFeesRouter,
   rooms: roomsRouter,
@@ -136,7 +137,7 @@ const testApp = createApp({
 });
 
 async function cookieFor(role, memberId = null) {
-  return `${SESSION_COOKIE_NAME}=${await createSessionToken(role, { memberId })}`;
+  return `${SESSION_COOKIE_NAME}=${await testSessionToken(role, { memberId })}`;
 }
 
 let room204Id;
@@ -989,7 +990,7 @@ describe('MealKhata 2.0 — Phase 4: Complete Hostel Lifecycle, Security Deposit
         pdfService: pdfsService,
       });
 
-      const customApp = createApp({ stays: customRouter });
+      const customApp = createTestApp({ stays: customRouter });
 
       // Attempt standard checkout finalization without exception flag -> REJECTED
       const failRes = await request(customApp)

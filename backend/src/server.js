@@ -3,7 +3,7 @@ import { app } from './app.js';
 import { connectDatabase, disconnectDatabase } from './config/db.js';
 import { env, validateEnvironment } from './config/env.js';
 import { LIFECYCLE_STATES, setLifecycleState } from './config/lifecycle.js';
-import { assertRuntimeDatabaseProfile } from './config/runtimeDatabaseProfile.js';
+import { ensureRequiredIndexes, readInitializationState } from './config/initialization.js';
 import { createSocketServer } from './socket.js';
 import { logger } from './utils/logger.js';
 
@@ -23,7 +23,15 @@ let shuttingDown = false;
 export async function startServer() {
   validateEnvironment();
   await connectDatabase();
-  await assertRuntimeDatabaseProfile();
+  // Index creation is idempotent and never writes application documents.
+  try {
+    await ensureRequiredIndexes();
+  } catch (error) {
+    logger.error('database.indexes_failed', { name: error?.name, code: error?.code });
+  }
+  // Startup never creates accounts; it only reports whether one-time setup has run.
+  const initialization = await readInitializationState().catch(() => null);
+  logger.info('application.initialization', { initialized: initialization?.status === 'complete' });
 
   return new Promise((resolve) => {
     httpServer.listen(env.port, () => {

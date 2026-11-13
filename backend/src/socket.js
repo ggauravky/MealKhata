@@ -18,41 +18,33 @@ export function createSocketServer(httpServer, { config = env,
     },
   });
 
-  if (production || config.runtimeProfile === 'v3') {
-    io.use(async (socket, next) => {
-      const origin = socket.handshake.headers.origin;
-      if (config.runtimeProfile === 'v3'
-        ? origin !== config.appOrigin
-        : Boolean(origin && origin !== config.appOrigin)) {
-        logger.warn('socket.origin_rejected', { socketId: socket.id });
-        return next(new Error('Unauthorized origin'));
-      }
-      if (config.runtimeProfile === 'v3') {
-        try {
-          const identity = await verifyTicket(socket.handshake.auth?.ticket);
-          socket.data.identity = identity;
-        } catch {
-          return next(new Error('Unauthorized socket session'));
-        }
-      }
-      return next();
-    });
-  }
+  // Every socket must come from the configured app origin and present a short-lived
+  // ticket minted for an active, canonical account session.
+  io.use(async (socket, next) => {
+    if (socket.handshake.headers.origin !== config.appOrigin) {
+      logger.warn('socket.origin_rejected', { socketId: socket.id });
+      return next(new Error('Unauthorized origin'));
+    }
+    try {
+      socket.data.identity = await verifyTicket(socket.handshake.auth?.ticket);
+    } catch {
+      return next(new Error('Unauthorized socket session'));
+    }
+    return next();
+  });
 
   activeSocketServer = io;
 
   io.on('connection', (socket) => {
     logger.info('socket.connected', { socketId: socket.id });
 
-    if (config.runtimeProfile === 'v3') {
-      const timer = setInterval(async () => {
-        try {
-          if (!await verifyActive(socket.data.identity)) socket.disconnect(true);
-        } catch { socket.disconnect(true); }
-      }, revalidateIntervalMs);
-      timer.unref();
-      socket.once('disconnect', () => clearInterval(timer));
-    }
+    const timer = setInterval(async () => {
+      try {
+        if (!await verifyActive(socket.data.identity)) socket.disconnect(true);
+      } catch { socket.disconnect(true); }
+    }, revalidateIntervalMs);
+    timer.unref();
+    socket.once('disconnect', () => clearInterval(timer));
 
     socket.on('disconnect', (reason) => {
       logger.info('socket.disconnected', { socketId: socket.id, reason });

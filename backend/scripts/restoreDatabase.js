@@ -2,8 +2,8 @@ import fs from 'node:fs/promises';
 import mongoose from 'mongoose';
 import { env } from '../src/config/env.js';
 import { restoreDatabase, verifyAndDecryptBackup } from '../src/backup/backupEngine.js';
-import { assertDistinctDatabaseUris } from '../src/migrations/sourceInventory.service.js';
-import { assertIsolatedMigrationTarget, assertIsolatedMigrationTargetUri } from '../src/migrations/v3Migration.service.js';
+import { assertDistinctDatabaseUris } from '../src/backup/inventory.js';
+import { assertIsolatedRestoreTarget, assertIsolatedRestoreTargetUri } from '../src/backup/restoreTarget.js';
 import { verifyDataIntegrity } from './verifyData.js';
 
 export function redactMongoUri(value) {
@@ -11,7 +11,7 @@ export function redactMongoUri(value) {
 }
 
 export function assertDisposableRestoreUri(uri, sourceDatabase, targetClassification) {
-  return assertIsolatedMigrationTargetUri(uri, targetClassification, sourceDatabase);
+  return assertIsolatedRestoreTargetUri(uri, targetClassification, sourceDatabase);
 }
 
 async function run() {
@@ -74,7 +74,7 @@ the explicitly supplied restore target; production override flags are unsupporte
   }).asPromise();
 
   try {
-    await assertIsolatedMigrationTarget({ targetConnection,
+    await assertIsolatedRestoreTarget({ targetConnection,
       targetDbName: targetConnection.db.databaseName,
       sourceDatabase: archiveManifest.sourceDatabase, targetClassification });
     console.info(`Restoring database (dropExisting: ${dropExisting})...`);

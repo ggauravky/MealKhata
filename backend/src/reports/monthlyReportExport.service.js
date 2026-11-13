@@ -1,4 +1,3 @@
-import { MEMBER_NAMES } from '../config/members.js';
 import { studentResolver } from '../students/studentResolver.service.js';
 import { env } from '../config/env.js';
 import { monthMealService } from '../calendar/monthMeal.service.js';
@@ -225,7 +224,7 @@ export function createMonthlyReportExportService({
         ...paymentHistory.map((payment) => payment.memberId),
         ...monthMealData.days.flatMap((day) => day.participantOrder ?? Object.keys(day.dailyCostSummary?.members ?? {})),
       ])];
-      const memberName = (id) => activeSettlement?.snapshot?.members?.[id]?.displayName ?? names[id] ?? MEMBER_NAMES[id] ?? id;
+      const memberName = (id) => activeSettlement?.snapshot?.members?.[id]?.displayName ?? names[id] ?? id;
 
       const isClosed = Boolean(activeSettlement && activeSettlement.status === 'closed');
       let reportState = 'open_past';

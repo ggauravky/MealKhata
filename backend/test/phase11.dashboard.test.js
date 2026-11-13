@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, test } from 'node:test';
 import request from 'supertest';
-import { createApp } from '../src/app.js';
 import { ROLES } from '../src/auth/permissions.js';
-import { createSessionToken, SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
+import { SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
 import { createMonthlyRateService } from '../src/billing/monthlyRate.service.js';
 import { createDashboardService } from '../src/dashboard/dashboard.service.js';
 import { createMealService } from '../src/meals/meal.service.js';
@@ -20,6 +19,8 @@ import { InMemoryMonthlyRateRepository } from './helpers/inMemoryMonthlyRateRepo
 import { InMemoryMonthlySettlementRepository } from './helpers/inMemoryMonthlySettlementRepository.js';
 import { InMemoryPaymentRepository } from './helpers/inMemoryPaymentRepository.js';
 import { InMemoryReminderSettingsRepository } from './helpers/inMemoryReminderSettingsRepository.js';
+import { testSessionToken, createTestApp } from './helpers/testAuth.js';
+import { createFixedStudentDirectory } from './helpers/fixtures.js';
 
 const ORIGIN = 'http://localhost:5173';
 // Fixed India time: 2026-10-01 10:00:00 AM IST (UTC: 2026-10-01T04:30:00.000Z)
@@ -31,8 +32,8 @@ const paymentRepo = new InMemoryPaymentRepository();
 const reminderSettingsRepo = new InMemoryReminderSettingsRepository();
 const settlementRepo = new InMemoryMonthlySettlementRepository();
 
-const mealService = createMealService({ repository: mealRepo, timezone: 'Asia/Kolkata' });
-const monthMeals = createMonthMealService({ repository: mealRepo, timezone: 'Asia/Kolkata' });
+const mealService = createMealService({ students: createFixedStudentDirectory(), repository: mealRepo, timezone: 'Asia/Kolkata' });
+const monthMeals = createMonthMealService({ students: createFixedStudentDirectory(), repository: mealRepo, timezone: 'Asia/Kolkata' });
 const rateService = createMonthlyRateService({ repository: rateRepo, now: () => TEST_NOW });
 const reportService = createReportService({ meals: monthMeals, rates: rateService, now: () => TEST_NOW });
 const paymentSummaryService = createPaymentSummaryService({
@@ -59,13 +60,13 @@ const dashboardService = createDashboardService({
 });
 
 const dashboardRouter = createDashboardRouter({ service: dashboardService });
-const testApp = createApp({ dashboard: dashboardRouter });
+const testApp = createTestApp({ dashboard: dashboardRouter });
 
 async function cookieFor(role, memberId = null) {
   const displayName = memberId
     ? `${memberId.slice(0, 1).toUpperCase()}${memberId.slice(1)}`
     : null;
-  const token = await createSessionToken(role, { memberId, displayName });
+  const token = await testSessionToken(role, { memberId, displayName });
   return `${SESSION_COOKIE_NAME}=${token}`;
 }
 
@@ -178,6 +179,7 @@ describe('Phase 11: Dashboard API - Member Personalization', () => {
   test('Member Gaurav with explicit taking meals receives calculated personal hero and month bill', async () => {
     mealRepo.documents.set('2026-10-01', {
       date: '2026-10-01',
+      schemaVersion: 3,
       saved: true,
       revision: 1,
       meals: {
@@ -305,7 +307,7 @@ describe('Phase 11: Dashboard API - Admin & Super Admin Experience', () => {
       now: () => TEST_NOW,
     });
 
-    const customApp = createApp({
+    const customApp = createTestApp({
       dashboard: createDashboardRouter({ service: customDashboardService }),
     });
 
@@ -340,7 +342,7 @@ describe('Phase 11: Dashboard API - Error Resilience', () => {
       now: () => TEST_NOW,
     });
 
-    const customApp = createApp({
+    const customApp = createTestApp({
       dashboard: createDashboardRouter({ service: resilientDashboardService }),
     });
 
@@ -358,7 +360,7 @@ describe('Phase 11: Dashboard API - Error Resilience', () => {
   });
 
   test('Untouched today yields 0 eating and 0 plates for morning and night', async () => {
-    const customApp = createApp({
+    const customApp = createTestApp({
       dashboard: createDashboardRouter({ service: dashboardService }),
     });
 
@@ -379,6 +381,7 @@ describe('Phase 11: Dashboard API - Error Resilience', () => {
   test('Explicit taking yields 3 eating and 3 plates for morning and night', async () => {
     mealRepo.documents.set('2026-10-01', {
       date: '2026-10-01',
+      schemaVersion: 3,
       saved: true,
       revision: 1,
       meals: {
@@ -387,7 +390,7 @@ describe('Phase 11: Dashboard API - Error Resilience', () => {
       },
     });
 
-    const customApp = createApp({
+    const customApp = createTestApp({
       dashboard: createDashboardRouter({ service: dashboardService }),
     });
 
@@ -409,6 +412,7 @@ describe('Phase 11: Dashboard API - Error Resilience', () => {
     // Save shared allocation for today: 2 plates shared equally by 3 roommates
     mealRepo.documents.set('2026-10-01', {
       date: '2026-10-01',
+      schemaVersion: 3,
       saved: true,
       revision: 1,
       meals: {
@@ -429,7 +433,7 @@ describe('Phase 11: Dashboard API - Error Resilience', () => {
       allocationChanges: [],
     });
 
-    const customApp = createApp({
+    const customApp = createTestApp({
       dashboard: createDashboardRouter({ service: dashboardService }),
     });
 

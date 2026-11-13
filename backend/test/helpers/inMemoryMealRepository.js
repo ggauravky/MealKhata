@@ -49,7 +49,8 @@ export class InMemoryMealRepository {
     }
 
     const timestamp = new Date();
-    const document = clone({ ...day, createdAt: timestamp, updatedAt: timestamp });
+    // Mirrors meal.repository.create, which always stores the current schema version.
+    const document = clone({ ...day, schemaVersion: 3, createdAt: timestamp, updatedAt: timestamp });
     this.documents.set(day.date, document);
     return clone(document);
   }

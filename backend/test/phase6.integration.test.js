@@ -1,19 +1,15 @@
 import assert from 'node:assert/strict';
 import { describe, test, beforeEach } from 'node:test';
 import request from 'supertest';
-import {
-  API_RATE_LIMIT,
-  createApp,
-  createHelmetOptions,
-  PRODUCTION_TRUST_PROXY_HOPS,
-} from '../src/app.js';
+import { API_RATE_LIMIT, createHelmetOptions, PRODUCTION_TRUST_PROXY_HOPS } from '../src/app.js';
 import { ROLES } from '../src/auth/permissions.js';
-import { createSessionToken, SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
+import { SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
 import { ReminderSettings } from '../src/settings/reminderSettings.model.js';
 import { createReminderSettingsService } from '../src/settings/reminderSettings.service.js';
 import { createReminderSettingsRouter } from '../src/routes/reminderSettings.routes.js';
 import { createHealthRouter } from '../src/routes/health.routes.js';
 import { InMemoryReminderSettingsRepository } from './helpers/inMemoryReminderSettingsRepository.js';
+import { testSessionToken, createTestApp } from './helpers/testAuth.js';
 
 const ORIGIN = 'http://localhost:5173';
 const repository = new InMemoryReminderSettingsRepository();
@@ -23,10 +19,10 @@ const reminders = createReminderSettingsRouter({
   service,
   broadcast: (payload) => broadcasts.push(payload),
 });
-const testApp = createApp({ reminderSettings: reminders });
+const testApp = createTestApp({ reminderSettings: reminders });
 
 async function cookieFor(role) {
-  return `${SESSION_COOKIE_NAME}=${await createSessionToken(role)}`;
+  return `${SESSION_COOKIE_NAME}=${await testSessionToken(role)}`;
 }
 
 async function update(role, body) {
@@ -139,12 +135,14 @@ describe('reminder settings', () => {
 
 describe('health, readiness, and response hardening', () => {
   test('liveness is lightweight while readiness reflects database availability', async () => {
-    const readyApp = createApp({ health: createHealthRouter({ readiness: async () => true }) });
-    const unavailableApp = createApp({ health: createHealthRouter({ readiness: async () => false }) });
+    const readyApp = createTestApp({ health: createHealthRouter({ readiness: async () => ({ ready: true, checks: { database: true } }) }) });
+    const unavailableApp = createTestApp({ health: createHealthRouter({ readiness: async () => ({ ready: false, checks: { database: true, initialized: false } }) }) });
     await request(readyApp).get('/api/health').expect(200);
     assert.equal((await request(readyApp).get('/api/ready').expect(200)).body.status, 'ready');
     const unavailable = await request(unavailableApp).get('/api/ready').expect(503);
-    assert.deepEqual(unavailable.body, { success: false, status: 'unavailable' });
+    assert.equal(unavailable.body.success, false);
+    assert.equal(unavailable.body.status, 'unavailable');
+    assert.equal(unavailable.body.checks.initialized, false);
   });
 
   test('API responses are no-store and carry hardened browser headers', async () => {

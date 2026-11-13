@@ -11,8 +11,10 @@ import { errorHandler } from './middleware/errorHandler.js';
 import { apiNotFound, notFound } from './middleware/notFound.js';
 import { sensitiveMutationLimiter } from './middleware/rateLimiters.js';
 import { requestCorrelation } from './middleware/requestCorrelation.js';
-import { v3MutationGate } from './middleware/v3MutationGate.js';
+import { initializationGate } from './middleware/initializationGate.js';
 import { authRouter } from './routes/auth.routes.js';
+import { accountRouter } from './routes/account.routes.js';
+import { systemSettingsRouter } from './routes/systemSettings.routes.js';
 import { healthRouter } from './routes/health.routes.js';
 import { mealRouter } from './routes/meal.routes.js';
 import { billingRouter } from './routes/billing.routes.js';
@@ -84,6 +86,9 @@ export function createApp({
   stays = stayRouter,
   members = memberRouter,
   students = studentRouter,
+  accounts = accountRouter,
+  systemSettings = systemSettingsRouter,
+  gate = initializationGate,
 } = {}) {
   const app = express();
 
@@ -126,7 +131,7 @@ export function createApp({
   app.use('/api', apiLimiter);
   app.use('/api', authenticate);
   app.use('/api', enforceTrustedOrigin);
-  app.use('/api', v3MutationGate);
+  app.use('/api', gate);
   app.use('/api', health);
   app.use('/api/auth', auth);
   app.use('/api/meals', meals);
@@ -148,6 +153,8 @@ export function createApp({
   app.use('/api/stays', sensitiveMutationLimiter, stays);
   app.use('/api/admin/members', sensitiveMutationLimiter, members);
   app.use('/api/students', sensitiveMutationLimiter, students);
+  app.use('/api/admin/accounts', sensitiveMutationLimiter, accounts);
+  app.use('/api/settings/system', sensitiveMutationLimiter, systemSettings);
 
   app.use('/api', apiNotFound);
 

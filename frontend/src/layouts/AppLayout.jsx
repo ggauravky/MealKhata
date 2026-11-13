@@ -11,13 +11,18 @@ import { OfflineBanner } from '../components/pwa/OfflineBanner.jsx';
 import { UpdateAvailableBanner } from '../components/pwa/UpdateAvailableBanner.jsx';
 import { ReminderBanner } from '../components/reminders/ReminderBanner.jsx';
 import { ReminderProvider } from '../context/ReminderProvider.jsx';
+import { useAuth } from '../hooks/useAuth.js';
 import { connectSocket, disconnectSocket, socket } from '../lib/socket.js';
 
 export function AppLayout() {
   const location = useLocation();
   const reduceMotion = useReducedMotion();
+  const { authenticated, role, memberId } = useAuth();
+  const socketIdentity = authenticated ? `${role}:${memberId ?? ''}` : null;
 
+  // Live updates require an authenticated session; viewers never open a socket.
   useEffect(() => {
+    if (!socketIdentity) return undefined;
     const logConnection = () => {
       if (import.meta.env.DEV) {
         console.info('MealKhata socket connected');
@@ -39,7 +44,7 @@ export function AppLayout() {
       socket.off('disconnect', logDisconnection);
       disconnectSocket();
     };
-  }, []);
+  }, [socketIdentity]);
 
   return (
     <ReminderProvider>

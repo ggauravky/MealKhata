@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import request from 'supertest';
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -15,15 +16,15 @@ const TEST_VAPID_PRIVATE = 'IHQOSikGfyUGgWEhb7GEhykuSmcMz5I_W_k0nCZjgpk';
 const TEST_VAPID_SUBJECT = 'mailto:admin@mealkhata.production';
 
 // Common baseline production env
+// A disposable local replica set stands in for Atlas; it is initialized through the same
+// one-time setup code the owner runs, and accounts are ordinary database accounts.
+const replSet = await MongoMemoryReplSet.create({ replSet: { count: 1, storageEngine: 'wiredTiger' } });
+const ADMIN_EMAIL = 'admin.routing.test@example.com';
 const baseEnv = {
   NODE_ENV: 'production',
   PORT: '5000',
-  MONGODB_URI: 'mongodb://127.0.0.1:27017/production-routing-test',
+  MONGODB_URI: replSet.getUri('production-routing-test'),
   APP_TIMEZONE: 'Asia/Kolkata',
-  ADMIN_EMAIL: 'admin.routing.test@example.com',
-  SUPERADMIN_EMAIL: 'super.routing.test@example.com',
-  ADMIN_PASSWORD_HASH: await bcrypt.hash(testPassword, 12),
-  SUPERADMIN_PASSWORD_HASH: await bcrypt.hash(testPassword, 12),
   AUTH_JWT_SECRET: 'routing-test-only-secret-material-with-more-than-forty-eight-bytes',
   APP_ORIGIN: 'https://meal-khata.example',
 };
@@ -33,12 +34,12 @@ console.info('--- Verifying Vercel & Split Deployment Configuration ---');
 const { createVercelConfig } = await import('../../vercel.mjs');
 const vercelConfig = createVercelConfig({ VERCEL_ENV: 'production',
   MEALKHATA_BACKEND_ORIGIN: 'https://meal-khata-api.onrender.com',
-  MEALKHATA_BACKEND_ENV: 'production', VITE_RUNTIME_PROFILE: 'v3',
+  MEALKHATA_BACKEND_ENV: 'production',
   VITE_SOCKET_URL: 'https://meal-khata-api.onrender.com' });
 const previewConfig = createVercelConfig({ VERCEL_ENV: 'preview',
   MEALKHATA_BACKEND_ORIGIN: 'https://meal-khata-api-preview.onrender.com',
   MEALKHATA_PRODUCTION_BACKEND_ORIGIN: 'https://meal-khata-api.onrender.com',
-  MEALKHATA_BACKEND_ENV: 'preview', VITE_RUNTIME_PROFILE: 'v3',
+  MEALKHATA_BACKEND_ENV: 'preview',
   VITE_SOCKET_URL: 'https://meal-khata-api-preview.onrender.com' });
 assert.notEqual(vercelConfig.rewrites[0].destination, previewConfig.rewrites[0].destination);
 
@@ -80,11 +81,11 @@ const renderYaml = await fs.readFile(path.resolve(rootDir, 'render.yaml'), 'utf8
 assert.ok(renderYaml.includes('name: meal-khata-api'), 'render.yaml must name backend service meal-khata-api');
 assert.ok(renderYaml.includes('buildCommand: npm ci --omit=dev'), 'render.yaml must use backend-only buildCommand');
 assert.ok(renderYaml.includes('startCommand: npm run start --workspace backend'), 'render.yaml must start backend workspace');
-assert.ok(renderYaml.includes('healthCheckPath: /api/ready'), 'render.yaml must probe /api/ready');
+assert.ok(renderYaml.includes('healthCheckPath: /api/health'), 'render.yaml must probe liveness so first deploy precedes setup');
 assert.ok(renderYaml.includes('autoDeployTrigger: off'), 'Render automatic deployment must be disabled');
-assert.ok(renderYaml.includes('CANONICAL_ONLY_AUTH'), 'Render v3 must explicitly configure canonical authentication');
-assert.ok(renderYaml.includes('MEALKHATA_RUNTIME_PROFILE'), 'Render v3 must explicitly select runtime profile');
-assert.ok(!renderYaml.includes('ADMIN_EMAIL'), 'render.yaml must not require legacy admin email');
+for (const removed of ['ADMIN_EMAIL', 'PASSWORD_HASH', 'MEALKHATA_RUNTIME_PROFILE', 'CANONICAL_ONLY_AUTH', 'V3_RELEASE']) {
+  assert.ok(!renderYaml.includes(removed), `render.yaml must not configure retired ${removed}`);
+}
 
 console.info('Vercel and Render configuration verified.');
 
@@ -96,8 +97,25 @@ Object.assign(process.env, {
   VAPID_SUBJECT: TEST_VAPID_SUBJECT,
 });
 
+const { default: mongoose } = await import('mongoose');
+const { initializeApplication } = await import('../src/config/initialization.js');
+const { UserAccount } = await import('../src/auth/userAccount.model.js');
+const { checkReadiness } = await import('../src/config/readiness.js');
+await mongoose.connect(process.env.MONGODB_URI);
 const { createApp } = await import('../src/app.js');
 const app = createApp();
+
+// Before setup: readiness is 503 and writes are refused.
+assert.equal((await checkReadiness()).checks.initialized, false);
+const gated = await request(app).post('/api/students').set('Origin', process.env.APP_ORIGIN).send({});
+assert.equal(gated.status, 503, 'writes must be blocked until one-time setup');
+
+await initializeApplication({ email: 'owner.routing.test@example.com', financialStartDate: '2026-11-01',
+  passwordHash: await bcrypt.hash(testPassword, 12) });
+await UserAccount.create({ userId: 'routing-admin', memberId: null, displayName: 'Routing Admin',
+  email: ADMIN_EMAIL, passwordHash: await bcrypt.hash(testPassword, 12), role: 'admin', active: true });
+const readiness = await checkReadiness();
+assert.equal(readiness.ready, true, `readiness after setup: ${JSON.stringify(readiness.checks)}`);
 
 // Render Root Route returns minimal JSON (Requirement 60)
 const rootRes = await request(app).get('/');
@@ -126,7 +144,7 @@ assert.match(socketNotFound.headers['content-type'], /application\/json/);
 const login = await request(app)
   .post('/api/auth/login')
   .set('Origin', process.env.APP_ORIGIN)
-  .send({ email: process.env.ADMIN_EMAIL, password: testPassword });
+  .send({ email: ADMIN_EMAIL, password: testPassword });
 assert.equal(login.status, 200);
 const cookie = login.headers['set-cookie']?.[0] ?? '';
 assert.match(cookie, /HttpOnly/i);
@@ -234,10 +252,12 @@ assert.equal(modeAPushRes.body.publicKey, null);
 const modeALogin = await request(appModeA)
   .post('/api/auth/login')
   .set('Origin', process.env.APP_ORIGIN)
-  .send({ email: process.env.ADMIN_EMAIL, password: testPassword });
+  .send({ email: ADMIN_EMAIL, password: testPassword });
 assert.equal(modeALogin.status, 200);
 
 await request(appModeA).get('/api/settlements/invalid-month').expect(400);
 
 console.info('MODE A verification passed.');
+await mongoose.disconnect();
+await replSet.stop();
 console.info('All production build checks, security boundaries, statements, and dual-mode push verification passed.');

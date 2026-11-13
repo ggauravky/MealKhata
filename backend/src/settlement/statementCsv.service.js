@@ -1,4 +1,3 @@
-import { MEMBER_NAMES } from '../config/members.js';
 import { formatPlateFraction } from '../meals/plateAllocation.service.js';
 
 function escapeCsvCell(value) {
@@ -64,7 +63,7 @@ export function generateSettlementCsv(settlement) {
       settlementId,
       sequence,
       memberId,
-      m.displayName || MEMBER_NAMES[memberId] || memberId,
+      m.displayName || memberId,
       morningPart,
       nightPart,
       morningUnits,

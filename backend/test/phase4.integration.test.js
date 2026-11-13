@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, test } from 'node:test';
 import request from 'supertest';
-import { createApp } from '../src/app.js';
 import { ROLES } from '../src/auth/permissions.js';
-import { createSessionToken, SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
+import { SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
 import { createMonthlyRateService } from '../src/billing/monthlyRate.service.js';
 import { MonthlyMealRate } from '../src/billing/monthlyRate.model.js';
 import { createMonthMealService } from '../src/calendar/monthMeal.service.js';
@@ -21,6 +20,8 @@ import {
 } from '../src/utils/month.js';
 import { InMemoryMealRepository } from './helpers/inMemoryMealRepository.js';
 import { InMemoryMonthlyRateRepository } from './helpers/inMemoryMonthlyRateRepository.js';
+import { testSessionToken, createTestApp } from './helpers/testAuth.js';
+import { createFixedStudentDirectory } from './helpers/fixtures.js';
 
 const ORIGIN = 'http://localhost:5173';
 const NOW = new Date('2026-09-09T20:00:00.000Z');
@@ -30,7 +31,7 @@ const MONTH = '2026-09';
 const mealRepository = new InMemoryMealRepository();
 const rateRepository = new InMemoryMonthlyRateRepository();
 const rateService = createMonthlyRateService({ repository: rateRepository });
-const monthService = createMonthMealService({ repository: mealRepository, timezone: 'Asia/Kolkata' });
+const monthService = createMonthMealService({ students: createFixedStudentDirectory(), repository: mealRepository, timezone: 'Asia/Kolkata' });
 const reportService = createReportService({
   meals: monthService,
   rates: rateService,
@@ -48,10 +49,10 @@ const calendar = createCalendarRouter({
   timezone: 'Asia/Kolkata',
 });
 const reports = createReportRouter({ service: reportService });
-const testApp = createApp({ billing, calendar, reports });
+const testApp = createTestApp({ billing, calendar, reports });
 
 async function cookieFor(role) {
-  return `${SESSION_COOKIE_NAME}=${await createSessionToken(role)}`;
+  return `${SESSION_COOKIE_NAME}=${await testSessionToken(role)}`;
 }
 
 async function putRate(role, body, month = MONTH) {

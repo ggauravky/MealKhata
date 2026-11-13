@@ -15,8 +15,13 @@ import {
 import { loginLimiter } from '../middleware/rateLimiters.js';
 import { logger } from '../utils/logger.js';
 import { createSocketTicket } from '../auth/socketTicket.service.js';
+import { staffAccountService } from '../auth/staffAccount.service.js';
+import { sensitiveMutationLimiter } from '../middleware/rateLimiters.js';
 
-export function createAuthRouter({ service = { authenticateCredentials } } = {}) {
+export function createAuthRouter({
+  service = { authenticateCredentials },
+  accountService = staffAccountService,
+} = {}) {
   const router = Router();
 
   router.post('/login', loginLimiter, async (req, res) => {
@@ -86,6 +91,37 @@ export function createAuthRouter({ service = { authenticateCredentials } } = {})
     }
     const ticket = await createSocketTicket(req.auth);
     return res.json({ success: true, ticket, expiresInSeconds: 60 });
+  });
+
+  // Self-service password change. Revokes all existing sessions for the account and
+  // re-issues this browser's cookie with the new session version.
+  router.post('/password', sensitiveMutationLimiter, async (req, res, next) => {
+    try {
+      if (!req.auth?.authenticated || !req.auth.userId) {
+        return res.status(401).json({ success: false, message: 'Authentication required.' });
+      }
+      const updated = await accountService.changeOwnPassword({
+        currentPassword: req.body?.currentPassword,
+        newPassword: req.body?.newPassword,
+        actor: req.auth,
+      });
+      const durationSeconds = getSessionDurationSeconds(req.auth.role);
+      const token = await createSessionToken(req.auth.role, {
+        memberId: req.auth.memberId,
+        userId: req.auth.userId,
+        displayName: req.auth.displayName,
+        sessionVersion: updated.sessionVersion,
+        expiresIn: `${durationSeconds}s`,
+      });
+      res.cookie(SESSION_COOKIE_NAME, token, getSessionCookieOptions({
+        maxAgeSeconds: durationSeconds,
+        role: req.auth.role,
+      }));
+      logger.info('auth.password_changed', { role: req.auth.role });
+      return res.json({ success: true });
+    } catch (error) {
+      return next(error);
+    }
   });
 
   router.post('/logout', (req, res) => {

@@ -1,4 +1,6 @@
+import { UserPlus, Users } from 'lucide-react';
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { PageHeader } from '../components/common/PageHeader.jsx';
 import { AttentionSection } from '../components/dashboard/AttentionSection.jsx';
 import { DashboardRoomFeeCard } from '../components/dashboard/DashboardRoomFeeCard.jsx';
@@ -11,6 +13,8 @@ import { PersonalMonthlyCard } from '../components/dashboard/PersonalMonthlyCard
 import { QuickActionsCard } from '../components/dashboard/QuickActionsCard.jsx';
 import { LiveIndicator } from '../components/meals/LiveIndicator.jsx';
 import { MealCard } from '../components/meals/MealCard.jsx';
+import { Button } from '../components/ui/button.jsx';
+import { EmptyState } from '../components/ui/EmptyState.jsx';
 import { ErrorState } from '../components/ui/ErrorState.jsx';
 import { Skeleton } from '../components/ui/skeleton.jsx';
 import { useAuth } from '../hooks/useAuth.js';
@@ -125,6 +129,22 @@ export function DashboardPage() {
       {studentRoster.error && (
         <ErrorState compact title="Student names unavailable" message={studentRoster.error}
           actionLabel="Try again" onAction={studentRoster.refresh} />
+      )}
+
+      {auth.authenticated && auth.role !== 'member' && !studentRoster.loading && !studentRoster.error
+        && studentRoster.data.length === 0 && (
+        <EmptyState
+          icon={Users}
+          title="No students added yet"
+          message={auth.role === 'superadmin'
+            ? 'MealKhata is ready. Add your first student to start recording meals, rooms, payments and expenses.'
+            : 'The Super Admin has not added any students yet.'}
+          action={auth.role === 'superadmin' ? (
+            <Button asChild size="sm">
+              <Link to="/admin/members"><UserPlus className="h-4 w-4" aria-hidden="true" /> Add first student</Link>
+            </Button>
+          ) : null}
+        />
       )}
 
       {data && (

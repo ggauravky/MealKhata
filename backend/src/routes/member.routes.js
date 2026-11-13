@@ -18,15 +18,6 @@ export function createMemberRouter({
     }
   });
 
-  router.get('/legacy-conflicts', requireSuperAdmin, async (_req, res, next) => {
-    try {
-      const conflicts = await accountService.auditLegacyConflicts();
-      return res.json({ success: true, data: conflicts });
-    } catch (error) {
-      return next(error);
-    }
-  });
-
   router.get('/:memberId', requireAdminOrAbove, async (req, res, next) => {
     try {
       const member = await service.findMemberById(req.params.memberId);

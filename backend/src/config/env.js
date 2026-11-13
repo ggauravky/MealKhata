@@ -1,5 +1,4 @@
 import 'dotenv/config';
-import bcrypt from 'bcryptjs';
 
 const parsedPort = Number.parseInt(process.env.PORT ?? '5000', 10);
 
@@ -13,28 +12,13 @@ export const env = Object.freeze({
   port: Number.isNaN(parsedPort) ? 5000 : parsedPort,
   mongoUri: process.env.MONGODB_URI?.trim() ?? '',
   appTimezone: process.env.APP_TIMEZONE?.trim() || 'Asia/Kolkata',
-  adminEmail: process.env.ADMIN_EMAIL?.trim().toLowerCase() ?? '',
-  adminPasswordHash: process.env.ADMIN_PASSWORD_HASH?.trim() ?? '',
-  superAdminEmail: process.env.SUPERADMIN_EMAIL?.trim().toLowerCase() ?? '',
-  superAdminPasswordHash: process.env.SUPERADMIN_PASSWORD_HASH?.trim() ?? '',
   authJwtSecret: process.env.AUTH_JWT_SECRET?.trim() ?? '',
-  runtimeProfile: process.env.MEALKHATA_RUNTIME_PROFILE?.trim() || 'v2',
-  canonicalOnlyAuth: process.env.CANONICAL_ONLY_AUTH === 'true',
-  v3BuildSha: process.env.V3_RELEASE_BUILD_SHA?.trim() ?? '',
-  observedBuildSha: process.env.RENDER_GIT_COMMIT?.trim()
-    || (process.env.NODE_ENV === 'production' ? ''
-      : process.env.MEALKHATA_OBSERVED_BUILD_SHA?.trim() || ''),
-  v3AttestationPath: process.env.V3_RELEASE_ATTESTATION_PATH?.trim() ?? '',
-  v3OwnerPublicKey: process.env.V3_RELEASE_OWNER_PUBLIC_KEY?.trim() ?? '',
-  v3OperatorPublicKey: process.env.V3_RELEASE_OPERATOR_PUBLIC_KEY?.trim() ?? '',
   appOrigin: normalizeAppOrigin(process.env.APP_ORIGIN),
   vapidPublicKey: process.env.VAPID_PUBLIC_KEY?.trim() ?? '',
   vapidPrivateKey: process.env.VAPID_PRIVATE_KEY?.trim() ?? '',
   vapidSubject: process.env.VAPID_SUBJECT?.trim() ?? '',
 });
 
-const bcryptHashPattern = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
-const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const mongoUriPattern = /^mongodb(?:\+srv)?:\/\//;
 
 function isValidOrigin(value, requireHttps) {
@@ -52,18 +36,6 @@ function isValidTimeZone(value) {
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: value }).format();
     return true;
-  } catch {
-    return false;
-  }
-}
-
-function hasRequiredBcryptCost(value) {
-  if (!bcryptHashPattern.test(value)) {
-    return false;
-  }
-
-  try {
-    return bcrypt.getRounds(value) === 12;
   } catch {
     return false;
   }
@@ -92,43 +64,8 @@ export function validateEnvironment(config = env) {
     throw new Error('NODE_ENV must be development, test, or production');
   }
 
-  if (!['v2', 'v3'].includes(config.runtimeProfile)) {
-    throw new Error('MEALKHATA_RUNTIME_PROFILE must select a known runtime profile');
-  }
-  if (config.runtimeProfile === 'v3' && config.canonicalOnlyAuth !== true) {
-    throw new Error('MealKhata v3 requires CANONICAL_ONLY_AUTH=true');
-  }
-  if (config.runtimeProfile === 'v3' && (!/^[a-f0-9]{40}$|^[a-f0-9]{64}$/.test(config.v3BuildSha ?? '')
-    || config.observedBuildSha !== config.v3BuildSha
-    || !config.v3AttestationPath || !config.v3OwnerPublicKey || !config.v3OperatorPublicKey)) {
-    throw new Error('MealKhata v3 requires a build SHA and protected release attestation configuration');
-  }
-
   if (!Number.isInteger(config.port) || config.port < 1 || config.port > 65_535) {
     throw new Error('PORT must be an integer from 1 to 65535');
-  }
-
-  const hasAdminEmail = Boolean(config.adminEmail);
-  const hasSuperAdminEmail = Boolean(config.superAdminEmail);
-
-  if (hasAdminEmail && !emailPattern.test(config.adminEmail)) {
-    throw new Error('ADMIN_EMAIL and SUPERADMIN_EMAIL must be valid email addresses');
-  }
-
-  if (hasSuperAdminEmail && !emailPattern.test(config.superAdminEmail)) {
-    throw new Error('ADMIN_EMAIL and SUPERADMIN_EMAIL must be valid email addresses');
-  }
-
-  if (hasAdminEmail && hasSuperAdminEmail && config.adminEmail === config.superAdminEmail) {
-    throw new Error('ADMIN_EMAIL and SUPERADMIN_EMAIL must be different');
-  }
-
-  if (config.adminPasswordHash && !hasRequiredBcryptCost(config.adminPasswordHash)) {
-    throw new Error('ADMIN_PASSWORD_HASH must be a valid bcrypt hash with cost 12');
-  }
-
-  if (config.superAdminPasswordHash && !hasRequiredBcryptCost(config.superAdminPasswordHash)) {
-    throw new Error('SUPERADMIN_PASSWORD_HASH must be a valid bcrypt hash with cost 12');
   }
 
   const minimumSecretBytes = config.nodeEnv === 'production' ? 48 : 32;
@@ -151,23 +88,34 @@ export function validateEnvironment(config = env) {
   if (!mongoUriPattern.test(config.mongoUri)) {
     throw new Error('MONGODB_URI must use the mongodb or mongodb+srv scheme');
   }
-  if (config.runtimeProfile === 'v3' && config.nodeEnv === 'production') {
-    let uri;
-    try { uri = new URL(config.mongoUri); }
-    catch { throw new Error('MealKhata v3 requires a valid TLS-enabled MongoDB URI'); }
-    const tls = uri.searchParams.get('tls');
-    const ssl = uri.searchParams.get('ssl');
-    const encrypted = uri.protocol === 'mongodb+srv:'
-      ? tls !== 'false' && ssl !== 'false'
-      : (tls === 'true' || ssl === 'true') && tls !== 'false' && ssl !== 'false';
-    if (!encrypted) throw new Error('MealKhata v3 requires TLS for MongoDB connections');
+  if (!configuredDatabaseName(config.mongoUri)) {
+    throw new Error('MONGODB_URI must name the application database explicitly (for example /mealkhata)');
+  }
+  if (config.nodeEnv === 'production' && !usesEncryptedTransport(config.mongoUri)) {
+    throw new Error('Production MongoDB connections must use TLS');
   }
 
   validateVapidConfiguration(config, { required: false });
 }
 
-export function isCanonicalOnlyMode(config = env) {
-  return config.runtimeProfile === 'v3' || config.canonicalOnlyAuth === true;
+/** Returns the database name embedded in a MongoDB URI path, or null when absent or unsafe. */
+export function configuredDatabaseName(mongoUri) {
+  try {
+    const name = decodeURIComponent(new URL(mongoUri).pathname.slice(1));
+    return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(name) ? name : null;
+  } catch {
+    return null;
+  }
+}
+
+function usesEncryptedTransport(mongoUri) {
+  let uri;
+  try { uri = new URL(mongoUri); } catch { return false; }
+  const tls = uri.searchParams.get('tls');
+  const ssl = uri.searchParams.get('ssl');
+  return uri.protocol === 'mongodb+srv:'
+    ? tls !== 'false' && ssl !== 'false'
+    : (tls === 'true' || ssl === 'true') && tls !== 'false' && ssl !== 'false';
 }
 
 export function validateVapidConfiguration(config = env, { required = false } = {}) {

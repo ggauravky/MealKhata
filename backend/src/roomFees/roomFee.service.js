@@ -1,6 +1,5 @@
 import mongoose from 'mongoose';
 import { createHash, randomUUID } from 'node:crypto';
-import { env } from '../config/env.js';
 import { isSafeStudentId } from '../students/studentId.js';
 import { studentResolver } from '../students/studentResolver.service.js';
 import { STUDENT_STATUSES } from '../students/student.constants.js';
@@ -125,28 +124,22 @@ import {
 export function createRoomFeeService({
   repository,
   students = null,
-  runtimeProfile = env.runtimeProfile,
   boundary = null,
   timezone = 'Asia/Kolkata',
   now = () => new Date(),
 }) {
-  if (runtimeProfile === 'v3' && !students) {
-    throw new TypeError('Student directory is required for v3 Room Fees');
+  if (!students) {
+    throw new TypeError('Student directory is required for Room Fees');
   }
-  const getMembers = async ({ activeOnly = false } = {}) => {
-    if (students) return (await students.listAll())
-      .filter(student => !activeOnly || student.status === STUDENT_STATUSES.ACTIVE)
-      .map((student) => ({ id: student.studentId, name: student.displayName }));
-    const assignments = await repository.findAllAssignments?.() ?? [];
-    return [...new Set(assignments.map((assignment) => assignment.memberId))]
-      .filter(isSafeStudentId).sort().map((id) => ({ id, name: id }));
-  };
-  const getStudentNames = async () => students
-    ? new Map((await students.listAll()).map(({ studentId, displayName }) => [studentId, displayName]))
-    : null;
+  const getMembers = async ({ activeOnly = false } = {}) => (await students.listAll())
+    .filter(student => !activeOnly || student.status === STUDENT_STATUSES.ACTIVE)
+    .map((student) => ({ id: student.studentId, name: student.displayName }));
+  const getStudentNames = async () => new Map(
+    (await students.listAll()).map(({ studentId, displayName }) => [studentId, displayName]),
+  );
   const assertKnownMember = async (memberId) => {
     if (!isSafeStudentId(memberId)) throw new HttpError(400, 'Invalid member ID.');
-    if (students) await students.assertKnown(memberId);
+    await students.assertKnown(memberId);
   };
   function getCurrentMonth() {
     return getLogicalDateInTimeZone(now(), timezone).slice(0, 7);

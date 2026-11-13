@@ -1,6 +1,5 @@
 import { ROLES } from '../auth/permissions.js';
 import { env, isPushConfigured } from '../config/env.js';
-import { MEMBER_NAMES } from '../config/members.js';
 import { studentResolver } from '../students/studentResolver.service.js';
 import { mealService as defaultMealService } from '../meals/meal.service.js';
 import {
@@ -41,7 +40,7 @@ export function createDashboardService({
       const actorMemberId = auth?.memberId || null;
       const displayName =
         auth?.displayName ||
-        (actorMemberId ? MEMBER_NAMES[actorMemberId] ?? actorMemberId : null);
+        (actorMemberId ?? null);
 
       const currentNow = now();
       const today = getLogicalDateInTimeZone(currentNow, timezone);
@@ -161,7 +160,7 @@ export function createDashboardService({
 
         return {
           memberId,
-          name: names[memberId] ?? MEMBER_NAMES[memberId] ?? memberId,
+          name: names[memberId] ?? memberId,
           morning: morningMeals[memberId] || defaultMealStatus,
           night: nightMeals[memberId] || defaultMealStatus,
           morningShareUnits: mUnits,
@@ -402,7 +401,10 @@ export function createDashboardService({
           });
         }
       } else if (settlementSummary.state === 'not_ready' && actorRole === ROLES.SUPERADMIN) {
-        if (settlementSummary.blockers.length > 0) {
+        // Months before the financial start date can never be closed; that is not a balance
+        // problem, so only actionable blockers raise an alert.
+        const actionableBlockers = settlementSummary.blockers.filter((blocker) => blocker?.type !== 'historical_month');
+        if (actionableBlockers.length > 0) {
           attention.push({
             id: 'settlement_blocked',
             type: 'settlement',

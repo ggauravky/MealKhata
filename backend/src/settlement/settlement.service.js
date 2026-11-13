@@ -6,7 +6,6 @@ import { isValidLogicalMonth } from '../utils/month.js';
 import { monthlySettlementRepository } from './monthlySettlement.repository.js';
 import { serializeSettlement, serializeSettlementHistory } from './monthlySettlement.serializer.js';
 import { studentResolver } from '../students/studentResolver.service.js';
-import { MEMBER_NAMES } from '../config/members.js';
 import { financialBoundaryService } from '../finance/financialBoundary.service.js';
 
 export function createSettlementService({
@@ -168,7 +167,7 @@ export function createSettlementService({
         const totalUnits = toDateMember.totalShareUnits ?? (morningUnits + nightUnits);
 
         members[memberId] = {
-          displayName: studentNames[memberId] ?? MEMBER_NAMES[memberId] ?? memberId,
+          displayName: studentNames[memberId] ?? memberId,
           morningCount: morningParticipation,
           nightCount: nightParticipation,
           totalPlates: totalUnits / 6,

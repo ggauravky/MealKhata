@@ -218,20 +218,17 @@ test('monthly API report labels a fourth archived historical student', async () 
   assert.equal(result.toDate.members[fourth].displayName, 'Fourth Student');
 });
 
-test('monthly report fails closed when a saved historical day lacks its snapshot', async () => {
+test('monthly report fails closed on a meal day that is not in the current schema', async () => {
   const legacy = { date: '2026-09-09', revision: 1, meals: { morning: { gaurav: 'taking' }, night: {} } };
   const service = createReportService({
     meals: createMonthMealService({
       repository: { findInDateRange: async () => [legacy] },
-      snapshots: { findByDateAndVersion: async () => null },
-      corrections: { listByDate: async () => [] },
       students: { listEligibleOn: async () => [] },
-      runtimeProfile: 'v3',
     }),
     rates: { getRate: async () => ({ configured: true, morningPricePaise: 100, nightPricePaise: 100 }) },
     now: () => new Date('2026-10-01T12:00:00Z'),
   });
-  await assert.rejects(service.getMonthlyReport('2026-09'), /2026-09-09/);
+  await assert.rejects(service.getMonthlyReport('2026-09'), /unsupported schema version/);
 });
 
 test('dashboard household today includes a fourth active student', async () => {

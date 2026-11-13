@@ -3,6 +3,15 @@ import { UserAccount as UserAccountModel } from './userAccount.model.js';
 
 export function createUserAccountRepository({ model = UserAccountModel } = {}) {
   const isConnected = () => mongoose.connection?.readyState === 1;
+  const createAccount = async (data, { session = null } = {}) => {
+    const normalized = { ...data, email: data.email.trim().toLowerCase() };
+    if (session) {
+      const created = await model.create([normalized], { session });
+      return created[0].toObject();
+    }
+    const created = await model.create(normalized);
+    return created.toObject();
+  };
 
   return Object.freeze({
     async findByEmail(email, { includePasswordHash = false, session = null } = {}) {
@@ -44,15 +53,7 @@ export function createUserAccountRepository({ model = UserAccountModel } = {}) {
       return model.countDocuments();
     },
 
-    async createMemberAccount(data, { session = null } = {}) {
-      const normalized = { ...data, email: data.email.trim().toLowerCase() };
-      if (session) {
-        const created = await model.create([normalized], { session });
-        return created[0].toObject();
-      }
-      const created = await model.create(normalized);
-      return created.toObject();
-    },
+    createAccount,
 
     async updateEmail(userId, email, { session = null } = {}) {
       const options = { new: true, runValidators: true };
@@ -77,47 +78,18 @@ export function createUserAccountRepository({ model = UserAccountModel } = {}) {
       ).lean();
     },
 
-    async upsertUserAccount({
-      userId,
-      memberId = null,
-      displayName,
-      email,
-      passwordHash,
-      role,
-      active = true,
-      sessionVersion = 0,
-    }) {
-      const normalizedEmail = email.trim().toLowerCase();
-
-      const updateData = {
-        displayName,
-        email: normalizedEmail,
-        passwordHash,
-        role,
-        active,
-        sessionVersion,
-      };
-
-      if (memberId !== undefined) {
-        updateData.memberId = memberId;
-      }
-
-      const updated = await model.findOneAndUpdate(
-        { email: normalizedEmail },
-        {
-          $set: updateData,
-          $setOnInsert: { userId },
-        },
-        {
-          new: true,
-          upsert: true,
-          runValidators: true,
-          setDefaultsOnInsert: true,
-        },
-      );
-
-      return updated.toObject ? updated.toObject() : updated;
+    async listByRoles(roles) {
+      if (!isConnected()) return [];
+      return model.find({ role: { $in: roles } }).sort({ role: -1, createdAt: 1 }).lean();
     },
+
+    async updateDisplayName(userId, displayName, { session = null } = {}) {
+      const options = { new: true, runValidators: true };
+      if (session) options.session = session;
+      return model.findOneAndUpdate({ userId }, { $set: { displayName } }, options).lean();
+    },
+
+    createMemberAccount: createAccount,
 
     async updateLastLogin(userId, loginTime = new Date()) {
       if (!isConnected()) return null;

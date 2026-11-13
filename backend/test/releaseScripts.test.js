@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildSmokeChecks, parseSmokeTargets, runReleaseSmoke } from '../scripts/releaseSmoke.js';
-import { releaseGateSummary } from '../scripts/releaseCheck.js';
+import { runReleaseCodeChecks } from '../scripts/releaseCheck.js';
 
 test('release smoke requires explicit safe frontend and backend origins', () => {
   assert.throws(() => parseSmokeTargets([], { NODE_ENV: 'production' }), /backend-url/);
@@ -38,12 +38,11 @@ test('positive smoke fails on 503 readiness and does not log target URLs', async
     log: line => lines.push(line) }), true);
 });
 
-test('release check reports code checks without claiming production approval', () => {
-  const summary = releaseGateSummary({ codeQualityPassed: true, isolatedMigrationPassed: true });
+test('release check runs every local gate and does not claim production approval', () => {
+  const commands = [];
+  const summary = runReleaseCodeChecks({ run: (_cmd, args) => commands.push(args.join(' ')), log: () => {} });
+  assert.deepEqual(commands, ['run lint', 'test', 'run build', 'run verify-production-build',
+    'run security:check', 'run perf:check', 'run e2e:browser']);
   assert.equal(summary.codeQuality, 'verified');
-  assert.equal(summary.isolatedMigration, 'verified');
-  assert.equal(summary.productionSourceEvidence, 'pending');
-  assert.equal(summary.ownerApproval, 'pending');
-  assert.equal(summary.cutoverAuthorized, false);
-  assert.ok(!JSON.stringify(summary).includes('ready for production'));
+  assert.ok(!JSON.stringify(summary).includes('production'));
 });

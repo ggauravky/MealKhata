@@ -62,7 +62,7 @@ export function useDashboard() {
     socket.on('meal:updated', debouncedRefresh);
     socket.on('payment:updated', debouncedRefresh);
     socket.on('settlement:updated', debouncedRefresh);
-    socket.on('reminder-settings:updated', debouncedRefresh);
+    socket.on('settings:reminders-updated', debouncedRefresh);
     socket.on('connect', handleConnect);
     socket.on('disconnect', handleDisconnect);
     socket.io?.on('reconnect', handleReconnect);
@@ -73,7 +73,7 @@ export function useDashboard() {
       socket.off('meal:updated', debouncedRefresh);
       socket.off('payment:updated', debouncedRefresh);
       socket.off('settlement:updated', debouncedRefresh);
-      socket.off('reminder-settings:updated', debouncedRefresh);
+      socket.off('settings:reminders-updated', debouncedRefresh);
       socket.off('connect', handleConnect);
       socket.off('disconnect', handleDisconnect);
       socket.io?.off('reconnect', handleReconnect);

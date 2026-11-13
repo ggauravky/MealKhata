@@ -1,34 +1,15 @@
-import { MEMBERS } from '../config/members.js';
-import { env } from '../config/env.js';
 import { getLogicalDateInTimeZone } from '../utils/date.js';
 import { userAccountRepository } from '../auth/userAccount.repository.js';
 import { roomRepository } from '../roomFees/room.repository.js';
 import { STAY_STATUSES } from '../stays/stay.constants.js';
 import { stayRepository } from '../stays/stay.repository.js';
 import { studentResolver } from '../students/studentResolver.service.js';
-import {
-  LEGACY_STUDENT_ELIGIBILITY_FIXTURES,
-  STUDENT_STATUSES,
-} from '../students/student.constants.js';
 
 const ACTIVE_STAY_STATUSES = new Set([
   STAY_STATUSES.ACTIVE,
   STAY_STATUSES.CHECKOUT_REQUESTED,
   STAY_STATUSES.CHECKOUT_PENDING,
 ]);
-
-function legacyCompatibilityStudents() {
-  return MEMBERS.map((member, index) => ({
-    studentId: member.id,
-    displayName: member.name,
-    status: STUDENT_STATUSES.ACTIVE,
-    mealEligibilityFrom: LEGACY_STUDENT_ELIGIBILITY_FIXTURES[member.id] ?? null,
-    mealEligibilityUntil: null,
-    rosterOrder: (index + 1) * 10,
-    archivedAt: null,
-    archivedReason: null,
-  }));
-}
 
 function serializeAccount(account) {
   if (!account) return { exists: false };
@@ -60,7 +41,6 @@ function serializeStay(stay, historyCount) {
 }
 
 export function createMemberService({
-  runtimeProfile = env.runtimeProfile,
   resolver = studentResolver,
   accounts = userAccountRepository,
   stays = stayRepository,
@@ -126,14 +106,11 @@ export function createMemberService({
   return Object.freeze({
     async listMembers() {
       const students = await resolver.listCurrent();
-      return enrichStudents(students.length > 0 || runtimeProfile === 'v3'
-        ? students : legacyCompatibilityStudents());
+      return enrichStudents(students);
     },
 
     async findMemberById(memberId) {
-      const resolvedStudents = await resolver.listAll();
-      const students = resolvedStudents.length > 0 || runtimeProfile === 'v3'
-        ? resolvedStudents : legacyCompatibilityStudents();
+      const students = await resolver.listAll();
       const student = students.find((candidate) => candidate.studentId === memberId);
       if (!student) return null;
       const [member] = await enrichStudents([student]);

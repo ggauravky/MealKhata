@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { beforeEach, describe, test } from 'node:test';
 import { createMonthMealService } from '../src/calendar/monthMeal.service.js';
 import { createMonthlyRateService } from '../src/billing/monthlyRate.service.js';
-import { MEMBER_IDS } from '../src/config/members.js';
+import { MEMBER_IDS, createFixedStudentDirectory } from './helpers/fixtures.js';
 import { DEFAULT_MEAL_STATUS, MEAL_STATUSES, WRITABLE_MEAL_STATUSES } from '../src/meals/meal.constants.js';
 import { createDefaultMealDay } from '../src/meals/meal.defaults.js';
 import { createMealService } from '../src/meals/meal.service.js';
@@ -31,8 +31,8 @@ describe('Critical Data Semantics Fix & Invariants', () => {
     rateRepo = new InMemoryMonthlyRateRepository();
     paymentRepo = new InMemoryPaymentRepository();
 
-    mealService = createMealService({ repository: mealRepo, timezone: TIMEZONE });
-    monthMealService = createMonthMealService({ repository: mealRepo, timezone: TIMEZONE });
+    mealService = createMealService({ students: createFixedStudentDirectory(), repository: mealRepo, timezone: TIMEZONE });
+    monthMealService = createMonthMealService({ students: createFixedStudentDirectory(), repository: mealRepo, timezone: TIMEZONE });
     rateService = createMonthlyRateService({ repository: rateRepo, now: () => TEST_NOW });
     reportService = createReportService({
       meals: monthMealService,
@@ -53,8 +53,9 @@ describe('Critical Data Semantics Fix & Invariants', () => {
     assert.ok(!WRITABLE_MEAL_STATUSES.includes('not_set'), 'not_set must not be directly writable via standard status mutation');
   });
 
-  test('createDefaultMealDay produces not_set for all 6 member slots', () => {
-    const day = createDefaultMealDay('2026-10-25');
+  test('createDefaultMealDay produces not_set for every slot of the explicit roster', () => {
+    assert.throws(() => createDefaultMealDay('2026-10-25'), /Explicit participants/);
+    const day = createDefaultMealDay('2026-10-25', MEMBER_IDS);
     assert.equal(day.date, '2026-10-25');
     for (const mealType of ['morning', 'night']) {
       for (const id of MEMBER_IDS) {
@@ -258,6 +259,7 @@ describe('Critical Data Semantics Fix & Invariants', () => {
     };
 
     const dispatchService = createReminderDispatchService({
+      resolver: createFixedStudentDirectory(),
       settingsService: mockSettingsService,
       meals: mealService,
       subscriptions: mockSubscriptions,

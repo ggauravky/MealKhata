@@ -34,12 +34,11 @@ function displayDateTime(value) {
 }
 
 function eligibilitySummary(student) {
-  if (!student.mealEligibilityFrom && !student.mealEligibilityUntil) return 'No date restriction';
+  if (!student.mealEligibilityFrom) return 'Not in meals (no start date)';
   if (student.mealEligibilityFrom && student.mealEligibilityUntil) {
     return `${student.mealEligibilityFrom} to ${student.mealEligibilityUntil}`;
   }
-  if (student.mealEligibilityFrom) return `From ${student.mealEligibilityFrom}`;
-  return `Until ${student.mealEligibilityUntil}`;
+  return `From ${student.mealEligibilityFrom}`;
 }
 
 function StudentCard({ student, isSuperAdmin, onEdit, onAccountAction, onLifecycleAction }) {
@@ -223,7 +222,20 @@ export function AdminMembersPage() {
             </div>
             {activeStudents.length > 0
               ? renderCards(activeStudents)
-              : <EmptyState title="No active students" message="Add a student when the next verified roster identity is available." icon={Users} />}
+              : (
+                <EmptyState
+                  title={students.data.length === 0 ? 'No students added yet' : 'No active students'}
+                  message={isSuperAdmin
+                    ? 'Add your first student to start tracking meals, rooms and payments. You can create their login afterwards.'
+                    : 'The Super Admin has not added any active students yet.'}
+                  icon={Users}
+                  action={isSuperAdmin ? (
+                    <Button size="sm" onClick={() => setProfileDialog({ open: true, student: null })}>
+                      <UserPlus className="mr-2 h-4 w-4" /> Add first student
+                    </Button>
+                  ) : null}
+                />
+              )}
           </section>
 
           <section className="space-y-3" aria-labelledby="historical-students-heading">

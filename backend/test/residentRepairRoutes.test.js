@@ -1,16 +1,16 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import request from 'supertest';
-import { createApp } from '../src/app.js';
 import { ROLES } from '../src/auth/permissions.js';
-import { createSessionToken, SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
+import { SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
 import { createStayRouter } from '../src/routes/stay.routes.js';
 import { createRoomFeeRouter } from '../src/routes/roomFee.routes.js';
+import { testSessionToken, createTestApp } from './helpers/testAuth.js';
 
 const ORIGIN = 'http://localhost:5173';
 
 async function cookieFor(role) {
-  return `${SESSION_COOKIE_NAME}=${await createSessionToken(role)}`;
+  return `${SESSION_COOKIE_NAME}=${await testSessionToken(role)}`;
 }
 
 describe('resident repair administration routes', () => {
@@ -38,7 +38,7 @@ describe('resident repair administration routes', () => {
         return { stay: { ...stay, status: 'ACTIVE' } };
       },
     };
-    const app = createApp({
+    const app = createTestApp({
       stays: createStayRouter({
         service,
         broadcastStay: () => {},
@@ -116,7 +116,7 @@ describe('resident repair administration routes', () => {
         return { reclassificationId: 'reclass-1' };
       },
     };
-    const app = createApp({
+    const app = createTestApp({
       stays: createStayRouter({
         service,
         deposits,
@@ -179,7 +179,7 @@ describe('resident repair administration routes', () => {
         return { createdPlans: [], supersededPlanIds: [] };
       },
     };
-    const app = createApp({
+    const app = createTestApp({
       roomFees: createRoomFeeRouter({ service, broadcast: () => {} }),
     });
     const payload = {

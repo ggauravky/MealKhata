@@ -10,22 +10,37 @@ import {
 } from '../src/meals/plateAllocation.constants.js';
 import {
   formatPlateFraction,
-  getEffectiveMealAllocation,
-  splitMealCost,
-  validatePlateAllocation,
+  getEffectiveMealAllocation as getEffectiveMealAllocationFor,
+  splitMealCost as splitMealCostFor,
+  validatePlateAllocation as validatePlateAllocationFor,
 } from '../src/meals/plateAllocation.service.js';
+import { MEMBER_IDS } from './helpers/fixtures.js';
+import { testAccounts, testAuthenticate, openInitializationGate } from './helpers/testAuth.js';
+
+// These calculation cases describe a three-student room; the roster is always explicit.
+const validatePlateAllocation = (allocation, options = {}) =>
+  validatePlateAllocationFor(allocation, { participants: MEMBER_IDS, ...options });
+const getEffectiveMealAllocation = (options = {}) =>
+  getEffectiveMealAllocationFor({ participants: MEMBER_IDS, ...options });
+const splitMealCost = (options = {}) => splitMealCostFor({ participants: MEMBER_IDS, ...options });
 import { createMealService } from '../src/meals/meal.service.js';
 import { createMealRouter } from '../src/routes/meal.routes.js';
 import { createBillingRouter } from '../src/routes/billing.routes.js';
 import { createMonthlyRateService } from '../src/billing/monthlyRate.service.js';
 import { InMemoryMealRepository } from './helpers/inMemoryMealRepository.js';
 import { InMemoryMonthlyRateRepository } from './helpers/inMemoryMonthlyRateRepository.js';
+import { createFixedStudentDirectory } from './helpers/fixtures.js';
 
 const ORIGIN = 'http://localhost:5173';
 const TODAY = '2026-10-01';
 
 async function cookieFor(role, memberId = null, userId = null, sessionVersion = 0) {
-  const token = await createSessionToken(role, { memberId, userId, sessionVersion });
+  const id = userId ?? `shared-${role}-${memberId ?? 'staff'}`;
+  if (!await testAccounts.findByUserId(id)) {
+    await testAccounts.create({ userId: id, memberId, role, email: `${id}@mealkhata.test`,
+      displayName: memberId ?? role, passwordHash: null, active: true, sessionVersion });
+  }
+  const token = await createSessionToken(role, { memberId, userId: id, sessionVersion });
   return `${SESSION_COOKIE_NAME}=${token}`;
 }
 
@@ -387,7 +402,7 @@ describe('Shared Plate Integration & API', () => {
 
   beforeEach(() => {
     mealRepo = new InMemoryMealRepository();
-    mealService = createMealService({ repository: mealRepo, timezone: 'Asia/Kolkata' });
+    mealService = createMealService({ students: createFixedStudentDirectory(), repository: mealRepo, timezone: 'Asia/Kolkata' });
     const meals = createMealRouter({
       service: mealService,
       broadcast: () => {},
@@ -398,7 +413,7 @@ describe('Shared Plate Integration & API', () => {
     const rateService = createMonthlyRateService({ repository: rateRepo });
     const billing = createBillingRouter({ service: rateService });
 
-    testApp = createApp({ meals, billing });
+    testApp = createApp({ authenticate: testAuthenticate, gate: openInitializationGate, meals, billing });
   });
 
   test('Requirement 140: Member status change automatically resets custom allocation', async () => {

@@ -35,14 +35,18 @@ MealKhata implements decoupled liveness and readiness probes:
 - **Security**: Contains zero secrets, database connection strings, or system paths.
 
 ### B. Readiness Probe (`GET /api/ready`)
-- **Purpose**: Verified by Render to determine whether the container can accept production traffic.
-- **Evaluation Criteria**:
-  1. Server is **not draining** (`LIFECYCLE_STATES.READY`).
-  2. MongoDB is reachable (bounded ping check with 2,000ms timeout).
+- **Purpose**: Reports whether the application can serve real users. Render's health check uses the lighter `/api/health` so the service can start before the one-time setup.
+- **Evaluation Criteria** (each reported in `checks`):
+  1. Server is **not draining**.
+  2. `database`: MongoDB answers a bounded ping.
+  3. `databaseIdentity`: the connected database is the one named in `MONGODB_URI`.
+  4. `initialized`: the one-time setup record exists (see `docs/SETUP.md`).
+  5. `superAdmin`: the Super Admin from setup exists and is active.
+  6. `indexes`: every index declared by the models exists.
+  7. `configuration`: JWT secret, app origin and database name are configured.
 - **Expected Status**:
-  - `200 OK` (`{"success": true, "status": "ready"}`) when healthy.
-  - `503 Service Unavailable` (`{"success": false, "status": "draining"}`) during shutdown.
-  - `503 Service Unavailable` (`{"success": false, "status": "unavailable"}`) if MongoDB disconnects.
+  - `200 OK` (`{"success": true, "status": "ready", "checks": {...}}`) when every check passes.
+  - `503` with `"status": "draining"` during shutdown, or `"status": "unavailable"` and the failing `checks` otherwise (for example `"initialized": false` before setup).
 
 ---
 
@@ -55,7 +59,7 @@ After deploying a new commit to Render, run through this checklist:
    - Verify frontend assets were written to `frontend/dist/`.
 2. **Startup & Readiness**:
    - Verify log event: `server.started {"port": 5000}`.
-   - Confirm Render reports successful health check on `/api/ready`.
+   - Confirm Render reports a successful health check on `/api/health`, then that `/api/ready` returns `200`.
 3. **Smoke Verification**:
    - Open browser or PWA in standalone mode at `APP_ORIGIN`.
    - Confirm home dashboard renders with live India greeting ("Good morning", "Good evening").

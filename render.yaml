@@ -6,7 +6,9 @@ services:
     autoDeployTrigger: off
     buildCommand: npm ci --omit=dev
     startCommand: npm run start --workspace backend
-    healthCheckPath: /api/ready
+    # Liveness: the service must be able to start before the one-time Super Admin setup.
+    # /api/ready reports full readiness (setup, Super Admin, indexes) for monitoring.
+    healthCheckPath: /api/health
     maxShutdownDelaySeconds: 20
     envVars:
       - key: NODE_ENV
@@ -16,18 +18,6 @@ services:
       - key: APP_TIMEZONE
         value: Asia/Kolkata
       # Existing services must set sync:false values manually in the dashboard.
-      - key: MEALKHATA_RUNTIME_PROFILE
-        sync: false
-      - key: CANONICAL_ONLY_AUTH
-        sync: false
-      - key: V3_RELEASE_BUILD_SHA
-        sync: false
-      - key: V3_RELEASE_ATTESTATION_PATH
-        sync: false
-      - key: V3_RELEASE_OWNER_PUBLIC_KEY
-        sync: false
-      - key: V3_RELEASE_OPERATOR_PUBLIC_KEY
-        sync: false
       - key: MONGODB_URI
         sync: false
       - key: AUTH_JWT_SECRET

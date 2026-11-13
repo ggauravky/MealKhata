@@ -5,7 +5,6 @@ import { createApp } from '../src/app.js';
 import { createAuthService } from '../src/auth/auth.service.js';
 import { createMonthlyRateService } from '../src/billing/monthlyRate.service.js';
 import { createMonthMealService } from '../src/calendar/monthMeal.service.js';
-import { MEMBERS } from '../src/config/members.js';
 import { createDashboardService } from '../src/dashboard/dashboard.service.js';
 import { createMealService } from '../src/meals/meal.service.js';
 import { createPaymentService } from '../src/payments/payment.service.js';
@@ -26,7 +25,9 @@ import { createSettlementRouter } from '../src/routes/settlement.routes.js';
 import { createReminderSettingsService } from '../src/settings/reminderSettings.service.js';
 import { createSettlementService } from '../src/settlement/settlement.service.js';
 import { InMemoryMealRepository } from '../test/helpers/inMemoryMealRepository.js';
-import { InMemoryMemberAccountRepository } from '../test/helpers/inMemoryMemberAccountRepository.js';
+import { InMemoryUserAccountRepository } from '../test/helpers/inMemoryUserAccountRepository.js';
+import { MEMBERS, createFixedStudentDirectory } from '../test/helpers/fixtures.js';
+import { openInitializationGate, testAuthenticate } from '../test/helpers/testAuth.js';
 import { InMemoryMonthlyRateRepository } from '../test/helpers/inMemoryMonthlyRateRepository.js';
 import { InMemoryMonthlySettlementRepository } from '../test/helpers/inMemoryMonthlySettlementRepository.js';
 import { InMemoryPaymentRepository } from '../test/helpers/inMemoryPaymentRepository.js';
@@ -39,7 +40,7 @@ const P95_THRESHOLD_MS = 250;
 
 async function setupBenchmarkServer() {
   const mealRepo = new InMemoryMealRepository();
-  const memberRepo = new InMemoryMemberAccountRepository();
+  const memberRepo = new InMemoryUserAccountRepository();
   const rateRepo = new InMemoryMonthlyRateRepository();
   const paymentRepo = new InMemoryPaymentRepository();
   const paymentSettingsRepo = new InMemoryPaymentSettingsRepository();
@@ -98,8 +99,8 @@ async function setupBenchmarkServer() {
     },
   });
 
-  const mealService = createMealService({ repository: mealRepo, timezone });
-  const monthMealService = createMonthMealService({ repository: mealRepo, timezone });
+  const mealService = createMealService({ students: createFixedStudentDirectory(), repository: mealRepo, timezone });
+  const monthMealService = createMonthMealService({ students: createFixedStudentDirectory(), repository: mealRepo, timezone });
   const rateService = createMonthlyRateService({ repository: rateRepo });
   const reportService = createReportService({ meals: monthMealService, rates: rateService, now, timezone });
   const paymentSummaryService = createPaymentSummaryService({ reports: reportService, repository: paymentRepo });
@@ -117,9 +118,11 @@ async function setupBenchmarkServer() {
     now,
     timezone,
   });
-  const authService = createAuthService({ memberAccounts: memberRepo });
+  const authService = createAuthService({ userAccounts: memberRepo, resolver: createFixedStudentDirectory() });
 
   const app = createApp({
+    authenticate: testAuthenticate,
+    gate: openInitializationGate,
     auth: createAuthRouter({ service: authService }),
     meals: createMealRouter({ service: mealService }),
     billing: createBillingRouter({ service: rateService }),
@@ -130,7 +133,7 @@ async function setupBenchmarkServer() {
     reminderSettings: createReminderSettingsRouter({ service: reminderService }),
     settlements: createSettlementRouter({ service: settlementService }),
     dashboard: createDashboardRouter({ service: dashboardService }),
-    health: createHealthRouter({ readiness: async () => true, drainingCheck: () => false }),
+    health: createHealthRouter({ readiness: async () => ({ ready: true, checks: {} }), drainingCheck: () => false }),
   });
 
   const server = http.createServer(app);

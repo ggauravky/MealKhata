@@ -12,16 +12,8 @@ const GATES = [
   ['Backend production build verification', ['run', 'verify-production-build']],
   ['Security checks', ['run', 'security:check']],
   ['Performance baseline', ['run', 'perf:check']],
+  ['Browser end-to-end flow', ['run', 'e2e:browser']],
 ];
-
-export function releaseGateSummary({ codeQualityPassed = false, isolatedMigrationPassed = false } = {}) {
-  return Object.freeze({ version: packageJson.version,
-    codeQuality: codeQualityPassed ? 'verified' : 'pending',
-    isolatedMigration: isolatedMigrationPassed ? 'verified' : 'pending',
-    productionSourceEvidence: 'pending', recovery: 'pending',
-    productionAdapters: 'review pending', ownerApproval: 'pending',
-    cutoverAuthorized: false });
-}
 
 export function runReleaseCodeChecks({ run = execFileSync, log = console.log } = {}) {
   log(`MealKhata ${packageJson.version} local code verification`);
@@ -29,9 +21,8 @@ export function runReleaseCodeChecks({ run = execFileSync, log = console.log } =
     log(`Checking ${name}`);
     run('npm', args, { cwd: rootDir, stdio: 'inherit', env: { ...process.env } });
   }
-  const summary = releaseGateSummary({ codeQualityPassed: true, isolatedMigrationPassed: true });
-  log('Local code checks passed. Production source, recovery, provider and owner gates remain pending.');
-  return summary;
+  log('Local code checks passed. Production deployment and a real Super Admin login are verified separately.');
+  return Object.freeze({ version: packageJson.version, codeQuality: 'verified' });
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

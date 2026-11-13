@@ -50,8 +50,8 @@ export function CalendarPage() {
   const activeDate = selectedDate.startsWith(`${month}-`) ? selectedDate : fallbackDate;
   const activeDay = calendar.data?.days.find((day) => day.date === activeDate);
 
-  const leadingCells = calendar.data ? getMondayFirstOffset(calendar.data.days[0].date) : 0;
-  const trailingCells = calendar.data
+  const leadingCells = calendar.data?.days?.length ? getMondayFirstOffset(calendar.data.days[0].date) : 0;
+  const trailingCells = calendar.data?.days?.length
     ? (7 - ((leadingCells + calendar.data.days.length) % 7)) % 7
     : 0;
 

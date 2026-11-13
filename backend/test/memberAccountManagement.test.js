@@ -13,7 +13,6 @@ import { createMemberService } from '../src/members/member.service.js';
 import { createMemberRouter } from '../src/routes/member.routes.js';
 import { createStudentResolver } from '../src/students/studentResolver.service.js';
 import { verifyIndexes } from '../scripts/verifyIndexes.js';
-import { InMemoryMemberAccountRepository } from './helpers/inMemoryMemberAccountRepository.js';
 import { InMemoryStudentRepository } from './helpers/inMemoryStudentRepository.js';
 import { InMemoryUserAccountRepository } from './helpers/inMemoryUserAccountRepository.js';
 
@@ -37,7 +36,6 @@ async function createHarness({
   ],
 } = {}) {
   const accounts = new InMemoryUserAccountRepository();
-  const legacyAccounts = new InMemoryMemberAccountRepository();
   const students = new InMemoryStudentRepository(initialStudents);
   const resolver = createStudentResolver({ repository: students });
   const auditEvents = [];
@@ -56,13 +54,12 @@ async function createHarness({
   };
   const service = createMemberAccountService({
     accounts,
-    legacyAccounts,
     audits,
     resolver,
     verifyActorPassword,
     now: () => new Date('2026-10-20T06:30:00.000Z'),
   });
-  return { accounts, legacyAccounts, students, resolver, auditEvents, service };
+  return { accounts, students, resolver, auditEvents, service };
 }
 
 describe('Super Admin member account management', () => {
@@ -114,7 +111,7 @@ describe('Super Admin member account management', () => {
   });
 
   test('provisions and authenticates a generated fourth student without exposing credentials', async () => {
-    const { service, accounts, legacyAccounts, resolver, auditEvents } = await createHarness();
+    const { service, accounts, resolver, auditEvents } = await createHarness();
     const provisioned = await service.provisionAccount({
       memberId: GENERATED_STUDENT_ID,
       email: ' Aarav@Example.com ',
@@ -128,7 +125,7 @@ describe('Super Admin member account management', () => {
     assert.equal('passwordHash' in provisioned, false);
     assert.equal(JSON.stringify(auditEvents).includes('FourthStrong!234'), false);
 
-    const auth = createAuthService({ userAccounts: accounts, accounts: legacyAccounts, resolver });
+    const auth = createAuthService({ userAccounts: accounts, resolver });
     const authenticated = await auth.authenticateCredentials({
       email: 'aarav@example.com',
       password: 'FourthStrong!234',
@@ -177,7 +174,7 @@ describe('Super Admin member account management', () => {
   });
 
   test('disabled accounts cannot login and password reset revokes existing sessions', async () => {
-    const { service, accounts, legacyAccounts, resolver } = await createHarness();
+    const { service, accounts, resolver } = await createHarness();
     const actor = { role: 'superadmin', userId: 'root-1' };
     const original = await service.provisionAccount({
       memberId: GENERATED_STUDENT_ID,
@@ -209,7 +206,7 @@ describe('Super Admin member account management', () => {
       currentPassword: 'admin-pass',
       actor,
     });
-    const auth = createAuthService({ userAccounts: accounts, accounts: legacyAccounts, resolver });
+    const auth = createAuthService({ userAccounts: accounts, resolver });
     await assert.rejects(
       auth.authenticateCredentials({ email: 'aarav@example.com', password: 'Replacement!234' }),
       (error) => error.statusCode === 401,
@@ -217,7 +214,7 @@ describe('Super Admin member account management', () => {
   });
 
   test('canonical login rejects an account linked to an unknown student', async () => {
-    const { accounts, legacyAccounts, resolver } = await createHarness();
+    const { accounts, resolver } = await createHarness();
     await accounts.create({
       userId: 'user-unknown-student',
       memberId: 'student_ffffffffffffffffffffffffffffffff',
@@ -227,7 +224,7 @@ describe('Super Admin member account management', () => {
       role: 'member',
       active: true,
     });
-    const auth = createAuthService({ userAccounts: accounts, accounts: legacyAccounts, resolver });
+    const auth = createAuthService({ userAccounts: accounts, resolver });
 
     await assert.rejects(
       auth.authenticateCredentials({ email: 'orphan@example.com', password: 'OrphanStrong!234' }),
@@ -311,12 +308,11 @@ describe('Super Admin member account management', () => {
     assert.equal((await accounts.findByMemberId('devansh')).memberId, 'devansh');
   });
 
-  test('rejects email conflicts from both canonical and legacy account collections', async () => {
-    const { service, legacyAccounts } = await createHarness();
-    await legacyAccounts.upsertAccount({
-      memberId: 'devansh',
-      email: 'legacy@example.com',
-      passwordHash: await bcrypt.hash('LegacyStrong!234', 12),
+  test('rejects an email already used by a staff account', async () => {
+    const { service, accounts } = await createHarness();
+    await accounts.create({
+      userId: 'staff-1', memberId: null, displayName: 'Hostel Admin', email: 'legacy@example.com',
+      passwordHash: await bcrypt.hash('StaffStrong!234', 12), role: 'admin', active: true,
     });
 
     await assert.rejects(
@@ -410,59 +406,27 @@ describe('canonical member accommodation roster', () => {
   });
 });
 
-describe('legacy authentication reconciliation', () => {
-  test('canonical account existence blocks an old legacy password and email fallback', async () => {
-    const accounts = new InMemoryUserAccountRepository();
-    const legacyAccounts = new InMemoryMemberAccountRepository();
-    const resolver = createStudentResolver({
-      repository: new InMemoryStudentRepository([student('gaurav', 'Gaurav', 0)]),
-    });
-    await accounts.create({
-      userId: 'user-gaurav',
-      memberId: 'gaurav',
-      displayName: 'Gaurav',
-      email: 'new@example.com',
-      passwordHash: await bcrypt.hash('Canonical!234', 12),
-      role: 'member',
-      active: true,
-    });
-    await legacyAccounts.upsertAccount({
-      memberId: 'gaurav',
-      email: 'old@example.com',
-      passwordHash: await bcrypt.hash('OldPassword!234', 12),
-      active: true,
-    });
-    const auth = createAuthService({ accounts: legacyAccounts, userAccounts: accounts, resolver });
-
-    await assert.rejects(
-      auth.authenticateCredentials({ email: 'old@example.com', password: 'OldPassword!234' }),
-      (error) => error.statusCode === 401,
-    );
-    const canonical = await auth.authenticateCredentials({ email: 'new@example.com', password: 'Canonical!234' });
-    assert.equal(canonical.userId, 'user-gaurav');
+describe('canonical-only sessions', () => {
+  test('a session cannot be minted without a canonical account identity', async () => {
+    await assert.rejects(createSessionToken('member', { memberId: GENERATED_STUDENT_ID }),
+      /canonical account identity/);
   });
 
-  test('canonical account existence invalidates legacy tokens for a generated student', async () => {
+  test('a session is rejected once its account is disabled', async () => {
     const accounts = new InMemoryUserAccountRepository();
-    const students = new InMemoryStudentRepository([
-      student(GENERATED_STUDENT_ID, 'Aarav Sen', 3),
-    ]);
-    const resolver = createStudentResolver({ repository: students });
-    await accounts.create({
-      userId: 'user-aarav',
-      memberId: GENERATED_STUDENT_ID,
-      displayName: 'Aarav Sen',
-      email: 'aarav@example.com',
-      passwordHash: await bcrypt.hash('Canonical!234', 12),
-      role: 'member',
-      active: true,
+    const resolver = createStudentResolver({
+      repository: new InMemoryStudentRepository([student(GENERATED_STUDENT_ID, 'Aarav Sen', 3)]),
     });
-    const legacyToken = await createSessionToken('member', { memberId: GENERATED_STUDENT_ID });
-
-    await assert.rejects(
-      verifySessionToken(legacyToken, { accounts, resolver }),
-      /Legacy member session has been revoked/,
-    );
+    await accounts.create({
+      userId: 'user-aarav', memberId: GENERATED_STUDENT_ID, displayName: 'Aarav Sen',
+      email: 'aarav@example.com', passwordHash: await bcrypt.hash('Canonical!234', 12),
+      role: 'member', active: true,
+    });
+    const token = await createSessionToken('member', { memberId: GENERATED_STUDENT_ID,
+      userId: 'user-aarav', sessionVersion: 0 });
+    assert.equal((await verifySessionToken(token, { accounts, resolver })).userId, 'user-aarav');
+    await accounts.setActive('user-aarav', false);
+    await assert.rejects(verifySessionToken(token, { accounts, resolver }), /inactive|revoked/);
   });
 });
 

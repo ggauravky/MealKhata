@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, test } from 'node:test';
 import request from 'supertest';
-import { createApp } from '../src/app.js';
 import { ROLES } from '../src/auth/permissions.js';
-import { createSessionToken, SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
-import { MEMBER_IDS } from '../src/config/members.js';
+import { SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
+import { MEMBER_IDS, createFixedStudentDirectory } from './helpers/fixtures.js';
 import { MEAL_PRICES } from '../src/meals/plateAllocation.constants.js';
 import { createMealService } from '../src/meals/meal.service.js';
 import { createMealRouter } from '../src/routes/meal.routes.js';
 import { InMemoryMealRepository } from './helpers/inMemoryMealRepository.js';
+import { testSessionToken, createTestApp } from './helpers/testAuth.js';
 
 const ORIGIN = 'http://localhost:5173';
 const NOW = new Date('2026-10-19T12:00:00.000Z');
@@ -26,7 +26,7 @@ const fakeSettlementService = {
   },
 };
 
-const service = createMealService({
+const service = createMealService({ students: createFixedStudentDirectory(),
   repository,
   timezone: 'Asia/Kolkata',
   settlementService: fakeSettlementService,
@@ -40,10 +40,10 @@ const meals = createMealRouter({
   settlements: fakeSettlementService,
 });
 
-const testApp = createApp({ meals });
+const testApp = createTestApp({ meals });
 
 async function cookieFor(role, memberId = null) {
-  return `${SESSION_COOKIE_NAME}=${await createSessionToken(role, { memberId })}`;
+  return `${SESSION_COOKIE_NAME}=${await testSessionToken(role, { memberId })}`;
 }
 
 beforeEach(() => {

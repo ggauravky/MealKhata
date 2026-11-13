@@ -34,7 +34,7 @@ The backup engine captures all business and operational collections:
 
 | Collection | Importance | Sensitivity |
 | :--- | :--- | :--- |
-| `member_accounts` | Critical | High (bcrypt password hashes) |
+| `app_initialization` | Critical | Low (one-time setup record) |
 | `meal_days` | Critical | Medium (roommate daily meal statuses) |
 | `monthly_meal_rates` | Critical | Medium (approved monthly meal prices) |
 | `payments` | Critical | High (payment ledger, UPI references) |

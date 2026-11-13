@@ -2,9 +2,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import request from 'supertest';
-import { createApp } from '../src/app.js';
 import { ROLES } from '../src/auth/permissions.js';
-import { createSessionToken, SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
+import { SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
 import { createRoomFeeService } from '../src/roomFees/roomFee.service.js';
 import {
   serializeFeePlan, serializeRoom, serializeRoomAssignment,
@@ -12,6 +11,7 @@ import {
 } from '../src/roomFees/roomFee.serializer.js';
 import { createRoomFeeRouter, createRoomRouter } from '../src/routes/roomFee.routes.js';
 import { InMemoryRoomFeeRepository } from './helpers/inMemoryRoomFeeRepository.js';
+import { testSessionToken, createTestApp } from './helpers/testAuth.js';
 
 const FOURTH = 'student_00000000000000000000000000000004';
 const FIFTH = 'student_00000000000000000000000000000005';
@@ -26,7 +26,7 @@ const students = [
 
 test('v3 Room Fee service fails closed without a student directory', () => {
   assert.throws(() => createRoomFeeService({
-    repository: new InMemoryRoomFeeRepository(), runtimeProfile: 'v3', students: null,
+    repository: new InMemoryRoomFeeRepository(), students: null,
   }), /student directory.*required/i);
 });
 
@@ -40,7 +40,7 @@ test('fee reconciliation preview keeps dynamic names on existing plans', async (
     },
   };
   const service = createRoomFeeService({ repository, students: directory,
-    runtimeProfile: 'v3', now: () => new Date('2026-11-06T12:00:00Z') });
+    now: () => new Date('2026-11-06T12:00:00Z') });
   await service.createFeePlan({ memberId: FOURTH, amountPaise: 90000,
     effectiveFromMonth: '2026-11', actorRole: 'superadmin' });
   const preview = await service.previewFeePlanReconciliation({ memberId: FOURTH,
@@ -81,11 +81,11 @@ test('Room Fee REST names remain dynamic through assignments, charges, payments 
   };
   const service = createRoomFeeService({ repository, students: directory,
     now: () => new Date('2026-11-07T12:00:00.000Z') });
-  const app = createApp({
+  const app = createTestApp({
     roomFees: createRoomFeeRouter({ service, broadcast: () => {} }),
     rooms: createRoomRouter({ service, broadcast: () => {} }),
   });
-  const cookie = `${SESSION_COOKIE_NAME}=${await createSessionToken(ROLES.ADMIN)}`;
+  const cookie = `${SESSION_COOKIE_NAME}=${await testSessionToken(ROLES.ADMIN)}`;
   const created = await request(app).post('/api/room-fees/rooms')
     .set('Origin', ORIGIN).set('Cookie', cookie)
     .send({ roomNumber: 'dyn-104', capacity: 2 });

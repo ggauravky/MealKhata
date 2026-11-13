@@ -5,20 +5,16 @@ import { HttpError } from '../utils/HttpError.js';
 import { DEFAULT_MEAL_STATUS, getMealPath, MEAL_TYPES } from './meal.constants.js';
 import { createDefaultMealDay } from './meal.defaults.js';
 import { mealRepository } from './meal.repository.js';
-import { serializeHistory, serializeLegacyMealSnapshot, serializeMealDay } from './meal.serializer.js';
+import { serializeHistory, serializeMealDay } from './meal.serializer.js';
 import {
   calculateMemberShareUnits,
   deriveParticipationStatuses,
   validatePlateAllocation,
 } from './plateAllocation.service.js';
 import { stayRepository } from '../stays/stay.repository.js';
-import { MEMBER_IDS } from '../config/members.js';
 import { studentResolver } from '../students/studentResolver.service.js';
 import { extractMealParticipantIds, normalizeParticipantIds } from './mealParticipants.js';
 import { resolvePhysicalPlateLimit } from './plateAllocation.constants.js';
-import { mealHistorySnapshotRepository } from './mealHistorySnapshot.repository.js';
-import { mealHistoricalCorrectionRepository } from './mealHistoricalCorrection.repository.js';
-import { resolveHistoricalMealAuthority } from './mealHistoricalCorrection.service.js';
 import { assertMemberNotCheckedOut } from './mealCheckoutGuard.js';
 
 const MAX_CONCURRENT_RETRIES = 12;
@@ -27,23 +23,25 @@ function isDuplicateKeyError(error) {
   return error?.code === 11000;
 }
 
+/** Every stored meal day must use the current dynamic-participant schema. */
+export function assertCurrentMealSchema(document) {
+  if (document && document.schemaVersion !== 3) {
+    throw new HttpError(503, 'Meal record uses an unsupported schema version.');
+  }
+  return document;
+}
+
 export function createMealService({
   repository = mealRepository,
   settlements = null,
   stays = null,
-  students = null,
-  snapshots = null,
-  corrections = null,
+  students = studentResolver,
   timezone = env.appTimezone,
-  runtimeProfile = env.runtimeProfile,
 } = {}) {
+  if (!students || typeof students.listEligibleOn !== 'function') {
+    throw new TypeError('Meal service requires a student directory');
+  }
   const listEligibleStudentIds = async (date) => {
-    if (!students) {
-      if (runtimeProfile === 'v3') {
-        throw new HttpError(503, 'Student registry is unavailable for v3 meals.');
-      }
-      return MEMBER_IDS;
-    }
     const eligibleStudents = await students.listEligibleOn(date);
     return eligibleStudents.map(({ studentId }) => studentId);
   };
@@ -56,20 +54,8 @@ export function createMealService({
     ? normalizeParticipantIds(document.participantOrder?.length ? document.participantOrder : extractMealParticipantIds(document))
     : listEligibleStudentIds(date);
 
-  const verifiedSnapshot = async (document) => resolveHistoricalMealAuthority(document, {
-    snapshots,
-    corrections: corrections ?? { listByDate: async () => [] },
-  });
-
   const serializeDay = async (document, date) => {
-    if (runtimeProfile === 'v3' && document && document.schemaVersion !== 3 && snapshots) {
-      return {
-        ...serializeLegacyMealSnapshot(await verifiedSnapshot(document), { timezone }),
-        ...(document.financialClassification ? { financialClassification: document.financialClassification } : {}),
-        ...(document.cutoverClassificationSource ? { cutoverClassificationSource: document.cutoverClassificationSource } : {}),
-        ...(document.importedFromLegacy ? { importedFromLegacy: true } : {}),
-      };
-    }
+    assertCurrentMealSchema(document);
     return serializeMealDay(document, date, {
       timezone,
       ...(document ? {} : { participants: await listEligibleStudentIds(date) }),
@@ -77,11 +63,7 @@ export function createMealService({
   };
 
   const runFinancialMutation = async (date, actorRole, work, proposedIds = []) => {
-    const previous = await repository.findByDate(date);
-    if (runtimeProfile === 'v3' && previous && previous.schemaVersion !== 3 && snapshots) {
-      await verifiedSnapshot(previous);
-      throw new HttpError(409, 'Historical meal correction requires an explicit revision-aware correction.');
-    }
+    const previous = assertCurrentMealSchema(await repository.findByDate(date));
     const memberIds = normalizeParticipantIds([
       ...(previous ? extractMealParticipantIds(previous) : await listEligibleStudentIds(date)),
       ...proposedIds,
@@ -90,11 +72,7 @@ export function createMealService({
       return repository.executeFinancialMutation({ date, memberIds, actorRole }, async ({ session, guard }) => work({
         session,
         guard: async () => {
-          const current = await repository.findByDate(date, { session });
-          if (runtimeProfile === 'v3' && current && current.schemaVersion !== 3 && snapshots) {
-            await verifiedSnapshot(current);
-            throw new HttpError(409, 'Historical meal correction requires an explicit revision-aware correction.');
-          }
+          const current = assertCurrentMealSchema(await repository.findByDate(date, { session }));
           const currentIds = current
             ? extractMealParticipantIds(current)
             : await listEligibleStudentIds(date);
@@ -109,40 +87,19 @@ export function createMealService({
     async getDay(date) {
       try {
         const document = await repository.findByDate(date);
-        return serializeDay(document, date);
+        return await serializeDay(document, date);
       } catch (error) {
         if (error instanceof HttpError) throw error;
-        if (/historical meal (?:correction )?snapshot/i.test(error.message)) {
-          throw new HttpError(503, error.message, { cause: error });
-        }
         throw new HttpError(503, 'Meal data is temporarily unavailable.', { cause: error });
       }
     },
 
     async getHistory(date, limit) {
       try {
-        const document = await repository.findByDate(date);
-        if (runtimeProfile === 'v3' && document && document.schemaVersion !== 3 && snapshots) await verifiedSnapshot(document);
-        const history = serializeHistory(document, date, limit);
-        if (runtimeProfile === 'v3' && document && document.schemaVersion !== 3 && corrections) {
-          const correctionEvents = (await corrections.listByDate(date)).map((record) => ({
-            changedAt: new Date(record.createdAt).toISOString(),
-            actorRole: record.actorRole,
-            actorMemberId: null,
-            mealType: record.mealType,
-            changeType: record.operation,
-            reason: record.reason,
-            revision: record.revision,
-            type: 'historical_correction',
-          }));
-          history.items = [...history.items, ...correctionEvents]
-            .sort((a, b) => b.changedAt.localeCompare(a.changedAt)).slice(0, limit);
-        }
-        return history;
+        const document = assertCurrentMealSchema(await repository.findByDate(date));
+        return serializeHistory(document, date, limit);
       } catch (error) {
-        if (/historical meal (?:correction )?snapshot/i.test(error.message)) {
-          throw new HttpError(503, error.message, { cause: error });
-        }
+        if (error instanceof HttpError) throw error;
         throw new HttpError(503, 'Meal history is temporarily unavailable.', { cause: error });
       }
     },
@@ -202,7 +159,6 @@ export function createMealService({
           if (!currentDocument) {
             const newDocument = await createDefaultDayForDate(date);
             if (!Object.hasOwn(newDocument.meals[mealType], memberId)) {
-              if (!students) throw new HttpError(400, 'Invalid member.');
               if (typeof students.assertKnown === 'function') await students.assertKnown(memberId);
               throw new HttpError(409, 'Student is not eligible for meals on this date.');
             }
@@ -672,6 +628,4 @@ export function createMealService({
 export const mealService = createMealService({
   stays: stayRepository,
   students: studentResolver,
-  snapshots: mealHistorySnapshotRepository,
-  corrections: mealHistoricalCorrectionRepository,
 });

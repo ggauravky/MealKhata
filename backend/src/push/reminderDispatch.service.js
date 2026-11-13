@@ -44,7 +44,7 @@ export function createReminderDispatchService({
   subscriptions = pushSubscriptionRepository,
   deliveries = pushDeliveryRepository,
   push = webPushService,
-  resolver = env.runtimeProfile === 'v3' ? studentResolver : null,
+  resolver = studentResolver,
   timezone = env.appTimezone,
 } = {}) {
   return Object.freeze({

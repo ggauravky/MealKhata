@@ -6,11 +6,8 @@ export const socket = io(socketOrigin, {
   autoConnect: false,
   path: '/socket.io',
   transports: ['websocket', 'polling'],
+  // Each (re)connection attempt fetches a fresh short-lived ticket for the signed-in session.
   auth: (callback) => {
-    if (import.meta.env.VITE_RUNTIME_PROFILE !== 'v3') {
-      callback({});
-      return;
-    }
     fetch('/api/auth/socket-ticket', { credentials: 'same-origin', cache: 'no-store' })
       .then(async response => response.ok ? (await response.json()).ticket : null)
       .then(ticket => callback({ ticket }))

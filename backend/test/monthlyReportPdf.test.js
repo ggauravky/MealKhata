@@ -1,12 +1,11 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, test } from 'node:test';
 import request from 'supertest';
-import { createApp } from '../src/app.js';
 import { ROLES } from '../src/auth/permissions.js';
-import { createSessionToken, SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
+import { SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
 import { createMonthlyRateService } from '../src/billing/monthlyRate.service.js';
 import { createMonthMealService } from '../src/calendar/monthMeal.service.js';
-import { MEMBER_IDS } from '../src/config/members.js';
+import { MEMBER_IDS, createFixedStudentDirectory } from './helpers/fixtures.js';
 import { createPaymentSummaryService } from '../src/payments/paymentSummary.service.js';
 import { createReportService } from '../src/reports/report.service.js';
 import { createMonthlyReportExportService } from '../src/reports/monthlyReportExport.service.js';
@@ -17,6 +16,7 @@ import { InMemoryMealRepository } from './helpers/inMemoryMealRepository.js';
 import { InMemoryMonthlyRateRepository } from './helpers/inMemoryMonthlyRateRepository.js';
 import { InMemoryMonthlySettlementRepository } from './helpers/inMemoryMonthlySettlementRepository.js';
 import { InMemoryPaymentRepository } from './helpers/inMemoryPaymentRepository.js';
+import { testSessionToken, createTestApp } from './helpers/testAuth.js';
 
 const NOW = new Date('2026-10-15T12:00:00.000Z');
 const TIMEZONE = 'Asia/Kolkata';
@@ -43,7 +43,7 @@ describe('Monthly Report PDF Export & Canonical DTO', () => {
     paymentRepo = new InMemoryPaymentRepository();
     settlementRepo = new InMemoryMonthlySettlementRepository();
 
-    monthMealService = createMonthMealService({ repository: mealRepo, timezone: TIMEZONE });
+    monthMealService = createMonthMealService({ students: createFixedStudentDirectory(), repository: mealRepo, timezone: TIMEZONE });
     rateService = createMonthlyRateService({ repository: rateRepo });
     reportService = createReportService({
       meals: monthMealService,
@@ -80,11 +80,11 @@ describe('Monthly Report PDF Export & Canonical DTO', () => {
       pdfService,
     });
 
-    app = createApp({
+    app = createTestApp({
       reports: reportRouter,
     });
 
-    const memberToken = await createSessionToken(ROLES.MEMBER, {
+    const memberToken = await testSessionToken(ROLES.MEMBER, {
       memberId: 'gaurav',
     });
     memberCookie = `${SESSION_COOKIE_NAME}=${memberToken}`;

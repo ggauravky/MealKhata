@@ -1,5 +1,5 @@
 import { ArrowLeft, Eye, EyeOff } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { MealKhataLogo } from '../components/brand/MealKhataLogo.jsx';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card.jsx';
@@ -21,6 +21,17 @@ export function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [setupPending, setSetupPending] = useState(false);
+
+  // Before the one-time owner setup there is no account to sign in with; say so plainly.
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch('/api/ready', { signal: controller.signal, cache: 'no-store' })
+      .then((response) => response.json().catch(() => null))
+      .then((body) => setSetupPending(body?.checks?.database === true && body.checks.initialized === false))
+      .catch(() => {});
+    return () => controller.abort();
+  }, []);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -42,7 +53,9 @@ export function LoginPage() {
       setError(
         requestError instanceof ApiError && requestError.status === 401
           ? 'Invalid email or password.'
-          : 'Login could not be completed. Please try again.',
+          : requestError instanceof ApiError && requestError.status === 429
+            ? requestError.message
+            : 'Login could not be completed. Please try again.',
       );
       setSubmitting(false);
     }
@@ -182,6 +195,15 @@ export function LoginPage() {
                     </button>
                   </div>
                 </div>
+
+                {setupPending && (
+                  <div
+                    role="status"
+                    className="rounded-md border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200"
+                  >
+                    MealKhata has not been set up yet. The owner must complete the one-time Super Admin setup before anyone can sign in.
+                  </div>
+                )}
 
                 {error && (
                   <div

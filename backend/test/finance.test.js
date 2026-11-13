@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, test } from 'node:test';
 import request from 'supertest';
-import { createApp } from '../src/app.js';
 import { ROLES } from '../src/auth/permissions.js';
-import { createSessionToken, SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
-import { MEMBER_IDS } from '../src/config/members.js';
+import { SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
+import { MEMBER_IDS } from './helpers/fixtures.js';
 import { createFinancialOverviewService } from '../src/finance/financialOverview.service.js';
 import {
   reconcileMemberFinances,
@@ -12,6 +11,7 @@ import {
   FinancialReconciliationError,
 } from '../src/finance/financialReconciliation.service.js';
 import { createFinanceRouter } from '../src/routes/finance.routes.js';
+import { testSessionToken, createTestApp } from './helpers/testAuth.js';
 
 const ORIGIN = 'http://localhost:5173';
 const CURRENT_MONTH = '2026-10';
@@ -297,7 +297,7 @@ function createMockExpenses() {
 }
 
 async function cookieFor(role, memberId = null) {
-  return `${SESSION_COOKIE_NAME}=${await createSessionToken(role, { memberId })}`;
+  return `${SESSION_COOKIE_NAME}=${await testSessionToken(role, { memberId })}`;
 }
 
 describe('MealKhata 2.0: Unified Financial Overview & Reporting (Phase 3)', () => {
@@ -315,7 +315,7 @@ describe('MealKhata 2.0: Unified Financial Overview & Reporting (Phase 3)', () =
     });
 
     financeRouter = createFinanceRouter({ overviewService });
-    testApp = createApp({ finance: financeRouter });
+    testApp = createTestApp({ finance: financeRouter });
   });
 
   describe('Canonical Member Financial Model (Section 6, 7 & 8)', () => {
@@ -546,7 +546,7 @@ describe('MealKhata 2.0: Unified Financial Overview & Reporting (Phase 3)', () =
           return { allocation: { creditAllocationId: 'allocation-1' } };
         },
       };
-      const protectedApp = createApp({
+      const protectedApp = createTestApp({
         finance: createFinanceRouter({ overviewService, credits }),
       });
       const payload = {

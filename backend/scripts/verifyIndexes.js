@@ -1,77 +1,11 @@
 import mongoose from 'mongoose';
 import { env } from '../src/config/env.js';
 import { connectDatabase, disconnectDatabase } from '../src/config/db.js';
-import { MealDay } from '../src/meals/meal.model.js';
-import { MealHistorySnapshot } from '../src/meals/mealHistorySnapshot.model.js';
-import { MealHistoricalCorrection } from '../src/meals/mealHistoricalCorrection.model.js';
-import { MonthlyMealRate } from '../src/billing/monthlyRate.model.js';
-import { Payment } from '../src/payments/payment.model.js';
-import { PaymentSettings } from '../src/payments/paymentSettings.model.js';
-import { MonthlySettlement } from '../src/settlement/monthlySettlement.model.js';
-import { MemberAccount } from '../src/auth/memberAccount.model.js';
-import { UserAccount } from '../src/auth/userAccount.model.js';
-import { MemberAccountAudit } from '../src/members/memberAccountAudit.model.js';
-import { ReminderSettings } from '../src/settings/reminderSettings.model.js';
-import { PushSubscription } from '../src/push/pushSubscription.model.js';
-import { PushDelivery } from '../src/push/pushDelivery.model.js';
-import { Room } from '../src/roomFees/room.model.js';
-import { RoomAssignment } from '../src/roomFees/roomAssignment.model.js';
-import { RoomFeePlan } from '../src/roomFees/roomFeePlan.model.js';
-import { RoomFeeScheduleState } from '../src/roomFees/roomFeeScheduleState.model.js';
-import { RoomCharge } from '../src/roomFees/roomCharge.model.js';
-import { RoomPayment } from '../src/roomFees/roomPayment.model.js';
-import { RoomPaymentSettings } from '../src/roomFees/roomPaymentSettings.model.js';
-import { Expense } from '../src/expenses/expense.model.js';
-import { ExpenseReimbursement } from '../src/expenses/expenseReimbursement.model.js';
-import {
-  HostelStay,
-  HostelDepositAccount,
-  HostelDepositTransaction,
-  HostelClearance,
-} from '../src/stays/stay.model.js';
-import { CreditAllocation, PaymentReclassification, UnallocatedCredit } from '../src/stays/paymentReclassification.model.js';
-import { PaymentReferenceClaim } from '../src/finance/paymentReference.model.js';
-import { CreditObligationState } from '../src/finance/creditObligationState.model.js';
-import { Student } from '../src/students/student.model.js';
-import { StudentAuditEvent } from '../src/students/studentAuditEvent.model.js';
-import { SystemSettings } from '../src/settings/systemSettings.model.js';
+import '../src/config/models.js';
+import '../src/config/appInitialization.model.js';
 
-export const MONITORED_MODELS = [
-  MealDay,
-  MealHistorySnapshot,
-  MealHistoricalCorrection,
-  MonthlyMealRate,
-  Payment,
-  PaymentSettings,
-  MonthlySettlement,
-  MemberAccount,
-  UserAccount,
-  MemberAccountAudit,
-  ReminderSettings,
-  PushSubscription,
-  PushDelivery,
-  Room,
-  RoomAssignment,
-  RoomFeePlan,
-  RoomFeeScheduleState,
-  RoomCharge,
-  RoomPayment,
-  RoomPaymentSettings,
-  Expense,
-  ExpenseReimbursement,
-  HostelStay,
-  HostelDepositAccount,
-  HostelDepositTransaction,
-  HostelClearance,
-  PaymentReclassification,
-  UnallocatedCredit,
-  CreditAllocation,
-  CreditObligationState,
-  PaymentReferenceClaim,
-  Student,
-  StudentAuditEvent,
-  SystemSettings,
-];
+/** Every registered model is monitored, so new collections are covered automatically. */
+export const MONITORED_MODELS = mongoose.modelNames().sort().map((name) => mongoose.model(name));
 
 function normalizeIndexKey(keyObj) {
   return Object.entries(keyObj)

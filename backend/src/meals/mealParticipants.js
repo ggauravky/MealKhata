@@ -1,6 +1,4 @@
 import { assertSafeStudentId } from '../students/studentId.js';
-import { env } from '../config/env.js';
-import { MEMBER_IDS } from '../config/members.js';
 import {
   MAX_MEMBER_SHARE_UNITS,
   MAX_PHYSICAL_PLATES,
@@ -47,11 +45,11 @@ export function normalizeParticipantIds(participants = []) {
   return result;
 }
 
-export function resolveMealParticipants(participants, { runtimeProfile = env.runtimeProfile } = {}) {
-  if (participants === undefined && runtimeProfile === 'v3') {
-    throw new TypeError('Explicit participants are required for v3 meal calculations');
+export function resolveMealParticipants(participants) {
+  if (participants === undefined) {
+    throw new TypeError('Explicit participants are required for meal calculations');
   }
-  return normalizeParticipantIds(participants === undefined ? MEMBER_IDS : participants);
+  return normalizeParticipantIds(participants);
 }
 
 export function validateStudentKeyedRecord(value, fieldName = 'student-keyed record') {

@@ -87,15 +87,11 @@ export async function createSessionToken(
   if (!principal) {
     throw new Error('Cannot create a session for an unsupported role');
   }
-  if (env.runtimeProfile === 'v3' && (!userId || !Number.isSafeInteger(sessionVersion)
-    || sessionVersion < 0)) {
-    throw new Error('MealKhata v3 requires a canonical account session');
+  if (!userId || !Number.isSafeInteger(sessionVersion) || sessionVersion < 0) {
+    throw new Error('Sessions require a canonical account identity');
   }
 
-  const payload = { role, sessionVersion };
-  if (userId) {
-    payload.userId = userId;
-  }
+  const payload = { role, sessionVersion, userId };
   if (role === ROLES.MEMBER) {
     payload.memberId = memberId;
     if (typeof displayName === 'string' && displayName.trim()) {
@@ -118,8 +114,7 @@ export async function createSessionToken(
 
 export async function verifySessionToken(
   token,
-  { accounts = userAccountRepository, resolver = studentResolver,
-    canonicalOnly = env.canonicalOnlyAuth, runtimeProfile = env.runtimeProfile } = {},
+  { accounts = userAccountRepository, resolver = studentResolver } = {},
 ) {
   const { payload } = await jwtVerify(token, getSecretKey(), {
     algorithms: [ALGORITHM],
@@ -130,102 +125,53 @@ export async function verifySessionToken(
   if (!isAuthenticatedRole(payload.role)) {
     throw new Error('Unsupported session role');
   }
-  const requireCanonical = canonicalOnly === true || runtimeProfile === 'v3';
-  if (requireCanonical && (!payload.userId || !accounts)) {
-    throw new Error('Canonical session requires a userId and account repository');
+  if (!payload.userId || !accounts) {
+    throw new Error('Session requires a userId and account repository');
   }
-  if (requireCanonical && (!Number.isSafeInteger(payload.sessionVersion) || payload.sessionVersion < 0)) {
-    throw new Error('Canonical session requires a valid session version');
+  if (!Number.isSafeInteger(payload.sessionVersion) || payload.sessionVersion < 0) {
+    throw new Error('Session requires a valid session version');
   }
 
   const expiresAt = typeof payload.exp === 'number'
     ? new Date(payload.exp * 1000).toISOString()
     : null;
 
-  // If userId is in token and account repository is provided, verify against DB
-  if (payload.userId && accounts) {
-    const user = await accounts.findByUserId(payload.userId);
-    if (!user) {
-      throw new Error('User account not found');
-    }
-    if (user.active === false) {
-      throw new Error('User account is inactive');
-    }
-    if (payload.role !== user.role || payload.memberId !== (user.memberId ?? undefined)) {
-      throw new Error('Session identity does not match canonical account');
-    }
-    if (typeof payload.sessionVersion === 'number' && user.sessionVersion !== payload.sessionVersion) {
-      throw new Error('Session has been revoked');
-    }
-
-    if (user.role === ROLES.MEMBER) {
-      try {
-        assertSafeStudentId(user.memberId);
-      } catch {
-        throw new Error('User account student identity is invalid');
-      }
-      await resolver.assertKnown(user.memberId);
-    }
-
-    const principal = getPrincipalForRole(user.role, user.memberId);
-    if (!principal) {
-      throw new Error('User account role is invalid');
-    }
-    if (payload.sub !== principal) throw new Error('Session principal does not match canonical account');
-    return {
-      authenticated: true,
-      role: user.role,
-      memberId: user.memberId,
-      userId: user.userId,
-      displayName: user.displayName,
-      sessionVersion: user.sessionVersion,
-      principal,
-      expiresAt,
-    };
+  const user = await accounts.findByUserId(payload.userId);
+  if (!user) {
+    throw new Error('User account not found');
+  }
+  if (user.active === false) {
+    throw new Error('User account is inactive');
+  }
+  if (payload.role !== user.role || payload.memberId !== (user.memberId ?? undefined)) {
+    throw new Error('Session identity does not match canonical account');
+  }
+  if ((user.sessionVersion ?? 0) !== payload.sessionVersion) {
+    throw new Error('Session has been revoked');
   }
 
-  // Fallback for tokens minted without userId (e.g. pure unit tests without DB)
-  if (payload.role === ROLES.MEMBER) {
-    const memberId = payload.memberId;
+  if (user.role === ROLES.MEMBER) {
     try {
-      assertSafeStudentId(memberId);
+      assertSafeStudentId(user.memberId);
     } catch {
-      throw new Error('Session memberId is invalid');
+      throw new Error('User account student identity is invalid');
     }
-
-    const expectedPrincipal = getPrincipalForRole(ROLES.MEMBER, memberId);
-    if (payload.sub !== expectedPrincipal) {
-      throw new Error('Session principal does not match member');
-    }
-
-    if (accounts && await accounts.findByMemberId(memberId)) {
-      throw new Error('Legacy member session has been revoked');
-    }
-
-    return {
-      authenticated: true,
-      role: ROLES.MEMBER,
-      memberId,
-      displayName: typeof payload.displayName === 'string' && payload.displayName.trim()
-        ? payload.displayName.trim().slice(0, 100)
-        : memberId,
-      principal: expectedPrincipal,
-      expiresAt,
-    };
+    await resolver.assertKnown(user.memberId);
   }
 
-  const principal = getPrincipalForRole(payload.role);
-
-  if (payload.sub !== principal) {
-    throw new Error('Session principal does not match role');
+  const principal = getPrincipalForRole(user.role, user.memberId);
+  if (!principal) {
+    throw new Error('User account role is invalid');
   }
-
+  if (payload.sub !== principal) throw new Error('Session principal does not match canonical account');
   return {
     authenticated: true,
-    role: payload.role,
-    memberId: null,
+    role: user.role,
+    memberId: user.memberId,
+    userId: user.userId,
+    displayName: user.displayName,
+    sessionVersion: user.sessionVersion,
     principal,
     expiresAt,
   };
 }
-

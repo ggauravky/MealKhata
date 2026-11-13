@@ -18,6 +18,7 @@ const ExpensesPage = lazy(() => import('./pages/ExpensesPage.jsx').then((module)
 const AdminExpensesPage = lazy(() => import('./pages/AdminExpensesPage.jsx').then((module) => ({ default: module.AdminExpensesPage })));
 const MyStayPage = lazy(() => import('./pages/MyStayPage.jsx').then((module) => ({ default: module.MyStayPage })));
 const AdminStaysPage = lazy(() => import('./pages/AdminStaysPage.jsx').then((module) => ({ default: module.AdminStaysPage })));
+const AdminSettingsPage = lazy(() => import('./pages/AdminSettingsPage.jsx').then((module) => ({ default: module.AdminSettingsPage })));
 const AdminMembersPage = lazy(() => import('./pages/AdminMembersPage.jsx').then((module) => ({ default: module.AdminMembersPage })));
 
 export default function App() {
@@ -38,6 +39,9 @@ export default function App() {
             <Route path="admin/expenses" element={<AdminExpensesPage />} />
             <Route path="admin/stays" element={<AdminStaysPage />} />
             <Route path="admin/members" element={<AdminMembersPage />} />
+          </Route>
+          <Route element={<ProtectedRoute allowedRoles={['superadmin']} />}>
+            <Route path="admin/settings" element={<AdminSettingsPage />} />
           </Route>
         </Route>
         <Route path="login" element={<LoginPage />} />

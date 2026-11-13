@@ -1,4 +1,3 @@
-import { MEMBER_NAMES } from '../config/members.js';
 import { ROOM_CHARGE_STATUSES, ROOM_PAYMENT_STATUSES, ROOM_PAYMENT_SUMMARY_STATUSES } from './roomFee.constants.js';
 
 function serializeDate(value) {
@@ -10,7 +9,7 @@ function resolveStudentName(memberId, studentNames, recordedName = null) {
   if (typeof recordedName === 'string' && recordedName.trim()) return recordedName;
   const currentName = studentNames?.get(memberId);
   return typeof currentName === 'string' && currentName.trim()
-    ? currentName : MEMBER_NAMES[memberId] ?? memberId;
+    ? currentName : memberId;
 }
 
 export function computeChargeFinancials({ charge, payments = [], now = new Date() }) {

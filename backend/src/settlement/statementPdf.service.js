@@ -1,5 +1,4 @@
 import PDFDocument from 'pdfkit';
-import { MEMBER_NAMES } from '../config/members.js';
 import { formatPlateFraction } from '../meals/plateAllocation.service.js';
 
 function formatRupees(paise) {
@@ -155,7 +154,7 @@ export function generateSettlementPdf(settlement) {
           remainingAmountPaise: 0,
         };
 
-        const name = m.displayName || MEMBER_NAMES[key] || key;
+        const name = m.displayName || key;
         const morningPart = m.morningParticipationCount ?? m.morningCount ?? 0;
         const nightPart = m.nightParticipationCount ?? m.nightCount ?? 0;
         const morningUnits = m.morningShareUnits ?? (morningPart * 6);

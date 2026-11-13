@@ -2,10 +2,9 @@ import assert from 'node:assert/strict';
 import { beforeEach, describe, test } from 'node:test';
 import bcrypt from 'bcryptjs';
 import request from 'supertest';
-import { createApp } from '../src/app.js';
 import { createAuthService } from '../src/auth/auth.service.js';
 import { ROLES } from '../src/auth/permissions.js';
-import { createSessionToken, SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
+import { SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
 import { createAuthRouter } from '../src/routes/auth.routes.js';
 import { createMealRouter } from '../src/routes/meal.routes.js';
 import { createMealService } from '../src/meals/meal.service.js';
@@ -18,14 +17,14 @@ import { createPaymentSettingsService } from '../src/payments/paymentSettings.se
 import { createPaymentSummaryService } from '../src/payments/paymentSummary.service.js';
 import { createReminderSettingsRouter } from '../src/routes/reminderSettings.routes.js';
 import { createReminderSettingsService } from '../src/settings/reminderSettings.service.js';
-import { seedMemberAccounts, validateMemberSeedConfigs } from '../scripts/seedMemberAccounts.js';
-import { InMemoryMemberAccountRepository } from './helpers/inMemoryMemberAccountRepository.js';
 import { InMemoryMealRepository } from './helpers/inMemoryMealRepository.js';
 import { InMemoryMonthlyRateRepository } from './helpers/inMemoryMonthlyRateRepository.js';
 import { InMemoryPaymentRepository } from './helpers/inMemoryPaymentRepository.js';
 import { InMemoryPaymentSettingsRepository } from './helpers/inMemoryPaymentSettingsRepository.js';
 import { InMemoryReminderSettingsRepository } from './helpers/inMemoryReminderSettingsRepository.js';
 import { TEST_CREDENTIALS } from './setup-env.js';
+import { testSessionToken, createTestApp, testAccounts } from './helpers/testAuth.js';
+import { createFixedStudentDirectory } from './helpers/fixtures.js';
 
 const ORIGIN = 'http://localhost:5173';
 const NOW = new Date('2026-09-10T12:00:00.000Z');
@@ -45,6 +44,11 @@ const MEMBER_HASHES = Object.freeze({
   gaurav: await bcrypt.hash(MEMBER_PASSWORDS.gaurav, 12),
   nikhil: await bcrypt.hash(MEMBER_PASSWORDS.nikhil, 12),
   devansh: await bcrypt.hash(MEMBER_PASSWORDS.devansh, 12),
+});
+
+const STAFF_HASHES = Object.freeze({
+  admin: await bcrypt.hash(TEST_CREDENTIALS.admin.password, 12),
+  superadmin: await bcrypt.hash(TEST_CREDENTIALS.superadmin.password, 12),
 });
 
 const MEMBER_EMAILS = Object.freeze({
@@ -81,26 +85,17 @@ class MutableReportService {
 }
 
 function setupTestEnvironment() {
-  const memberAccountRepo = new InMemoryMemberAccountRepository([
-    {
-      memberId: 'gaurav',
-      email: MEMBER_EMAILS.gaurav,
-      passwordHash: MEMBER_HASHES.gaurav,
-      active: true,
-    },
-    {
-      memberId: 'nikhil',
-      email: MEMBER_EMAILS.nikhil,
-      passwordHash: MEMBER_HASHES.nikhil,
-      active: true,
-    },
-    {
-      memberId: 'devansh',
-      email: MEMBER_EMAILS.devansh,
-      passwordHash: MEMBER_HASHES.devansh,
-      active: true,
-    },
-  ]);
+  // Canonical accounts for three students plus one Admin and one Super Admin.
+  testAccounts.reset();
+  for (const memberId of Object.keys(MEMBER_PASSWORDS)) {
+    testAccounts.create({ userId: `phase7-${memberId}`, memberId, displayName: memberId,
+      email: MEMBER_EMAILS[memberId], passwordHash: MEMBER_HASHES[memberId], role: 'member', active: true });
+  }
+  testAccounts.create({ userId: 'phase7-admin', memberId: null, displayName: 'Household Admin',
+    email: TEST_CREDENTIALS.admin.email, passwordHash: STAFF_HASHES.admin, role: 'admin', active: true });
+  testAccounts.create({ userId: 'phase7-superadmin', memberId: null, displayName: 'Super Admin',
+    email: TEST_CREDENTIALS.superadmin.email, passwordHash: STAFF_HASHES.superadmin, role: 'superadmin', active: true });
+  const memberAccountRepo = testAccounts;
 
   const mealRepo = new InMemoryMealRepository();
   const billingRepo = new InMemoryMonthlyRateRepository();
@@ -108,10 +103,10 @@ function setupTestEnvironment() {
   const paymentSettingsRepo = new InMemoryPaymentSettingsRepository();
   const reminderSettingsRepo = new InMemoryReminderSettingsRepository();
 
-  const authService = createAuthService({ accounts: memberAccountRepo });
+  const authService = createAuthService({ userAccounts: testAccounts, resolver: createFixedStudentDirectory() });
   const auth = createAuthRouter({ service: authService });
 
-  const mealService = createMealService({ repository: mealRepo, timezone: 'Asia/Kolkata' });
+  const mealService = createMealService({ students: createFixedStudentDirectory(), repository: mealRepo, timezone: 'Asia/Kolkata' });
   const meals = createMealRouter({
     service: mealService,
     broadcast: () => {},
@@ -152,7 +147,7 @@ function setupTestEnvironment() {
     broadcast: () => {},
   });
 
-  const app = createApp({
+  const app = createTestApp({
     auth,
     meals,
     billing,
@@ -183,66 +178,9 @@ async function cookieFor(role, memberId = null) {
   const displayName = memberId
     ? `${memberId.slice(0, 1).toUpperCase()}${memberId.slice(1)}`
     : null;
-  const token = await createSessionToken(role, { memberId, displayName });
+  const token = await testSessionToken(role, { memberId, displayName });
   return `${SESSION_COOKIE_NAME}=${token}`;
 }
-
-describe('Phase 7: Member Account Seeding', () => {
-  test('validates seed configuration requirements and constraints', () => {
-    assert.throws(
-      () => validateMemberSeedConfigs([
-        { memberId: 'gaurav', email: 'not-an-email', passwordHash: MEMBER_HASHES.gaurav },
-      ]),
-      /Invalid email address/,
-    );
-
-    assert.throws(
-      () => validateMemberSeedConfigs([
-        { memberId: 'gaurav', email: 'valid@example.com', passwordHash: 'not-bcrypt-cost-12' },
-      ]),
-      /cost 12/,
-    );
-
-    assert.throws(
-      () => validateMemberSeedConfigs(
-        [
-          { memberId: 'gaurav', email: 'admin@mealkhata.local', passwordHash: MEMBER_HASHES.gaurav },
-          { memberId: 'nikhil', email: 'nikhil@example.com', passwordHash: MEMBER_HASHES.nikhil },
-          { memberId: 'devansh', email: 'devansh@example.com', passwordHash: MEMBER_HASHES.devansh },
-        ],
-        { env: { ADMIN_EMAIL: 'admin@mealkhata.local' } },
-      ),
-      /Member email cannot match admin/,
-    );
-
-    assert.throws(
-      () => validateMemberSeedConfigs([
-        { memberId: 'gaurav', email: 'same@example.com', passwordHash: MEMBER_HASHES.gaurav },
-        { memberId: 'nikhil', email: 'same@example.com', passwordHash: MEMBER_HASHES.nikhil },
-        { memberId: 'devansh', email: 'devansh@example.com', passwordHash: MEMBER_HASHES.devansh },
-      ]),
-      /Duplicate member email/,
-    );
-  });
-
-  test('seedMemberAccounts is idempotent and creates exactly three accounts', async () => {
-    const repo = new InMemoryMemberAccountRepository();
-    const members = [
-      { memberId: 'gaurav', email: MEMBER_EMAILS.gaurav, passwordHash: MEMBER_HASHES.gaurav },
-      { memberId: 'nikhil', email: MEMBER_EMAILS.nikhil, passwordHash: MEMBER_HASHES.nikhil },
-      { memberId: 'devansh', email: MEMBER_EMAILS.devansh, passwordHash: MEMBER_HASHES.devansh },
-    ];
-
-    const firstRun = await seedMemberAccounts({ members, repository: repo, env: process.env });
-    assert.equal(firstRun.length, 3);
-
-    const secondRun = await seedMemberAccounts({ members, repository: repo, env: process.env });
-    assert.equal(secondRun.length, 3);
-
-    const all = await repo.findAll();
-    assert.equal(all.length, 3);
-  });
-});
 
 describe('Phase 7: Authentication & Session Identity', () => {
   test('all three member accounts can log in with their separate credentials', async () => {

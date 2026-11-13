@@ -2,13 +2,11 @@
 
 **Meals tracked. Bills sorted.**
 
-MealKhata is a private meal tracking and shared-accounting progressive web application (PWA) with a MongoDB-managed student roster. Gaurav, Nikhil and Devansh retain their original historical IDs; Super Admins can add further students without code changes.
+MealKhata is a private hostel and mess management progressive web application (PWA). Every student, account and record lives in MongoDB; there are no built-in students and no demo data.
 
-## MealKhata 3.0 release candidate
+## First-time setup
 
-Super Admin Student Management (`/admin/members`) supports optional login provisioning, meal eligibility, archive/reactivation and historical identity lookup. Saved historical meals retain their original participants, shares, prices, costs and audit authority. A separately configured financial start date controls fresh operational dues; old historical meals remain visible without creating new unpaid balances.
-
-The v3 migration tooling is currently restricted to **local isolated-test replica sets**. See [the migration rehearsal](./docs/migrations/v3-blue-green.md) and [cutover and rollback checklist](./docs/V3_CUTOVER_AND_ROLLBACK.md). No production migration, deployment or financial start date is implied by this branch.
+A new database is set up once by the owner with a single command that creates the only Super Admin and the system settings. After that, everything — students, logins, administrators, meals, rooms, stays, payments, expenses and reports — is managed in the web app. See [`docs/SETUP.md`](./docs/SETUP.md).
 
 ---
 
@@ -251,8 +249,9 @@ npm install
 # 2. Setup local backend configuration
 copy backend\.env.example backend\.env
 
-# 3. Configure a local MongoDB replica set and canonical account credentials
-#    in an isolated development database; see backend/.env.example.
+# 3. Point MONGODB_URI at a local replica set database (never production), then
+#    create the first Super Admin once:
+npm run setup:admin -- --email you@example.com --start-date 2026-11-01
 
 # 4. Start concurrent development servers
 npm run dev
@@ -271,6 +270,7 @@ MealKhata includes non-destructive operational and maintenance scripts:
 
 | Command | Purpose |
 | :--- | :--- |
+| `npm run setup:admin -- --email <email> --start-date <YYYY-MM-DD>` | One-time owner command: creates the only Super Admin and system settings in the database named by `MONGODB_URI`. Refuses to run twice. |
 | `npm run release:check` | Orchestrates all release gates: lint, tests, build, dual-mode verification, security audit, and performance baseline. |
 | `npm run perf:check` | Benchmarks representative read endpoints against a local test dataset, enforcing a p95 $< 250\text{ ms}$ threshold. |
 | `npm run release:smoke` | Performs a credential-free read-only smoke test against a running deployment target. |
@@ -281,7 +281,6 @@ MealKhata includes non-destructive operational and maintenance scripts:
 | `npm run db:backup:verify -- <file>` | Decrypts and verifies backup archive manifest, GCM auth tag, and SHA-256 payload checksum. |
 | `npm run db:restore -- <file>` | Restores a verified backup only to a local replica set with `RESTORE_MONGODB_URI` and `RESTORE_TARGET_CLASSIFICATION=isolated-test`. |
 | `npm run e2e:browser` | Runs Chromium acceptance against an automatically started isolated MongoDB replica set, Express API and React frontend. |
-| `npm run migrate:v3 -- --help` | Describes local-only verified archive, sidecar, apply, delta and pre/post verification modes. |
 
 ---
 
@@ -314,12 +313,12 @@ Configured via [`render.yaml`](./render.yaml):
 - **Runtime**: Node 24.x
 - **Build Command**: `npm ci --omit=dev`
 - **Start Command**: `npm run start --workspace backend`
-- **Health Check Path**: `/api/ready`
+- **Health Check Path**: `/api/health` (liveness; `/api/ready` reports setup, Super Admin, database identity and indexes)
 
 #### Required Backend Environment Variables
 - `NODE_ENV=production`
 - `APP_TIMEZONE=Asia/Kolkata`
-- `MONGODB_URI=mongodb+srv://...`
+- `MONGODB_URI=mongodb+srv://.../mealkhata` (must name the database)
 - `AUTH_JWT_SECRET=<min-48-bytes-high-entropy-secret>`
 - `APP_ORIGIN=https://<your-vercel-domain>.vercel.app`
 
@@ -340,5 +339,4 @@ If background push is enabled, deploy the 5-minute cron runner via [`render.push
 - **Release Checklist**: [`docs/RELEASE_CHECKLIST.md`](./docs/RELEASE_CHECKLIST.md)
 - **v1.0.0 Release Notes**: [`docs/RELEASE_NOTES_v1.0.0.md`](./docs/RELEASE_NOTES_v1.0.0.md)
 - **Changelog**: [`CHANGELOG.md`](./CHANGELOG.md)
-- **MealKhata 3.0 Migration Rehearsal**: [`docs/migrations/v3-blue-green.md`](./docs/migrations/v3-blue-green.md)
-- **MealKhata 3.0 Cutover and Rollback Checklist**: [`docs/V3_CUTOVER_AND_ROLLBACK.md`](./docs/V3_CUTOVER_AND_ROLLBACK.md)
+- **First-time Setup & Release Steps**: [`docs/SETUP.md`](./docs/SETUP.md)

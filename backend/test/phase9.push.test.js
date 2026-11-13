@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, test } from 'node:test';
 import request from 'supertest';
-import { createApp } from '../src/app.js';
 import { ROLES } from '../src/auth/permissions.js';
-import { createSessionToken, SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
+import { SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
 import { createPushRouter } from '../src/routes/push.routes.js';
 import { createPushSubscriptionService } from '../src/push/pushSubscription.service.js';
 import { PushSubscription } from '../src/push/pushSubscription.model.js';
@@ -15,6 +14,8 @@ import {
 } from '../src/push/reminderDispatch.service.js';
 import { InMemoryPushSubscriptionRepository } from './helpers/inMemoryPushSubscriptionRepository.js';
 import { InMemoryPushDeliveryRepository } from './helpers/inMemoryPushDeliveryRepository.js';
+import { testSessionToken, createTestApp } from './helpers/testAuth.js';
+import { createFixedStudentDirectory } from './helpers/fixtures.js';
 
 const ORIGIN = 'http://localhost:5173';
 
@@ -37,7 +38,7 @@ const VALID_SUBSCRIPTION_2 = {
 };
 
 async function cookieFor(role, memberId = null) {
-  const token = await createSessionToken(role, { memberId });
+  const token = await testSessionToken(role, { memberId });
   return `${SESSION_COOKIE_NAME}=${token}`;
 }
 
@@ -53,7 +54,7 @@ describe('Phase 9: Background Web Push Notifications & Smart Meal Reminders', ()
     deliveryRepo = new InMemoryPushDeliveryRepository();
     pushService = createPushSubscriptionService({ repository: subRepo });
     pushRouter = createPushRouter({ service: pushService });
-    app = createApp({ push: pushRouter });
+    app = createTestApp({ push: pushRouter });
   });
 
   describe('VAPID Public Key Endpoint', () => {
@@ -384,6 +385,7 @@ describe('Phase 9: Background Web Push Notifications & Smart Meal Reminders', ()
       };
 
       const dispatchService = createReminderDispatchService({
+        resolver: createFixedStudentDirectory(),
         settingsService: mockSettings,
         subscriptions: subRepo,
         deliveries: deliveryRepo,
@@ -454,6 +456,7 @@ describe('Phase 9: Background Web Push Notifications & Smart Meal Reminders', ()
       });
 
       const dispatchService = createReminderDispatchService({
+        resolver: createFixedStudentDirectory(),
         settingsService: mockSettings,
         meals: mockMeals,
         subscriptions: subRepo,
@@ -520,6 +523,7 @@ describe('Phase 9: Background Web Push Notifications & Smart Meal Reminders', ()
       });
 
       const dispatchService = createReminderDispatchService({
+        resolver: createFixedStudentDirectory(),
         settingsService: mockSettings,
         meals: mockMeals,
         subscriptions: subRepo,
@@ -569,6 +573,7 @@ describe('Phase 9: Background Web Push Notifications & Smart Meal Reminders', ()
       });
 
       const dispatchService = createReminderDispatchService({
+        resolver: createFixedStudentDirectory(),
         settingsService: mockSettings,
         meals: mockMeals,
         subscriptions: subRepo,
@@ -632,6 +637,7 @@ describe('Phase 9: Background Web Push Notifications & Smart Meal Reminders', ()
       });
 
       const dispatchService = createReminderDispatchService({
+        resolver: createFixedStudentDirectory(),
         settingsService: mockSettings,
         meals: mockMeals,
         subscriptions: subRepo,

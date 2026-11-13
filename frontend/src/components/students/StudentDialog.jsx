@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { getIndiaTodayLogicalDate } from '../../lib/logicalDate.js';
 import { buildStudentProfilePayload, getStudentErrorMessage } from '../../lib/studentContracts.js';
 import { Button } from '../ui/button.jsx';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog.jsx';
@@ -10,7 +11,8 @@ function initialValues(student, nextRosterOrder) {
     displayName: student?.displayName ?? '',
     email: student?.email ?? '',
     phone: student?.phone ?? '',
-    mealEligibilityFrom: student?.mealEligibilityFrom ?? '',
+    // A student is only included in meals from an explicit start date; new students default to today.
+    mealEligibilityFrom: student ? (student.mealEligibilityFrom ?? '') : getIndiaTodayLogicalDate(),
     mealEligibilityUntil: student?.mealEligibilityUntil ?? '',
     rosterOrder: student?.rosterOrder ?? nextRosterOrder,
     reason: '',
@@ -69,8 +71,9 @@ export function StudentDialog({ open, onOpenChange, student, nextRosterOrder, on
               <Input id="studentPhone" type="tel" value={values.phone} onChange={setField('phone')} maxLength={32} />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="studentEligibilityFrom">Meal eligible from (optional)</Label>
-              <Input id="studentEligibilityFrom" type="date" value={values.mealEligibilityFrom} onChange={setField('mealEligibilityFrom')} />
+              <Label htmlFor="studentEligibilityFrom">Meals start on</Label>
+              <Input id="studentEligibilityFrom" type="date" value={values.mealEligibilityFrom} onChange={setField('mealEligibilityFrom')} required={!editing} />
+              <p className="text-[11px] text-slate-500">The student appears in daily meal attendance from this date. Without a date they are not included in meals.</p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="studentEligibilityUntil">Meal eligible until (optional)</Label>

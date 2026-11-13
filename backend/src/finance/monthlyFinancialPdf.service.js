@@ -6,14 +6,13 @@
 import PDFDocument from 'pdfkit';
 import { monthlyFinancialReportService } from './monthlyFinancialReport.service.js';
 import { formatPdfCurrency } from './financialConstants.js';
-import { MEMBER_NAMES } from '../config/members.js';
 import { studentResolver } from '../students/studentResolver.service.js';
 import { formatLogicalMonth } from '../utils/month.js';
 
 export function financialPdfMemberRows(overview) {
   return Object.entries(overview.memberSummaries ?? {}).map(([id, summary]) => ({
     id,
-    name: summary.member?.displayName ?? MEMBER_NAMES[id] ?? id,
+    name: summary.member?.displayName ?? id,
     summary,
   }));
 }
@@ -36,7 +35,7 @@ const COLORS = Object.freeze({
 });
 
 function getMemberName(memberId) {
-  return MEMBER_NAMES[memberId] ?? memberId;
+  return memberId;
 }
 
 function formatDateIST(isoString) {

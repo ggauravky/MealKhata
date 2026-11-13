@@ -1,17 +1,13 @@
 import { env } from '../config/env.js';
 import { mealRepository } from '../meals/meal.repository.js';
-import { serializeLegacyMealSnapshot, serializeMealDay } from '../meals/meal.serializer.js';
-import { mealHistorySnapshotRepository } from '../meals/mealHistorySnapshot.repository.js';
-import { mealHistoricalCorrectionRepository } from '../meals/mealHistoricalCorrection.repository.js';
-import { resolveHistoricalMealAuthority } from '../meals/mealHistoricalCorrection.service.js';
+import { serializeMealDay } from '../meals/meal.serializer.js';
+import { assertCurrentMealSchema } from '../meals/meal.service.js';
 import { studentResolver } from '../students/studentResolver.service.js';
 import { HttpError } from '../utils/HttpError.js';
 import { firstDateOfMonth, lastDateOfMonth, listDatesInMonth } from '../utils/month.js';
 
-function serializeMonthDay(document, date, { timezone = env.appTimezone, participants, snapshot } = {}) {
-  const serialized = snapshot
-    ? serializeLegacyMealSnapshot(snapshot, { timezone })
-    : serializeMealDay(document, date, { timezone, participants });
+function serializeMonthDay(document, date, { timezone = env.appTimezone, participants } = {}) {
+  const serialized = serializeMealDay(assertCurrentMealSchema(document), date, { timezone, participants });
 
   const morningStatuses = Object.values(serialized.meals.morning);
   const nightStatuses = Object.values(serialized.meals.night);
@@ -44,7 +40,7 @@ function serializeMonthDay(document, date, { timezone = env.appTimezone, partici
     ])],
     financialClassification: document?.financialClassification ?? null,
     cutoverClassificationSource: document?.cutoverClassificationSource ?? null,
-    importedFromLegacy: document?.importedFromLegacy ?? Boolean(snapshot),
+    importedFromLegacy: document?.importedFromLegacy ?? false,
     saved: serialized.saved,
     hasMealActivity,
     hasCustomAllocation,
@@ -53,14 +49,7 @@ function serializeMonthDay(document, date, { timezone = env.appTimezone, partici
     allocations: serialized.allocations,
     pricing: serialized.pricing,
     dailyCostSummary: serialized.dailyCostSummary,
-    priceOverrides: snapshot
-      ? Object.fromEntries(['morning', 'night'].map((mealType) => [
-        mealType,
-        snapshot.pricing[mealType].isOverridden
-          ? { pricePaise: snapshot.pricing[mealType].overridePricePaise, reason: snapshot.pricing[mealType].reason }
-          : null,
-      ]))
-      : document?.priceOverrides ?? null,
+    priceOverrides: document?.priceOverrides ?? null,
     counts: {
       morningTaking,
       morningSkipping,
@@ -79,18 +68,15 @@ function serializeMonthDay(document, date, { timezone = env.appTimezone, partici
 
 export function createMonthMealService({
   repository = mealRepository,
-  students = null,
-  snapshots = null,
-  corrections = null,
+  students = studentResolver,
   timezone = env.appTimezone,
-  runtimeProfile = env.runtimeProfile,
 } = {}) {
+  if (!students || typeof students.listEligibleOn !== 'function') {
+    throw new TypeError('Calendar service requires a student directory');
+  }
   return Object.freeze({
     async getMonth(month) {
       try {
-        if (runtimeProfile === 'v3' && !students) {
-          throw new HttpError(503, 'Student registry is unavailable for v3 calendar.');
-        }
         const documents = await repository.findInDateRange(
           firstDateOfMonth(month),
           lastDateOfMonth(month),
@@ -99,16 +85,10 @@ export function createMonthMealService({
 
         const days = await Promise.all(listDatesInMonth(month).map(async (date) => {
           const document = byDate.get(date);
-          const participants = !document && students
+          const participants = !document
             ? (await students.listEligibleOn(date)).map(({ studentId }) => studentId)
             : undefined;
-          const snapshot = runtimeProfile === 'v3' && document && document.schemaVersion !== 3 && snapshots
-            ? await resolveHistoricalMealAuthority(document, {
-              snapshots,
-              corrections: corrections ?? { listByDate: async () => [] },
-            })
-            : null;
-          return serializeMonthDay(document, date, { timezone, participants, snapshot });
+          return serializeMonthDay(document, date, { timezone, participants });
         }));
 
         return {
@@ -118,17 +98,10 @@ export function createMonthMealService({
         };
       } catch (error) {
         if (error instanceof HttpError) throw error;
-        if (/historical meal (?:correction )?snapshot/i.test(error.message)) {
-          throw new HttpError(503, error.message, { cause: error });
-        }
         throw new HttpError(503, 'Monthly meal data is temporarily unavailable.', { cause: error });
       }
     },
   });
 }
 
-export const monthMealService = createMonthMealService({
-  students: studentResolver,
-  snapshots: mealHistorySnapshotRepository,
-  corrections: mealHistoricalCorrectionRepository,
-});
+export const monthMealService = createMonthMealService({ students: studentResolver });

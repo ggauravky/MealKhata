@@ -48,7 +48,7 @@ test('socket ticket API requires an authenticated canonical account and returns 
 
 test('v3 socket rejects anonymous and foreign-origin connections', async () => {
   const http = createServer();
-  const io = createSocketServer(http, { config: { runtimeProfile: 'v3',
+  const io = createSocketServer(http, { config: {
     appOrigin: 'http://localhost:5173' }, production: true,
     verifyTicket: async ticket => {
       if (ticket !== 'good') throw new Error('Invalid ticket');
@@ -76,7 +76,7 @@ test('v3 socket rejects anonymous and foreign-origin connections', async () => {
 test('a revoked v3 account loses its already connected socket', async () => {
   const http = createServer();
   let active = true;
-  const io = createSocketServer(http, { config: { runtimeProfile: 'v3',
+  const io = createSocketServer(http, { config: {
     appOrigin: 'http://localhost:5173' }, production: true,
   verifyTicket: async () => ({ userId: 'account-4', role: 'member',
     memberId: 'student_four', sessionVersion: 0 }),

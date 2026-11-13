@@ -4,28 +4,44 @@ import cookieParser from 'cookie-parser';
 import express from 'express';
 import { SignJWT } from 'jose';
 import request from 'supertest';
-import { app } from '../src/app.js';
-import { validateLoginInput } from '../src/auth/auth.service.js';
+import bcrypt from 'bcryptjs';
+import { createAuthService, validateLoginInput } from '../src/auth/auth.service.js';
+import { createAuthRouter } from '../src/routes/auth.routes.js';
 import { ROLES } from '../src/auth/permissions.js';
 import {
   createSessionToken,
   getSessionCookieOptions,
   SESSION_COOKIE_NAME,
 } from '../src/auth/token.service.js';
-import { authenticateSession, createAuthenticateSession } from '../src/middleware/authenticate.js';
+import { createAuthenticateSession } from '../src/middleware/authenticate.js';
 import { requireAuthenticated, requireSuperAdmin } from '../src/middleware/authorize.js';
 import { LOGIN_RATE_LIMIT } from '../src/middleware/rateLimiters.js';
 import { TEST_CREDENTIALS } from './setup-env.js';
 import { env } from '../src/config/env.js';
 import { InMemoryUserAccountRepository } from './helpers/inMemoryUserAccountRepository.js';
+import {
+  createTestApp, permissiveStudentResolver, testAccounts, testAuthenticate, testSessionToken,
+} from './helpers/testAuth.js';
 
 const APP_ORIGIN = 'http://localhost:5173';
+
+// Admin and Super Admin are ordinary database accounts; there are no environment logins.
+for (const role of [ROLES.ADMIN, ROLES.SUPERADMIN]) {
+  await testAccounts.create({
+    userId: `auth-${role}`, memberId: null, displayName: role === ROLES.ADMIN ? 'Household Admin' : 'Super Admin',
+    email: TEST_CREDENTIALS[role].email, passwordHash: await bcrypt.hash(TEST_CREDENTIALS[role].password, 12),
+    role, active: true, sessionVersion: 0,
+  });
+}
+const app = createTestApp({
+  auth: createAuthRouter({ service: createAuthService({ userAccounts: testAccounts, resolver: permissiveStudentResolver }) }),
+});
 
 function postLogin(credentials, origin = APP_ORIGIN) {
   return request(app).post('/api/auth/login').set('Origin', origin).send(credentials);
 }
 
-function createAuthorizationTestApp(authenticate = authenticateSession) {
+function createAuthorizationTestApp(authenticate = testAuthenticate) {
   const testApp = express();
   testApp.use(cookieParser());
   testApp.use(authenticate);
@@ -125,7 +141,7 @@ describe('authentication API', () => {
     assert.equal(invalid.status, 200);
     assert.equal(invalid.body.session.role, ROLES.VIEWER);
 
-    const expiredToken = await createSessionToken(ROLES.ADMIN, { expiresIn: '-1s' });
+    const expiredToken = await testSessionToken(ROLES.ADMIN, { expiresIn: '-1s' });
     const expired = await request(app)
       .get('/api/auth/session')
       .set('Cookie', `${SESSION_COOKIE_NAME}=${expiredToken}`);
@@ -247,13 +263,13 @@ describe('authentication authorization', () => {
     const testApp = createAuthorizationTestApp();
     await request(testApp).get('/authenticated').expect(401);
 
-    const adminToken = await createSessionToken(ROLES.ADMIN);
+    const adminToken = await testSessionToken(ROLES.ADMIN);
     await request(testApp)
       .get('/superadmin')
       .set('Cookie', `${SESSION_COOKIE_NAME}=${adminToken}`)
       .expect(403);
 
-    const superAdminToken = await createSessionToken(ROLES.SUPERADMIN);
+    const superAdminToken = await testSessionToken(ROLES.SUPERADMIN);
     const allowed = await request(testApp)
       .get('/superadmin')
       .set('Cookie', `${SESSION_COOKIE_NAME}=${superAdminToken}`)

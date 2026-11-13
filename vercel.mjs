@@ -31,9 +31,8 @@ export function createVercelConfig(environment = process.env) {
   if (stage === 'production' && environment.MEALKHATA_BACKEND_ENV !== 'production') {
     throw new Error('Production frontend requires production backend identity');
   }
-  if (stage !== 'development' && (environment.VITE_RUNTIME_PROFILE !== 'v3'
-    || environment.VITE_SOCKET_URL !== backendOrigin)) {
-    throw new Error('Deployed v3 frontend requires an authenticated socket bound to its backend origin');
+  if (stage !== 'development' && environment.VITE_SOCKET_URL !== backendOrigin) {
+    throw new Error('Deployed frontend requires its authenticated socket URL (VITE_SOCKET_URL) to equal its backend origin');
   }
   return {
     framework: 'vite', installCommand: 'npm ci',

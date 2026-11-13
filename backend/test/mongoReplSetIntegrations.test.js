@@ -26,19 +26,12 @@ import { RoomPaymentSettings } from '../src/roomFees/roomPaymentSettings.model.j
 import { Expense } from '../src/expenses/expense.model.js';
 import { ExpenseReimbursement } from '../src/expenses/expenseReimbursement.model.js';
 import { MealDay } from '../src/meals/meal.model.js';
-import { MealHistorySnapshot } from '../src/meals/mealHistorySnapshot.model.js';
-import { MealHistoricalCorrection } from '../src/meals/mealHistoricalCorrection.model.js';
-import { buildLegacyMealSnapshot } from '../src/migrations/legacyMealSnapshot.service.js';
-import { historicalMealCorrectionService } from '../src/meals/mealHistoricalCorrection.service.js';
 import { createMonthMealService } from '../src/calendar/monthMeal.service.js';
-import { mealHistorySnapshotRepository } from '../src/meals/mealHistorySnapshot.repository.js';
-import { mealHistoricalCorrectionRepository } from '../src/meals/mealHistoricalCorrection.repository.js';
 import { createDefaultMealDay } from '../src/meals/meal.defaults.js';
 import { MonthlyMealRate } from '../src/billing/monthlyRate.model.js';
 import { Payment } from '../src/payments/payment.model.js';
 import { PaymentSettings } from '../src/payments/paymentSettings.model.js';
 import { UserAccount } from '../src/auth/userAccount.model.js';
-import { MemberAccount } from '../src/auth/memberAccount.model.js';
 import { MemberAccountAudit } from '../src/members/memberAccountAudit.model.js';
 import { Student } from '../src/students/student.model.js';
 import { CreditAllocation, PaymentReclassification, UnallocatedCredit } from '../src/stays/paymentReclassification.model.js';
@@ -64,10 +57,12 @@ import { mealRepository } from '../src/meals/meal.repository.js';
 import { studentResolver } from '../src/students/studentResolver.service.js';
 import { createMemberAccountService } from '../src/members/memberAccount.service.js';
 import { createMemberService } from '../src/members/member.service.js';
+import { MEMBER_IDS, createAssignmentStudentDirectory } from './helpers/fixtures.js';
 
 const fixedIntegrationNow = () => new Date('2026-10-29T06:30:00.000Z');
 const roomFeeService = createRoomFeeService({
   repository: roomRepository,
+  students: createAssignmentStudentDirectory(roomRepository),
   now: fixedIntegrationNow,
 });
 const stayService = createStayService({
@@ -216,13 +211,10 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
       Expense.init(),
       ExpenseReimbursement.init(),
       MealDay.init(),
-      MealHistorySnapshot.init(),
-      MealHistoricalCorrection.init(),
       MonthlyMealRate.init(),
       Payment.init(),
       PaymentSettings.init(),
       UserAccount.init(),
-      MemberAccount.init(),
       MemberAccountAudit.init(),
       Student.init(),
       PaymentReclassification.init(),
@@ -361,42 +353,6 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
     await assert.rejects(service.changeStatus({
       date: '2026-11-04', mealType: 'morning', memberId: ids[3], status: 'taking', actorRole: 'admin',
     }), /eligible/i);
-  });
-
-  it('commits one audited historical correction transaction and preserves the legacy source and snapshot', async () => {
-    await MealDay.create({
-      date: '2026-11-03',
-      meals: {
-        morning: { gaurav: 'skip', nikhil: 'skip', devansh: 'skip' },
-        night: { gaurav: 'skip', nikhil: 'skip', devansh: 'skip' },
-      },
-    });
-    const source = await MealDay.findOne({ date: '2026-11-03' }).lean();
-    const frozen = buildLegacyMealSnapshot(source);
-    await MealHistorySnapshot.create(frozen);
-    const request = {
-      date: source.date, expectedRevision: 0, operation: 'status', mealType: 'morning',
-      memberId: 'gaurav', status: 'taking', reason: 'Verified historical meal attendance', actorRole: 'superadmin',
-    };
-    const settled = await Promise.allSettled([
-      historicalMealCorrectionService.correct(request),
-      historicalMealCorrectionService.correct(request),
-    ]);
-    assert.equal(settled.filter((result) => result.status === 'fulfilled').length, 1);
-    assert.equal(settled.filter((result) => result.status === 'rejected').length, 1);
-    assert.equal(await MealHistoricalCorrection.countDocuments({ date: source.date }), 1);
-    const indexes = await MealHistoricalCorrection.collection.indexes();
-    assert.ok(indexes.some((index) => index.unique && index.key.date === 1 && index.key.revision === 1));
-    assert.deepEqual((await MealDay.findOne({ date: source.date }).lean()).meals, source.meals);
-    assert.equal((await MealHistorySnapshot.findOne({ date: source.date }).lean()).sourceChecksum, frozen.sourceChecksum);
-    const calendar = await createMonthMealService({
-      repository: mealRepository,
-      students: studentResolver,
-      snapshots: mealHistorySnapshotRepository,
-      corrections: mealHistoricalCorrectionRepository,
-      runtimeProfile: 'v3',
-    }).getMonth('2026-11');
-    assert.equal(calendar.days[2].dailyCostSummary.members.gaurav.morningAmountPaise, 5000);
   });
 
   describe('Existing Room Assignment compatibility', () => {
@@ -2377,7 +2333,7 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
         nightPricePaise: 0,
       });
       await MealDay.create({
-        ...createDefaultMealDay('2026-10-10'),
+        ...createDefaultMealDay('2026-10-10', MEMBER_IDS),
         meals: {
           morning: { gaurav: 'taking', nikhil: 'skip', devansh: 'skip' },
           night: { gaurav: 'skip', nikhil: 'skip', devansh: 'skip' },
@@ -4107,7 +4063,7 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
         nightPricePaise: 0,
       });
       await MealDay.create({
-        ...createDefaultMealDay('2026-10-10'),
+        ...createDefaultMealDay('2026-10-10', MEMBER_IDS),
         meals: {
           morning: { gaurav: 'taking', nikhil: 'skip', devansh: 'skip' },
           night: { gaurav: 'skip', nikhil: 'skip', devansh: 'skip' },
@@ -4455,7 +4411,7 @@ describe('MealKhata 2.0: Real MongoDB Replica Set Transaction & Concurrency Suit
         nightPricePaise: 0,
       });
       await MealDay.create({
-        ...createDefaultMealDay('2026-10-05'),
+        ...createDefaultMealDay('2026-10-05', MEMBER_IDS),
         meals: {
           morning: { gaurav: 'skip', nikhil: 'taking', devansh: 'skip' },
           night: { gaurav: 'skip', nikhil: 'skip', devansh: 'skip' },

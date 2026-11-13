@@ -6,7 +6,6 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import request from 'supertest';
 
 import {
-  LEGACY_STUDENT_ELIGIBILITY_FIXTURES,
   STUDENT_AUDIT_EVENT_TYPES,
   STUDENT_STATUSES,
 } from '../src/students/student.constants.js';
@@ -18,9 +17,9 @@ import { createStudentService } from '../src/students/student.service.js';
 import { createStudentResolver } from '../src/students/studentResolver.service.js';
 import { createStudentRouter } from '../src/routes/student.routes.js';
 import { errorHandler } from '../src/middleware/errorHandler.js';
-import { createApp } from '../src/app.js';
 import { InMemoryStudentRepository } from './helpers/inMemoryStudentRepository.js';
 import { InMemoryUserAccountRepository } from './helpers/inMemoryUserAccountRepository.js';
+import { createTestApp } from './helpers/testAuth.js';
 
 const baseStudent = Object.freeze({
   studentId: 'gaurav',
@@ -272,17 +271,12 @@ describe('MealKhata 3.0 audited student lifecycle and date-aware resolver', () =
     assert.equal('delete' in service, false);
   });
 
-  test('uses only the confirmed Gaurav date and applies inclusive eligibility boundaries', async () => {
-    assert.deepEqual(LEGACY_STUDENT_ELIGIBILITY_FIXTURES, {
-      gaurav: '2026-10-01',
-      nikhil: null,
-      devansh: null,
-    });
+  test('applies inclusive meal-eligibility boundaries per student', async () => {
     const students = [
       {
         ...baseStudent,
         studentId: 'gaurav',
-        mealEligibilityFrom: LEGACY_STUDENT_ELIGIBILITY_FIXTURES.gaurav,
+        mealEligibilityFrom: '2026-10-01',
         mealEligibilityUntil: '2026-10-31',
       },
       {
@@ -291,7 +285,7 @@ describe('MealKhata 3.0 audited student lifecycle and date-aware resolver', () =
         displayName: 'Nikhil',
         email: null,
         phone: null,
-        mealEligibilityFrom: LEGACY_STUDENT_ELIGIBILITY_FIXTURES.nikhil,
+        mealEligibilityFrom: null,
       },
       {
         ...baseStudent,
@@ -299,7 +293,7 @@ describe('MealKhata 3.0 audited student lifecycle and date-aware resolver', () =
         displayName: 'Devansh',
         email: null,
         phone: null,
-        mealEligibilityFrom: LEGACY_STUDENT_ELIGIBILITY_FIXTURES.devansh,
+        mealEligibilityFrom: null,
       },
     ];
     const { resolver } = createLifecycleHarness(students);
@@ -491,7 +485,7 @@ describe('MealKhata 3.0 student API and authorization', () => {
       service: {},
       resolver: { async listAll() { return []; } },
     });
-    const app = createApp({
+    const app = createTestApp({
       students,
       authenticate(req, _res, next) {
         req.auth = { authenticated: true, role: 'admin', userId: 'admin-1' };

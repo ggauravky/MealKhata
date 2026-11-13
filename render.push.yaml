@@ -5,7 +5,9 @@ services:
     branch: main
     buildCommand: npm ci --omit=dev
     startCommand: npm run start --workspace backend
-    healthCheckPath: /api/ready
+    # Liveness: the service must be able to start before the one-time Super Admin setup.
+    # /api/ready reports full readiness (setup, Super Admin, indexes) for monitoring.
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production

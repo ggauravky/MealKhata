@@ -2,14 +2,14 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { beforeEach, describe, test } from 'node:test';
 import request from 'supertest';
-import { createApp } from '../src/app.js';
 import { ROLES } from '../src/auth/permissions.js';
-import { createSessionToken, SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
-import { MEMBER_IDS } from '../src/config/members.js';
+import { SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
+import { MEMBER_IDS } from './helpers/fixtures.js';
 import { ExpenseService } from '../src/expenses/expense.service.js';
 import { calculateExpenseSplit } from '../src/expenses/expenseSplit.service.js';
 import { createExpenseRouter } from '../src/routes/expense.routes.js';
 import { InMemoryExpenseRepository } from './helpers/inMemoryExpenseRepository.js';
+import { testSessionToken, createTestApp } from './helpers/testAuth.js';
 
 const ORIGIN = 'http://localhost:5173';
 const CURRENT_MONTH = '2026-10';
@@ -18,12 +18,12 @@ const repository = new InMemoryExpenseRepository();
 const service = new ExpenseService(repository);
 const expenseRouter = createExpenseRouter({ service });
 
-const testApp = createApp({
+const testApp = createTestApp({
   expenses: expenseRouter,
 });
 
 async function cookieFor(role, memberId = null) {
-  return `${SESSION_COOKIE_NAME}=${await createSessionToken(role, { memberId })}`;
+  return `${SESSION_COOKIE_NAME}=${await testSessionToken(role, { memberId })}`;
 }
 
 beforeEach(() => {

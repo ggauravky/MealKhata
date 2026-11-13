@@ -1,7 +1,6 @@
 import mongoose from 'mongoose';
 import { env } from '../src/config/env.js';
 import { connectDatabase, disconnectDatabase } from '../src/config/db.js';
-import { MEMBER_IDS } from '../src/config/members.js';
 import { getLogicalDateInTimeZone, isValidLogicalDate } from '../src/utils/date.js';
 import { isValidLogicalMonth, lastDateOfMonth } from '../src/utils/month.js';
 import { isValidPaymentAmount, isValidUuid } from '../src/payments/payment.constants.js';
@@ -10,8 +9,6 @@ import { isValidLogicalTime } from '../src/settings/reminder.constants.js';
 import { MEAL_STATUSES } from '../src/meals/meal.constants.js';
 import { resolvePhysicalPlateLimit } from '../src/meals/plateAllocation.constants.js';
 import { assertSafeStudentId } from '../src/students/studentId.js';
-import { checksumValue } from '../src/migrations/sourceInventory.service.js';
-import { verifyLegacyMealSnapshot, buildLegacyMealSnapshot } from '../src/migrations/legacyMealSnapshot.service.js';
 import { EXPENSE_CATEGORIES } from '../src/expenses/expense.constants.js';
 
 function assignmentInterval(assignment) {
@@ -51,7 +48,7 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
 
   const db = dbConnection.db;
   const students = await db.collection('students').find({}).toArray();
-  const studentIds = new Set(students.length ? students.map(student => student.studentId) : MEMBER_IDS);
+  const studentIds = new Set(students.map(student => student.studentId));
   const knownStudent = studentId => studentIds.has(studentId);
   const studentIssues = [];
   const seenStudents = new Set();
@@ -151,39 +148,6 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
     checks.push({ name: 'User Accounts', status: 'FAIL', issues: 1, message: error.message });
   }
 
-  // 1b. Legacy Member Accounts Check (Audit)
-  try {
-    const members = await db.collection('member_accounts').find({}).toArray();
-    let memberIssues = 0;
-    const foundMemberIds = new Set();
-
-    for (const m of members) {
-      if (!knownStudent(m.memberId)) {
-        issues.push(`[member_accounts] Unknown memberId: ${m.memberId}`);
-        memberIssues++;
-      }
-      if (foundMemberIds.has(m.memberId)) {
-        issues.push(`[member_accounts] Duplicate memberId found: ${m.memberId}`);
-        memberIssues++;
-      }
-      foundMemberIds.add(m.memberId);
-
-      if (!m.passwordHash || !m.passwordHash.startsWith('$2')) {
-        issues.push(`[member_accounts] Invalid password hash format for ${m.memberId}`);
-        memberIssues++;
-      }
-    }
-
-    checks.push({
-      name: 'Legacy Member Accounts',
-      recordsChecked: members.length,
-      status: memberIssues === 0 ? 'PASS' : 'FAIL',
-      issues: memberIssues,
-    });
-  } catch (error) {
-    checks.push({ name: 'Legacy Member Accounts', status: 'FAIL', issues: 1, message: error.message });
-  }
-
   // 2. Meal Days Check
   try {
     const mealDays = await db.collection('meal_days').find({}).toArray();
@@ -200,7 +164,7 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
         mealIssues++;
       }
       seenDates.add(md.date);
-      const participants = md.schemaVersion === 3 ? md.participantOrder : MEMBER_IDS;
+      const participants = md.participantOrder;
       if (md.schemaVersion === 3 && (!Array.isArray(participants)
         || new Set(participants).size !== participants.length
         || participants.some(id => !knownStudent(id)))) {
@@ -229,7 +193,7 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
             issues.push(`[meal_days] Invalid custom plate allocation count on ${md.date} (${mealType})`);
             mealIssues++;
           } else {
-            const memberTotalUnits = Object.fromEntries((participants ?? MEMBER_IDS).map(id => [id, 0]));
+            const memberTotalUnits = Object.fromEntries((participants ?? []).map(id => [id, 0]));
             for (let i = 0; i < alloc.plates.length; i++) {
               const p = alloc.plates[i];
               let plateUnits = 0;
@@ -1398,86 +1362,15 @@ export async function verifyDataIntegrity(dbConnection = mongoose.connection) {
     checks.push({ name: 'Security Deposits & Clearances', status: 'FAIL', issues: 1, message: error.message });
   }
 
-  // Historical authority is append-only. Verify every captured legacy baseline and
-  // the complete correction chain without mutating either collection.
+  // Every meal day must use the current dynamic-participant schema.
   try {
-    const [days, snapshots, corrections] = await Promise.all([
-      db.collection('meal_days').find({}).toArray(),
-      db.collection('meal_history_snapshots').find({}).toArray(),
-      db.collection('meal_history_corrections').find({}).toArray(),
-    ]);
-    let historyIssues = 0;
-    const dayByDate = new Map(days.map(day => [day.date, day]));
-    const snapshotByDate = new Map();
-    for (const snapshot of snapshots) {
-      const key = `${snapshot.date}:${snapshot.calculationVersion}`;
-      if (snapshotByDate.has(key) || !dayByDate.has(snapshot.date)) {
-        issues.push(`[meal_history_snapshots] Duplicate or orphaned snapshot ${key}`);
-        historyIssues++;
-      }
-      snapshotByDate.set(key, snapshot);
-      if (!Array.isArray(snapshot.participantOrder)
-        || new Set(snapshot.participantOrder).size !== snapshot.participantOrder.length) {
-        issues.push(`[meal_history_snapshots] Invalid participant roster on ${snapshot.date}`);
-        historyIssues++;
-      }
-      for (const id of snapshot.participantOrder ?? []) {
-        if (!knownStudent(id)) {
-          issues.push(`[meal_history_snapshots] Unknown student ${id} on ${snapshot.date}`);
-          historyIssues++;
-        }
-      }
-      for (const cost of Object.values(snapshot.costs ?? {})) {
-        const amounts = Object.values(cost.memberAmountsPaise ?? {});
-        for (const id of Object.keys(cost.memberAmountsPaise ?? {})) {
-          if (!knownStudent(id) || !snapshot.participantOrder?.includes(id)) {
-            issues.push(`[meal_history_snapshots] Orphaned cost student ${id} on ${snapshot.date}`);
-            historyIssues++;
-          }
-        }
-        if (!Number.isSafeInteger(cost.totalCostPaise) || !Number.isSafeInteger(cost.roomAmountPaise)
-          || amounts.some(amount => !Number.isSafeInteger(amount))
-          || amounts.reduce((sum, amount) => sum + amount, 0) !== cost.totalCostPaise
-          || cost.roomAmountPaise !== cost.totalCostPaise) {
-          issues.push(`[meal_history_snapshots] Cost does not conserve exact paise on ${snapshot.date}`);
-          historyIssues++;
-        }
-      }
-    }
-    if (snapshots.length || corrections.length) {
-      for (const day of days.filter(candidate => candidate.schemaVersion !== 3)) {
-        try { verifyLegacyMealSnapshot(day, snapshotByDate.get(`${day.date}:legacy-v2`)); }
-        catch { issues.push(`[meal_history_snapshots] Missing or mismatched legacy authority on ${day.date}`); historyIssues++; }
-      }
-    }
-    const correctionsByDate = new Map();
-    for (const correction of corrections) {
-      if (!correctionsByDate.has(correction.date)) correctionsByDate.set(correction.date, []);
-      correctionsByDate.get(correction.date).push(correction);
-    }
-    for (const [date, chain] of correctionsByDate) {
-      const baseline = snapshotByDate.get(`${date}:legacy-v2`);
-      if (!baseline) { issues.push(`[meal_history_corrections] Missing baseline for ${date}`); historyIssues++; continue; }
-      let prior = baseline.sourceRevision;
-      for (const correction of chain.sort((a, b) => a.revision - b.revision)) {
-        let valid = correction.previousRevision === prior && correction.revision === prior + 1
-          && correction.originalSourceChecksum === baseline.sourceChecksum
-          && correction.snapshot?.sourceRevision === correction.revision
-          && checksumValue(correction.snapshot) === correction.snapshotChecksum;
-        try {
-          const recalculated = buildLegacyMealSnapshot(correction.sourceState);
-          recalculated.snapshotId = correction.snapshot?.snapshotId;
-          recalculated.calculationVersion = 'legacy-correction-v1';
-          valid &&= checksumValue(recalculated) === checksumValue(correction.snapshot);
-        } catch { valid = false; }
-        if (!valid) { issues.push(`[meal_history_corrections] Broken authority chain for ${date}`); historyIssues++; }
-        prior = correction.revision;
-      }
-    }
-    checks.push({ name: 'Historical Meal Authority', recordsChecked: snapshots.length + corrections.length,
-      status: historyIssues ? 'FAIL' : 'PASS', issues: historyIssues });
+    const days = await db.collection('meal_days').find({}).toArray();
+    const legacyDays = days.filter((day) => day.schemaVersion !== 3).length;
+    if (legacyDays) issues.push(`[meal_days] ${legacyDays} meal day(s) use an unsupported schema version`);
+    checks.push({ name: 'Meal Schema Version', recordsChecked: days.length,
+      status: legacyDays ? 'FAIL' : 'PASS', issues: legacyDays ? 1 : 0 });
   } catch (error) {
-    checks.push({ name: 'Historical Meal Authority', status: 'FAIL', issues: 1, message: error.message });
+    checks.push({ name: 'Meal Schema Version', status: 'FAIL', issues: 1, message: error.message });
   }
 
   const overallPassed = checks.every((c) => c.status === 'PASS');

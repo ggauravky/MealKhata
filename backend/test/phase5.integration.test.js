@@ -2,9 +2,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { beforeEach, describe, test } from 'node:test';
 import request from 'supertest';
-import { createApp } from '../src/app.js';
 import { ROLES } from '../src/auth/permissions.js';
-import { createSessionToken, SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
+import { SESSION_COOKIE_NAME } from '../src/auth/token.service.js';
 import { Payment } from '../src/payments/payment.model.js';
 import { createPaymentService, paiseToUpiAmount } from '../src/payments/payment.service.js';
 import { PaymentSettings } from '../src/payments/paymentSettings.model.js';
@@ -14,6 +13,7 @@ import { createPaymentRouter } from '../src/routes/payment.routes.js';
 import { createPaymentSettingsRouter } from '../src/routes/paymentSettings.routes.js';
 import { InMemoryPaymentRepository } from './helpers/inMemoryPaymentRepository.js';
 import { InMemoryPaymentSettingsRepository } from './helpers/inMemoryPaymentSettingsRepository.js';
+import { testSessionToken, createTestApp } from './helpers/testAuth.js';
 
 const ORIGIN = 'http://localhost:5173';
 const MONTH = '2026-09';
@@ -78,10 +78,10 @@ const payments = createPaymentRouter({
   summaries: summaryService,
   broadcast: (payload) => paymentEvents.push(payload),
 });
-const testApp = createApp({ paymentSettings, payments });
+const testApp = createTestApp({ paymentSettings, payments });
 
 async function cookieFor(role) {
-  return `${SESSION_COOKIE_NAME}=${await createSessionToken(role)}`;
+  return `${SESSION_COOKIE_NAME}=${await testSessionToken(role)}`;
 }
 
 async function configureSettings(receiver = RECEIVER) {

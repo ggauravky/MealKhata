@@ -113,5 +113,16 @@ userAccountSchema.index(
   },
 );
 
+// At most one Super Admin can ever exist; this is the database-level guard against
+// duplicate bootstrap or a concurrent second initialization.
+userAccountSchema.index(
+  { role: 1 },
+  {
+    unique: true,
+    name: 'single_superadmin',
+    partialFilterExpression: { role: 'superadmin' },
+  },
+);
+
 export const UserAccount =
   mongoose.models.UserAccount ?? mongoose.model('UserAccount', userAccountSchema);
