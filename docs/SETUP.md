@@ -94,6 +94,23 @@ day is set with the per-day price override on the Mess admin panel.
 6. Check `/api/ready` → `200`, then sign in at https://mealkhata-by-gaurav.vercel.app,
    add the first student, and record a meal.
 
+## Keeping the backend awake (Render free plan)
+
+Render's free web services sleep after about 15 minutes without traffic, and the first
+request afterwards waits roughly a minute while the service starts. To keep it awake:
+
+1. **External monitor (recommended, most reliable).** Create a free HTTP monitor at
+   UptimeRobot (or cron-job.org) for `https://meal-khata-api.onrender.com/api/health`
+   with a 5-minute interval. `/api/health` is lightweight, needs no login and never
+   touches the database.
+2. **GitHub Actions backup.** `.github/workflows/keep-alive.yml` pings the same route every
+   10 minutes. GitHub can delay scheduled runs and pauses them after 60 days without
+   repository activity; re-enable it from the Actions tab if that happens.
+
+A free instance has 750 hours per month, enough for one service running all month. For a
+guaranteed always-on service with no cold starts, switch the Render instance type to a
+paid plan instead.
+
 ## Local development and tests
 
 - Never point a development `backend/.env` at the production database.

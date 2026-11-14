@@ -33,6 +33,13 @@ function matchesIndex(actual, key, expected) {
       || JSON.stringify(actual.partialFilterExpression) === JSON.stringify(expected.partialFilterExpression));
 }
 
+let indexesEnsured = false;
+
+/** True once this process has confirmed every declared index exists. */
+export function requiredIndexesEnsured() {
+  return indexesEnsured;
+}
+
 /** Creates every declared index. Idempotent; safe on every startup and before setup. */
 export async function ensureRequiredIndexes() {
   for (const { model } of declaredIndexes()) {
@@ -41,6 +48,7 @@ export async function ensureRequiredIndexes() {
     });
     await model.createIndexes();
   }
+  indexesEnsured = true;
 }
 
 /** Returns the collections whose declared indexes are missing in the database. */

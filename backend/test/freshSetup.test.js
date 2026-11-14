@@ -283,8 +283,9 @@ describe('Super Admin operations after setup', { concurrency: 1 }, () => {
 describe('initialization gate', () => {
   test('blocks writes until initialized and never caches a negative result', async () => {
     let initialized = false;
+    let indexes = false;
     const gate = createInitializationGate({ state: { isInitialized: async () => initialized },
-      drainingCheck: () => false });
+      drainingCheck: () => false, indexesReady: () => indexes });
     const run = (method, path) => new Promise((resolve) => {
       const res = { status(code) { this.code = code; return this; }, json(body) { resolve({ code: this.code, body }); } };
       gate({ method, path }, res, () => resolve({ code: 'next' }));
@@ -293,6 +294,8 @@ describe('initialization gate', () => {
     assert.equal((await run('POST', '/auth/login')).code, 'next');
     assert.equal((await run('POST', '/students')).code, 503);
     initialized = true;
+    assert.equal((await run('POST', '/students')).code, 503, 'writes wait for the startup index build');
+    indexes = true;
     assert.equal((await run('POST', '/students')).code, 'next');
   });
 });

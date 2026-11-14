@@ -14,7 +14,7 @@
     "start": "npm run start --workspace backend",
     "lint": "eslint frontend/src frontend/test frontend/vite.config.js backend/src backend/scripts backend/test e2e playwright.config.js eslint.config.js",
     "test": "npm run test --workspaces --if-present",
-    "setup:admin": "npm --workspace backend run setup:admin",
+    "setup:admin": "npm --workspace backend run setup:admin --",
     "generate-vapid-keys": "npm run generate-vapid-keys --workspace backend",
     "send-push-reminders": "npm run send-push-reminders --workspace backend",
     "verify-production-build": "npm run verify-production-build --workspace backend",

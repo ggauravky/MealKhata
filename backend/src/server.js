@@ -23,23 +23,28 @@ let shuttingDown = false;
 export async function startServer() {
   validateEnvironment();
   await connectDatabase();
+
+  // Open the port immediately so cold starts answer quickly. Writes stay blocked by the
+  // initialization gate until the index build below has finished.
+  await new Promise((resolve) => {
+    httpServer.listen(env.port, () => {
+      setLifecycleState(LIFECYCLE_STATES.READY);
+      logger.info('server.started', { port: env.port });
+      resolve();
+    });
+  });
+
   // Index creation is idempotent and never writes application documents.
   try {
     await ensureRequiredIndexes();
+    logger.info('database.indexes_ready');
   } catch (error) {
     logger.error('database.indexes_failed', { name: error?.name, code: error?.code });
   }
   // Startup never creates accounts; it only reports whether one-time setup has run.
   const initialization = await readInitializationState().catch(() => null);
   logger.info('application.initialization', { initialized: initialization?.status === 'complete' });
-
-  return new Promise((resolve) => {
-    httpServer.listen(env.port, () => {
-      setLifecycleState(LIFECYCLE_STATES.READY);
-      logger.info('server.started', { port: env.port });
-      resolve(httpServer);
-    });
-  });
+  return httpServer;
 }
 
 export async function shutdown(signal = 'MANUAL', { exitCode = 0 } = {}) {
