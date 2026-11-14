@@ -255,7 +255,7 @@ export function AddExpenseDialog({ open, onOpenChange, onSuccess, initialPayerId
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-md max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="text-base font-bold text-slate-900 dark:text-slate-100">
             Record Shared Expense

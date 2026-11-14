@@ -23,6 +23,17 @@ function isDuplicateKeyError(error) {
   return error?.code === 11000;
 }
 
+/**
+ * Inside a transaction every read sees the same snapshot, so retrying in place can never
+ * observe another request's commit. Raise a write conflict instead so the surrounding
+ * transaction is retried from a fresh snapshot.
+ */
+function concurrentWriteConflict() {
+  const error = new Error('WriteConflict: meal day changed by a concurrent request');
+  error.code = 112;
+  return error;
+}
+
 /** Every stored meal day must use the current dynamic-participant schema. */
 export function assertCurrentMealSchema(document) {
   if (document && document.schemaVersion !== 3) {
@@ -130,6 +141,7 @@ export function createMealService({
       try {
         return await runFinancialMutation(date, actorRole, async ({ session, guard }) => {
           for (let attempt = 0; attempt < MAX_CONCURRENT_RETRIES; attempt += 1) {
+            if (attempt > 0 && session) throw concurrentWriteConflict();
             const currentDocument = await repository.findByDate(date, { session });
           if (currentDocument && !(await participantsForDay(currentDocument, date)).includes(memberId)) {
             throw new HttpError(409, 'Student is not a participant in this saved meal.');
@@ -286,6 +298,7 @@ export function createMealService({
       try {
         return await runFinancialMutation(date, actorRole, async ({ session, guard }) => {
           for (let attempt = 0; attempt < MAX_CONCURRENT_RETRIES; attempt += 1) {
+            if (attempt > 0 && session) throw concurrentWriteConflict();
             const currentDocument = await repository.findByDate(date, { session });
           if (expectedRevision !== null && (currentDocument?.revision ?? 0) !== expectedRevision) {
             throw new HttpError(409, 'Meal revision changed. Refresh and retry the allocation.');
@@ -380,6 +393,7 @@ export function createMealService({
       try {
         return await runFinancialMutation(date, actorRole, async ({ session, guard }) => {
           for (let attempt = 0; attempt < MAX_CONCURRENT_RETRIES; attempt += 1) {
+            if (attempt > 0 && session) throw concurrentWriteConflict();
             const currentDocument = await repository.findByDate(date, { session });
           const currentAllocation = currentDocument?.allocations?.[mealType] ?? null;
 
@@ -471,6 +485,7 @@ export function createMealService({
       try {
         return await runFinancialMutation(date, actorRole, async ({ session, guard }) => {
           for (let attempt = 0; attempt < MAX_CONCURRENT_RETRIES; attempt += 1) {
+            if (attempt > 0 && session) throw concurrentWriteConflict();
             const currentDocument = await repository.findByDate(date, { session });
           const currentOverride = currentDocument?.priceOverrides?.[mealType] ?? null;
           const currentPrice = currentOverride?.pricePaise ?? null;
@@ -573,6 +588,7 @@ export function createMealService({
       try {
         return await runFinancialMutation(date, actorRole, async ({ session, guard }) => {
           for (let attempt = 0; attempt < MAX_CONCURRENT_RETRIES; attempt += 1) {
+            if (attempt > 0 && session) throw concurrentWriteConflict();
             const currentDocument = await repository.findByDate(date, { session });
           const currentOverride = currentDocument?.priceOverrides?.[mealType] ?? null;
 

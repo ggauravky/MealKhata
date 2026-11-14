@@ -444,7 +444,7 @@ export function AdminFeePlansTab({
       </Dialog>
 
       <Dialog open={reconcileOpen} onOpenChange={setReconcileOpen}>
-        <DialogContent className="max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6">
+        <DialogContent className="max-w-2xl w-full max-h-[calc(100dvh-1.5rem)] overflow-y-auto p-6">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base font-bold text-slate-900 dark:text-slate-100">
               <Scale className="h-4 w-4 text-amber-600" />

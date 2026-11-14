@@ -232,7 +232,7 @@ export function EditExpenseDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-xl max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="text-base font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
             <span>Edit Expense (Super Admin)</span>

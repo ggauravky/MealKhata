@@ -35,7 +35,7 @@ export function AdminPage() {
     const date = searchParams.get('date');
     return isValidLogicalDate(date) ? date : 'today';
   });
-  const [pendingRow, setPendingRow] = useState('');
+  const [pendingRows, setPendingRows] = useState({});
   const [saveMessage, setSaveMessage] = useState('');
   const [saveError, setSaveError] = useState('');
   const [sharingMealType, setSharingMealType] = useState(null);
@@ -70,11 +70,12 @@ export function AdminPage() {
     const rowId = `${mealType}:${memberId}`;
     const currentStatus = mealDay.data?.meals?.[mealType]?.[memberId];
 
-    if (!displayedDate || currentStatus === status || pendingRow) {
+    // Rows save independently; only a second tap on the same row waits.
+    if (!displayedDate || currentStatus === status || Object.hasOwn(pendingRows, rowId)) {
       return;
     }
 
-    setPendingRow(rowId);
+    setPendingRows((rows) => ({ ...rows, [rowId]: status }));
     setSaveMessage('');
     setSaveError('');
 
@@ -99,7 +100,11 @@ export function AdminPage() {
     } catch {
       setSaveError('Unable to save the meal change. Please try again.');
     } finally {
-      setPendingRow('');
+      setPendingRows((rows) => {
+        const next = { ...rows };
+        delete next[rowId];
+        return next;
+      });
     }
   };
 
@@ -255,7 +260,7 @@ export function AdminPage() {
               pricing={mealDay.data.pricing?.morning}
               editable={Boolean(mealDay.data.permissions.canEdit) && isOnline && !isMonthClosed}
               editableMemberIds={mealDay.data.permissions?.editableMemberIds}
-              pendingRow={pendingRow}
+              pendingRows={pendingRows}
               onChange={handleMealChange}
               canConfigureSharing={canConfigureSharing}
               onConfigureSharing={() => setSharingMealType('morning')}
@@ -272,7 +277,7 @@ export function AdminPage() {
               pricing={mealDay.data.pricing?.night}
               editable={Boolean(mealDay.data.permissions.canEdit) && isOnline && !isMonthClosed}
               editableMemberIds={mealDay.data.permissions?.editableMemberIds}
-              pendingRow={pendingRow}
+              pendingRows={pendingRows}
               onChange={handleMealChange}
               canConfigureSharing={canConfigureSharing}
               onConfigureSharing={() => setSharingMealType('night')}
@@ -356,7 +361,7 @@ export function AdminPage() {
         </CardHeader>
 
         <CardContent>
-          {history.loading ? (
+          {history.loading && history.allChanges.length === 0 ? (
             <div className="space-y-2">
               <Skeleton className="h-10 w-full rounded-md" />
               <Skeleton className="h-10 w-full rounded-md" />

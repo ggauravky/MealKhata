@@ -86,6 +86,10 @@ export function useDashboard() {
     if (!mealDay?.date || !mealDay.meals) return;
     setState((current) => {
       if (!current.data) return current;
+      // Ignore responses older than what is already shown (concurrent saves).
+      const shownRevision = current.data.meals?.revision;
+      if (Number.isInteger(shownRevision) && Number.isInteger(mealDay.revision)
+        && mealDay.revision < shownRevision) return current;
       const morning = mealDay.meals.morning;
       const night = mealDay.meals.night;
       const morningPlates = Object.values(morning).filter((s) => s === 'taking').length;
@@ -138,6 +142,7 @@ export function useDashboard() {
     error: state.error,
     live,
     refresh,
+    scheduleRefresh: debouncedRefresh,
     applyMealDayUpdate,
   };
 }

@@ -40,7 +40,8 @@ export async function runFinancialTransaction(
         (isTransientTransactionError(error) || (retryOnDuplicateKey && error.code === 11000))
         && attempt < maxRetries - 1
       ) {
-        await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+        // Jittered backoff so concurrent writers do not retry in lockstep.
+        await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1) + Math.floor(Math.random() * 40)));
         continue;
       }
       if (

@@ -105,7 +105,7 @@ export function RestoreResidentDialog({ open, onOpenChange, stay, onRestored }) 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-2xl max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <RotateCcw className="h-5 w-5 text-amber-600" /> Restore resident

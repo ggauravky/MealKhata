@@ -245,6 +245,18 @@ describe('Super Admin operations after setup', { concurrency: 1 }, () => {
     assert.equal(await count('students'), 10);
   });
 
+  test('simultaneous saves for every student on a new day all succeed', async () => {
+    const date = '2026-11-20';
+    const students = (await owner.get('/api/students/roster').expect(200)).body.data;
+    const responses = await Promise.all(students.map((student) => owner.patch(`/api/meals/${date}`)
+      .set('Origin', ORIGIN).send({ mealType: 'night', memberId: student.studentId, status: 'taking' })));
+    assert.deepEqual(responses.map((response) => response.status), students.map(() => 200));
+    const day = (await owner.get(`/api/meals/${date}`).expect(200)).body.data;
+    assert.equal(Object.values(day.meals.night).filter((status) => status === 'taking').length, students.length);
+    assert.equal(day.revision, students.length);
+    assert.equal(day.dailyCostSummary.room.nightAmountPaise, students.length * 7000);
+  });
+
   test('financial start date is editable only while nothing has been recorded', async () => {
     const settings = await owner.get('/api/settings/system').expect(200);
     assert.equal(settings.body.data.financialStartDate, START_DATE);

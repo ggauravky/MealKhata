@@ -36,7 +36,7 @@ export function DashboardPage() {
   const { isOnline } = usePwa();
   const dashboard = useDashboard();
   const studentRoster = useOperationalStudents({ includeArchived: true, enabled: auth.authenticated && auth.role !== 'viewer' });
-  const [pendingRow, setPendingRow] = useState('');
+  const [pendingRows, setPendingRows] = useState({});
   const [saveMessage, setSaveMessage] = useState('');
   const [saveError, setSaveError] = useState('');
 
@@ -49,10 +49,11 @@ export function DashboardPage() {
       return;
     }
 
-    if (!data?.today || pendingRow) return;
-
     const rowId = `${mealType}:${memberId}`;
-    setPendingRow(rowId);
+    // Rows save independently; only a second tap on the same row waits.
+    if (!data?.today || Object.hasOwn(pendingRows, rowId)) return;
+
+    setPendingRows((rows) => ({ ...rows, [rowId]: status }));
     setSaveMessage('');
     setSaveError('');
 
@@ -65,7 +66,8 @@ export function DashboardPage() {
 
       if (response.data) {
         dashboard.applyMealDayUpdate(response.data);
-        dashboard.refresh();
+        // Merges with the socket-triggered refresh so one toggle causes one refetch.
+        dashboard.scheduleRefresh();
       }
 
       if (response.allocationReset) {
@@ -82,7 +84,11 @@ export function DashboardPage() {
     } catch (err) {
       setSaveError(err?.message || 'Unable to save the meal change. Please try again.');
     } finally {
-      setPendingRow('');
+      setPendingRows((rows) => {
+        const next = { ...rows };
+        delete next[rowId];
+        return next;
+      });
     }
   };
 
@@ -191,7 +197,7 @@ export function DashboardPage() {
             <PersonalMealHero
               hero={data.personalHero}
               isOnline={isOnline}
-              pendingRow={pendingRow}
+              pendingRows={pendingRows}
               onChange={handleMealChange}
             />
           )}
@@ -217,7 +223,7 @@ export function DashboardPage() {
                 pricing={data.meals.pricing?.morning}
                 editable={Boolean(data.meals.permissions?.canEdit) && isOnline}
                 editableMemberIds={data.meals.permissions?.editableMemberIds}
-                pendingRow={pendingRow}
+                pendingRows={pendingRows}
                 onChange={handleMealChange}
               />
               <MealCard
@@ -230,7 +236,7 @@ export function DashboardPage() {
                 pricing={data.meals.pricing?.night}
                 editable={Boolean(data.meals.permissions?.canEdit) && isOnline}
                 editableMemberIds={data.meals.permissions?.editableMemberIds}
-                pendingRow={pendingRow}
+                pendingRows={pendingRows}
                 onChange={handleMealChange}
               />
             </div>

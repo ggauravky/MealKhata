@@ -58,7 +58,7 @@ export function createMealRepository({ model = MealDay, resolver = studentResolv
           session,
         }),
       }),
-      { retryOnDuplicateKey: true },
+      { retryOnDuplicateKey: true, maxRetries: 12 },
     );
   },
 

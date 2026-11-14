@@ -29,7 +29,7 @@ export function MealCard({
   participants = [],
   editable = false,
   editableMemberIds = null,
-  pendingRow,
+  pendingRows = {},
   onChange,
   canConfigureSharing = false,
   onConfigureSharing = null,
@@ -209,15 +209,17 @@ export function MealCard({
         <div className="space-y-0">
           {participants.map((member, index) => {
             const rawStatus = meals[member.id];
-            const currentStatus = rawStatus === 'taking' || rawStatus === 'skip' ? rawStatus : 'not_set';
+            const savedStatus = rawStatus === 'taking' || rawStatus === 'skip' ? rawStatus : 'not_set';
             const rowId = `${mealType}:${member.id}`;
-            const pending = pendingRow === rowId;
+            // A row being saved shows the chosen status immediately; only that row waits.
+            const pending = Object.hasOwn(pendingRows, rowId);
+            const currentStatus = pending ? pendingRows[rowId] : savedStatus;
             const isRowEditable = canEditMealParticipant({ editable, onChange, editableMemberIds, memberId: member.id });
 
-            const shareUnits = getMemberShareUnits(member.id, currentStatus);
+            const shareUnits = getMemberShareUnits(member.id, savedStatus);
             const hasFractionalShare = isShared && shareUnits > 0 && shareUnits < 6;
-            const costPaise = getMemberCostPaise(member.id, currentStatus);
-            const shareText = getShareText(currentStatus, shareUnits, hasFractionalShare);
+            const costPaise = getMemberCostPaise(member.id, savedStatus);
+            const shareText = getShareText(savedStatus, shareUnits, hasFractionalShare);
 
             return (
               <div key={member.id}>
@@ -253,7 +255,8 @@ export function MealCard({
 
                   {isRowEditable ? (
                     <div
-                      className="flex rounded-md bg-slate-100 p-0.5 dark:bg-slate-800/80 shrink-0"
+                      className={`flex rounded-md bg-slate-100 p-0.5 dark:bg-slate-800/80 shrink-0 ${pending ? 'opacity-80' : ''}`}
+                      aria-busy={pending}
                       role="group"
                       aria-label={`${member.name} ${title} status`}
                     >
@@ -262,9 +265,9 @@ export function MealCard({
                           key={option.id}
                           type="button"
                           aria-pressed={currentStatus === option.id}
-                          disabled={Boolean(pendingRow)}
+                          disabled={pending}
                           onClick={() => onChange(mealType, member.id, option.id)}
-                          className={`flex items-center gap-1 rounded-sm px-2.5 py-1 text-xs font-medium transition-all ${
+                          className={`flex items-center gap-1 rounded-sm px-2.5 py-1 text-xs font-medium transition-colors touch-manipulation ${
                             currentStatus === option.id
                               ? option.id === 'taking'
                                 ? 'bg-emerald-600 text-white shadow-xs font-semibold'
@@ -277,7 +280,7 @@ export function MealCard({
                           ) : (
                             <Minus className="h-3 w-3" />
                           )}
-                          <span>{pending && currentStatus !== option.id ? '...' : option.label}</span>
+                          <span>{option.label}</span>
                         </button>
                       ))}
                     </div>

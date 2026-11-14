@@ -211,7 +211,7 @@ export function PlateSharingDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && closeDialog()}>
-      <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-xl max-h-[calc(100dvh-1.5rem)] overflow-y-auto">
         <DialogHeader>
           <div className="flex items-center gap-2">
             <DialogTitle className="text-lg font-bold text-slate-900 dark:text-slate-100">

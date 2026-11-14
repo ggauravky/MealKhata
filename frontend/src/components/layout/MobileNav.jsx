@@ -65,7 +65,7 @@ export function MobileNav() {
 
   return (
     <nav
-      className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200/90 dark:bg-[#171a1f]/95 dark:border-slate-800/90 pb-[env(safe-area-inset-bottom)] shadow-xs"
+      className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-slate-200/90 dark:bg-[#171a1f] dark:border-slate-800/90 pb-[env(safe-area-inset-bottom)] shadow-xs"
       aria-label="Mobile navigation"
     >
       <div className="grid grid-cols-5 h-14 max-w-md mx-auto">

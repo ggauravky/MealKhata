@@ -116,7 +116,7 @@ export function AdminSettingsPage() {
               </div>
             </CardHeader>
             <CardContent>
-              {staff.loading ? (
+              {staff.loading && staff.accounts.length === 0 ? (
                 <div className="space-y-3"><Skeleton className="h-12" /><Skeleton className="h-12" /></div>
               ) : (
                 <ul className="divide-y divide-slate-200 dark:divide-slate-800">
@@ -135,7 +135,7 @@ export function AdminSettingsPage() {
                 <CardTitle className="flex items-center gap-2"><CalendarClock className="h-4 w-4" aria-hidden="true" /> System</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
-                {staff.loading || !staff.settings ? <Skeleton className="h-16" /> : (
+                {!staff.settings ? <Skeleton className="h-16" /> : (
                   <>
                     <div className="flex justify-between gap-3">
                       <span className="text-slate-500">Financial start date</span>
@@ -158,7 +158,7 @@ export function AdminSettingsPage() {
             <Card>
               <CardHeader><CardTitle>Recent account activity</CardTitle></CardHeader>
               <CardContent>
-                {staff.loading ? <Skeleton className="h-20" /> : staff.audit.length === 0 ? (
+                {staff.loading && staff.audit.length === 0 ? <Skeleton className="h-20" /> : staff.audit.length === 0 ? (
                   <p className="text-xs text-slate-500">No activity yet.</p>
                 ) : (
                   <ul className="space-y-2 text-xs">

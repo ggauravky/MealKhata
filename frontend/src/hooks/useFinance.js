@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api.js';
 import { getSocket } from '../lib/socket.js';
 import { canLoadMemberFinance } from '../lib/financePermissions.js';
@@ -9,8 +9,12 @@ export function useMemberFinance(month, targetMemberId = null) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const requestRef = useRef(0);
 
   const fetchFinance = useCallback(async () => {
+    // Only the newest request may update state; an older, slower response is dropped.
+    const requestId = ++requestRef.current;
+    const isLatest = () => requestId === requestRef.current;
     if (!canLoadMemberFinance({ month, authenticated, role, targetMemberId })) {
       setData(null);
       setError(null);
@@ -25,13 +29,13 @@ export function useMemberFinance(month, targetMemberId = null) {
         ? `/api/finance/members/${targetMemberId}/${month}`
         : `/api/finance/me/${month}`;
       const response = await api.get(url);
-      if (response && response.data) {
+      if (isLatest() && response && response.data) {
         setData(response.data);
       }
     } catch (err) {
-      setError(err?.message || 'Unable to load personal finances.');
+      if (isLatest()) setError(err?.message || 'Unable to load personal finances.');
     } finally {
-      setLoading(false);
+      if (isLatest()) setLoading(false);
     }
   }, [month, targetMemberId, authenticated, role]);
 
@@ -74,8 +78,11 @@ export function useHouseholdFinance(month) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const requestRef = useRef(0);
 
   const fetchHousehold = useCallback(async () => {
+    const requestId = ++requestRef.current;
+    const isLatest = () => requestId === requestRef.current;
     if (!month || !isAdmin) {
       setLoading(false);
       return;
@@ -85,13 +92,13 @@ export function useHouseholdFinance(month) {
       setLoading(true);
       setError(null);
       const response = await api.get(`/api/finance/overview/${month}`);
-      if (response && response.data) {
+      if (isLatest() && response && response.data) {
         setData(response.data);
       }
     } catch (err) {
-      setError(err?.message || 'Unable to load household finances.');
+      if (isLatest()) setError(err?.message || 'Unable to load household finances.');
     } finally {
-      setLoading(false);
+      if (isLatest()) setLoading(false);
     }
   }, [month, isAdmin]);
 

@@ -16,12 +16,21 @@ export function useMealDay(date) {
     currentData.current = state.data;
   }, [state.data]);
 
+  // Background refreshes keep the current data on screen; `loading` only shows a
+  // placeholder when there is nothing to display yet.
   const refresh = useCallback(() => {
-    setState((current) => ({ ...current, loading: true, error: '' }));
+    setState((current) => ({ ...current, loading: !current.data, error: '' }));
     setRefreshVersion((version) => version + 1);
   }, []);
 
   const applyServerData = useCallback((data) => {
+    const displayed = currentData.current;
+    // Concurrent saves can answer out of order; never replace newer data with older.
+    if (displayed && data && displayed.date === data.date
+      && Number.isInteger(displayed.revision) && Number.isInteger(data.revision)
+      && data.revision < displayed.revision) {
+      return;
+    }
     currentData.current = data;
     setState({ requestKey: date, loading: false, error: '', data });
   }, [date]);

@@ -4,12 +4,12 @@ import { formatPlateFraction } from '../../lib/plates.js';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card.jsx';
 import { Badge } from '../ui/badge.jsx';
 
-export function PersonalMealHero({ hero, isOnline = true, pendingRow = '', onChange }) {
+export function PersonalMealHero({ hero, isOnline = true, pendingRows = {}, onChange }) {
   if (!hero) return null;
 
   const {
-    morning,
-    night,
+    morning: savedMorning,
+    night: savedNight,
     morningShareUnits = 0,
     nightShareUnits = 0,
     morningCostPaise = 0,
@@ -18,6 +18,11 @@ export function PersonalMealHero({ hero, isOnline = true, pendingRow = '', onCha
     isNightShared = false,
     canEdit,
   } = hero;
+  // A choice being saved is shown immediately; the server response then confirms it.
+  const morningRow = `morning:${hero.memberId}`;
+  const nightRow = `night:${hero.memberId}`;
+  const morning = pendingRows[morningRow] ?? savedMorning;
+  const night = pendingRows[nightRow] ?? savedNight;
 
   return (
     <Card className="border-slate-200/90 dark:border-slate-800">
@@ -95,9 +100,9 @@ export function PersonalMealHero({ hero, isOnline = true, pendingRow = '', onCha
                 <button
                   type="button"
                   aria-pressed={morning === 'taking'}
-                  disabled={!isOnline || pendingRow === `morning:${hero.memberId}`}
+                  disabled={!isOnline || Object.hasOwn(pendingRows, morningRow)}
                   onClick={() => isOnline && onChange('morning', hero.memberId, 'taking')}
-                  className={`flex-1 rounded-sm py-1.5 text-xs font-medium transition-all ${
+                  className={`flex-1 rounded-sm py-1.5 text-xs font-medium transition-colors touch-manipulation ${
                     morning === 'taking'
                       ? 'bg-emerald-600 text-white shadow-xs font-semibold'
                       : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
@@ -108,9 +113,9 @@ export function PersonalMealHero({ hero, isOnline = true, pendingRow = '', onCha
                 <button
                   type="button"
                   aria-pressed={morning === 'skip'}
-                  disabled={!isOnline || pendingRow === `morning:${hero.memberId}`}
+                  disabled={!isOnline || Object.hasOwn(pendingRows, morningRow)}
                   onClick={() => isOnline && onChange('morning', hero.memberId, 'skip')}
-                  className={`flex-1 rounded-sm py-1.5 text-xs font-medium transition-all ${
+                  className={`flex-1 rounded-sm py-1.5 text-xs font-medium transition-colors touch-manipulation ${
                     morning === 'skip'
                       ? 'bg-slate-800 text-white dark:bg-slate-200 dark:text-slate-900 shadow-xs font-semibold'
                       : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
@@ -188,9 +193,9 @@ export function PersonalMealHero({ hero, isOnline = true, pendingRow = '', onCha
                 <button
                   type="button"
                   aria-pressed={night === 'taking'}
-                  disabled={!isOnline || pendingRow === `night:${hero.memberId}`}
+                  disabled={!isOnline || Object.hasOwn(pendingRows, nightRow)}
                   onClick={() => isOnline && onChange('night', hero.memberId, 'taking')}
-                  className={`flex-1 rounded-sm py-1.5 text-xs font-medium transition-all ${
+                  className={`flex-1 rounded-sm py-1.5 text-xs font-medium transition-colors touch-manipulation ${
                     night === 'taking'
                       ? 'bg-emerald-600 text-white shadow-xs font-semibold'
                       : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'
@@ -201,9 +206,9 @@ export function PersonalMealHero({ hero, isOnline = true, pendingRow = '', onCha
                 <button
                   type="button"
                   aria-pressed={night === 'skip'}
-                  disabled={!isOnline || pendingRow === `night:${hero.memberId}`}
+                  disabled={!isOnline || Object.hasOwn(pendingRows, nightRow)}
                   onClick={() => isOnline && onChange('night', hero.memberId, 'skip')}
-                  className={`flex-1 rounded-sm py-1.5 text-xs font-medium transition-all ${
+                  className={`flex-1 rounded-sm py-1.5 text-xs font-medium transition-colors touch-manipulation ${
                     night === 'skip'
                       ? 'bg-slate-800 text-white dark:bg-slate-200 dark:text-slate-900 shadow-xs font-semibold'
                       : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100'

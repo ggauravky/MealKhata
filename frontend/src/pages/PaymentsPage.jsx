@@ -468,7 +468,7 @@ export function PaymentsPage() {
         </CardHeader>
 
         <CardContent>
-          {history.loading ? (
+          {history.loading && history.items.length === 0 ? (
             <div className="space-y-2">
               <Skeleton className="h-12 w-full rounded-md" />
               <Skeleton className="h-12 w-full rounded-md" />

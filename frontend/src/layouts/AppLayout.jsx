@@ -1,5 +1,5 @@
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { useEffect } from 'react';
+import { motion, useReducedMotion } from 'motion/react';
+import { useEffect, useLayoutEffect } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { BrandMark } from '../components/layout/BrandMark.jsx';
 import { DesktopNav } from '../components/layout/DesktopNav.jsx';
@@ -18,6 +18,11 @@ export function AppLayout() {
   const location = useLocation();
   const reduceMotion = useReducedMotion();
   const { authenticated, role, memberId } = useAuth();
+
+  // A new page starts at the top; query-string changes (dates, months, tabs) keep position.
+  useLayoutEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+  }, [location.pathname]);
   const socketIdentity = authenticated ? `${role}:${memberId ?? ''}` : null;
 
   // Live updates require an authenticated session; viewers never open a socket.
@@ -49,7 +54,7 @@ export function AppLayout() {
   return (
     <ReminderProvider>
       <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-[#0f1115] dark:text-slate-100 flex flex-col font-sans transition-colors duration-150">
-        <header className="sticky top-0 z-40 w-full border-b border-slate-200/80 bg-white/90 backdrop-blur-md dark:border-slate-800/80 dark:bg-[#171a1f]/90">
+        <header className="sticky top-0 z-40 w-full border-b border-slate-200/80 bg-white dark:border-slate-800/80 dark:bg-[#171a1f]">
           <div className="mx-auto flex h-14 max-w-[1160px] items-center justify-between px-4 sm:px-6">
             <BrandMark />
             <DesktopNav />
@@ -60,22 +65,22 @@ export function AppLayout() {
           </div>
         </header>
 
-        <AnimatePresence mode="wait" initial={false}>
-          <motion.main
-            key={location.pathname}
-            initial={reduceMotion ? false : { opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={reduceMotion ? undefined : { opacity: 0, y: -4 }}
-            transition={{ duration: reduceMotion ? 0 : 0.16, ease: [0.16, 1, 0.3, 1] }}
-            className="flex-1 w-full mx-auto max-w-[1160px] px-4 sm:px-6 py-6 pb-24 md:pb-12"
-          >
-            <OfflineBanner />
-            <UpdateAvailableBanner />
-            <IosInstallPrompt />
-            <ReminderBanner />
-            <Outlet />
-          </motion.main>
-        </AnimatePresence>
+        {/* Fade the incoming page only. No exit animation: an exiting wrapper around
+            <Outlet /> would render the new route twice and delay it, and a transform
+            would break position: fixed descendants. */}
+        <motion.main
+          key={location.pathname}
+          initial={reduceMotion ? false : { opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: reduceMotion ? 0 : 0.14, ease: 'easeOut' }}
+          className="flex-1 w-full mx-auto max-w-[1160px] px-4 sm:px-6 py-6 pb-24 md:pb-12"
+        >
+          <OfflineBanner />
+          <UpdateAvailableBanner />
+          <IosInstallPrompt />
+          <ReminderBanner />
+          <Outlet />
+        </motion.main>
 
         <MobileNav />
       </div>
